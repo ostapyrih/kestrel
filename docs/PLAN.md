@@ -110,8 +110,9 @@ Reticulum на amd1 (transport + propagation node, shared instance)
 | 0 | Розвідка Plugin API MeshChatX на `amd1` (read-only) | звіт у `docs/private/`. Висновок: офіційного Plugin API замало → sidecar | ✅ |
 | 1a | Розвідка HTTP/WebSocket API MeshChatX + підключення до shared instance (read-only) | звіт у `docs/private/`: API покриває LXMF/RRC/WS; обмеження — нижче (§3, «Факти з 1a») | ✅ |
 | 1 | Sidecar `kestrel-bridge` + `python -m unittest` | Link-RPC з `identify()`, whitelist за ключем, LXMF-команди з anti-replay, ack з хешем, push з WS-подій, transport-aware push; Docker-образ; тест з Python-клієнтом у ролі `B`; деплой на `amd1` лише з «так» користувача | ⬜ |
-| 2 | Dart RNS core + golden-тести | identity, packet, announce, token-шифрування, HDLC, LXMF pack/unpack — байт-у-байт збіг з Python RNS/LXMF; інтеграційний тест з локальним `rnsd` | ⬜ |
-| 3 | TCP + LXMF (direct/opportunistic) + Standalone-режим + мінімальний UI | можна листуватися від `B` | ⬜ |
+| 2 | Dart RNS core + golden-тести (`packages/kestrel_rns`) | PR #1 злитий: identity, token, packet, announce, HDLC/KISS, msgpack, LXMF — збіг з Python RNS 1.6.1 / LXMF 1.3.1 в обидва боки (271 тест + 80 крос-перевірок у Python) | ✅ |
+| 3a | Мережевий шар у `kestrel_rns` | TCP-клієнт, мінімальний Transport (announce, path request), Link (+ identify, request/response), Resource; інтеграційний тест з локальним `rnsd` | ⏳ йде |
+| 3b | LXMF direct/opportunistic + Standalone-режим + мінімальний UI | можна листуватися від `B` | ⬜ |
 | 4 | Bridge-режим у додатку | перемикач, акаунти A/B, sync, відправка через міст, бейджі маршруту/транспорту/статусу, черга | ⬜ |
 | 5 | Propagation sync + офлайн-черга | `B` забирає повідомлення з propagation node | ⬜ |
 | 6 | BLE RNode | KISS + конфіг радіо (параметри = параметрам LoRa-шлюзу), транспорт-бейдж `LoRa` | ⬜ |
@@ -127,6 +128,7 @@ Reticulum на amd1 (transport + propagation node, shared instance)
 2. Одна identity `B` на обидві ролі чи окрема прихована control-identity (див. §2)?
 3. Канал фонових сповіщень: ntfy (свій сервер) чи APNs/FCM?
 4. ~~Plugin API~~ — вирішено: sidecar (§3).
+6. **Announce stamps:** RNS 1.6 за замовчуванням додає PoW-штамп до announce; Dart його поки не генерує. На `amd1` штампи не вимагаються, але інші вузли мережі можуть — генерацію штампів робимо у Фазі 3a/3b.
 5. На сервері зараз **немає RNode-інтерфейсу**: для LoRa потрібен шлюз (RNode на `amd1` або інший транспорт-вузол із LoRa і виходом у мережу).
 
 ---
