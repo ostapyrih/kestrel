@@ -5,6 +5,7 @@ import 'crypto/random.dart';
 import 'destination.dart';
 import 'identity.dart';
 import 'packet.dart';
+import 'stamps.dart';
 
 /// Parsed and validated announce (RNS/Identity.py `validate_announce`,
 /// Identity.py:757, and Destination._announce, Destination.py:307).
@@ -30,7 +31,11 @@ class Announce {
     required this.appData,
     required this.identity,
     required this.packet,
-  });
+    this.stamp,
+    this.stampValue,
+    this.linkCost,
+    Uint8List? payloadAppData,
+  }) : payloadAppData = payloadAppData ?? appData;
 
   static const int ratchetLength = 32;
   static const int randomHashLength = 10;
@@ -54,6 +59,17 @@ class Announce {
   final Uint8List appData;
   final Identity identity;
   final Packet packet;
+
+  /// Valid announce stamp (14 bytes), its value and the announced link
+  /// request cost; null when the announce carries no valid stamp
+  /// (Identity.py:843-882).
+  final Uint8List? stamp;
+  final double? stampValue;
+  final double? linkCost;
+
+  /// app_data with a *valid* stamp ext payload stripped (what Python hands
+  /// to announce handlers); equals [appData] if there is no valid stamp.
+  final Uint8List payloadAppData;
 
   bool get hasRatchet => ratchet.isNotEmpty;
 
@@ -101,6 +117,8 @@ class Announce {
     int? timestamp,
     bool pathResponse = false,
     RandomBytes? random,
+    List<int>? stamp,
+    double linkCost = Stamps.defaultLinkCost,
   }) async {
     final id = destination.identity;
     if (destination.type != DestinationType.single || id == null) {
@@ -123,7 +141,23 @@ class Announce {
     if (ratchet.isNotEmpty && ratchet.length != ratchetLength) {
       throw ArgumentError('ratchet must be 32 bytes');
     }
-    final app = appData ?? const <int>[];
+    var app = appData ?? const <int>[];
+    if (stamp != null) {
+      if (stamp.length != Stamps.stampLength) {
+        throw ArgumentError('stamp must be 14 bytes');
+      }
+      // ext payload: marker, flags, stamp, [cost frac, cost int]
+      // (Destination.py:_announce).
+      final cb = Stamps.costToBytes(linkCost);
+      app = [
+        ...app,
+        extPayloadMarker,
+        0x00,
+        ...stamp,
+        cb[1],
+        cb[0],
+      ];
+    }
     final pub = id.publicKey;
     final signed = (BytesBuilder(copy: false)
           ..add(destination.hash)
@@ -155,7 +189,11 @@ class Announce {
   /// Parses and validates an announce [packet]; returns null if it is
   /// malformed, the signature is invalid, or the destination hash does not
   /// match `name_hash + identity_hash`.
-  static Future<Announce?> validate(Packet packet) async {
+  static Future<Announce?> validate(
+    Packet packet, {
+    double requiredStampCost = Stamps.defaultDestinationCost,
+    bool enforceStamps = false,
+  }) async {
     if (packet.packetType != Packet.typeAnnounce) return null;
     const keySize = Identity.keySize;
     const nameLen = Identity.nameHashLength;
@@ -203,6 +241,42 @@ class Announce {
     final expected = truncatedHash([...nameHash, ...identity.hash]);
     if (!constantTimeEquals(expected, packet.destinationHash)) return null;
 
+    // Stamp ext payload (Identity.py:848-882). Without enforcement an
+    // invalid or missing stamp does not invalidate the announce.
+    Uint8List? stamp;
+    double? stampValue;
+    double? linkCost;
+    var payload = appData;
+    if (appData.length >= extPayloadLength) {
+      final ext = Uint8List.sublistView(
+        appData,
+        appData.length - extPayloadLength,
+      );
+      final anchor = ext[ext.length - 1];
+      final extended = (anchor & 0x80) != 0;
+      final cost = Stamps.costFromBytes([anchor & 0x7F, ext[ext.length - 2]]);
+      final known = !extended && cost <= Stamps.costCap;
+      if (ext[0] == extPayloadMarker && known) {
+        final st = Uint8List.fromList(
+          ext.sublist(extHeaderLength, extHeaderLength + stampLength),
+        );
+        final wb = Stamps.destinationMaterial(
+          packet.destinationHash,
+          publicKey,
+          nameHash,
+        );
+        stampValue = Stamps.value(wb, st);
+        if (Stamps.isValid(st, requiredStampCost, wb)) {
+          stamp = st;
+          linkCost = cost;
+          payload = Uint8List.fromList(
+            appData.sublist(0, appData.length - extPayloadLength),
+          );
+        }
+      }
+    }
+    if (enforceStamps && stamp == null) return null;
+
     return Announce._(
       destinationHash: packet.destinationHash,
       publicKey: publicKey,
@@ -213,6 +287,10 @@ class Announce {
       appData: appData,
       identity: identity,
       packet: packet,
+      stamp: stamp,
+      stampValue: stampValue,
+      linkCost: linkCost,
+      payloadAppData: payload,
     );
   }
 }

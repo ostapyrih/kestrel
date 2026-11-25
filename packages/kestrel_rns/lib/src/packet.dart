@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'crypto/hashes.dart';
+import 'interfaces/interface.dart';
 
 /// Thrown for packets that cannot be parsed or serialised.
 class PacketException implements Exception {
@@ -35,6 +36,7 @@ class Packet {
     this.destinationType = 0,
     this.hops = 0,
     this.transportId,
+    this.maxSize = mtu,
   });
 
   // Packet types (Packet.py:66-69)
@@ -95,6 +97,18 @@ class Packet {
   int context;
   Uint8List? transportId;
   Uint8List destinationHash;
+
+  /// Size limit enforced by [pack]: the link MTU for link packets (Packet.py
+  /// `self.MTU = destination.mtu`), else [mtu].
+  int maxSize;
+
+  /// Raw wire bytes: set by [pack] and by [Packet.unpack]. Received packets
+  /// may exceed [mtu] on links with a discovered MTU, so the packet hash is
+  /// computed from these bytes and not by re-packing.
+  Uint8List? raw;
+
+  /// Interface the packet arrived on (set by Transport, not on the wire).
+  RnsInterface? receivingInterface;
   Uint8List data;
 
   /// Packed flag byte (Packet.get_packed_flags).
@@ -127,6 +141,7 @@ class Packet {
       ..addByte(context)
       ..add(data);
     final raw = b.toBytes();
+    final mtu = maxSize;
     if (packetType == typeAnnounce &&
         headerType == header1 &&
         raw.length + truncatedHashLength > mtu) {
@@ -140,6 +155,7 @@ class Packet {
         'Packet size of ${raw.length} exceeds MTU of $mtu bytes',
       );
     }
+    this.raw = raw;
     return raw;
   }
 
@@ -180,7 +196,7 @@ class Packet {
       body = Uint8List.fromList(raw.sublist(dst + 3));
     }
     if (body.isEmpty) throw PacketException('Zero-length data field');
-    return Packet(
+    final p = Packet(
       destinationHash: destHash,
       data: body,
       packetType: packetType,
@@ -192,6 +208,8 @@ class Packet {
       hops: hops,
       transportId: transportId,
     );
+    p.raw = raw is Uint8List ? raw : Uint8List.fromList(raw);
+    return p;
   }
 
   /// Like [Packet.unpack] but returns null instead of throwing.
@@ -208,7 +226,7 @@ class Packet {
   /// the transport id), so the hash is invariant under transport re-wrapping
   /// (Packet.get_hashable_part, Packet.py:350).
   Uint8List get hashablePart {
-    final raw = pack();
+    final raw = this.raw ?? pack();
     final b = BytesBuilder(copy: false)..addByte(raw[0] & 0x0F);
     b.add(
       headerType == header2
