@@ -1,0 +1,201 @@
+import 'dart:async';
+
+import 'package:sqflite/sqflite.dart';
+
+/// One schema migration. [version] is the `PRAGMA user_version` the database
+/// has after [statements] ran.
+class Migration {
+  const Migration(this.version, this.statements);
+  final int version;
+  final List<String> statements;
+}
+
+/// Schema per docs/PLAN.md section 4.
+///
+/// Rules that must hold for every future migration:
+///  * Switching bridge mode only changes `settings.bridge_enabled`; nothing
+///    here (or in the repositories) ever deletes chats or messages because of
+///    a mode change.
+///  * `outbox.sender_identity` and `outbox.route` are frozen when the row is
+///    created (enforced by triggers).
+const List<Migration> migrations = [
+  Migration(1, [
+    '''
+CREATE TABLE settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+)''',
+    // A = remote bridge identity (placeholder row until Phase 4), B = local.
+    '''
+CREATE TABLE accounts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  identity TEXT NOT NULL UNIQUE CHECK (identity IN ('A', 'B')),
+  kind TEXT NOT NULL CHECK (kind IN ('remote', 'local')),
+  label TEXT NOT NULL,
+  address_hash TEXT,
+  display_name TEXT
+)''',
+    '''
+CREATE TABLE chats (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id INTEGER NOT NULL REFERENCES accounts(id),
+  kind TEXT NOT NULL CHECK (kind IN ('lxmf', 'rrc')),
+  peer_hash TEXT,
+  room_id TEXT,
+  title TEXT,
+  last_ts INTEGER,
+  unread INTEGER NOT NULL DEFAULT 0,
+  CHECK (peer_hash IS NOT NULL OR room_id IS NOT NULL)
+)''',
+    'CREATE UNIQUE INDEX chats_peer ON chats(account_id, kind, peer_hash) '
+        'WHERE peer_hash IS NOT NULL',
+    'CREATE UNIQUE INDEX chats_room ON chats(account_id, kind, room_id) '
+        'WHERE room_id IS NOT NULL',
+    '''
+CREATE TABLE messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id INTEGER NOT NULL REFERENCES accounts(id),
+  chat_id INTEGER NOT NULL REFERENCES chats(id),
+  direction TEXT NOT NULL CHECK (direction IN ('in', 'out')),
+  lxmf_hash TEXT,
+  text TEXT NOT NULL,
+  title TEXT,
+  ts INTEGER NOT NULL,
+  sender_identity TEXT NOT NULL CHECK (sender_identity IN ('A', 'B')),
+  route TEXT CHECK (route IN
+    ('direct', 'opportunistic', 'propagated', 'via_bridge')),
+  transport TEXT NOT NULL DEFAULT 'none'
+    CHECK (transport IN ('tcp', 'lora', 'none')),
+  status TEXT NOT NULL,
+  error TEXT,
+  signature_valid INTEGER
+)''',
+    'CREATE INDEX messages_chat ON messages(chat_id, ts)',
+    'CREATE UNIQUE INDEX messages_hash ON messages(account_id, lxmf_hash) '
+        'WHERE lxmf_hash IS NOT NULL',
+    '''
+CREATE TABLE outbox (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id INTEGER NOT NULL REFERENCES messages(id),
+  account_id INTEGER NOT NULL REFERENCES accounts(id),
+  chat_id INTEGER NOT NULL REFERENCES chats(id),
+  sender_identity TEXT NOT NULL CHECK (sender_identity IN ('A', 'B')),
+  route TEXT NOT NULL CHECK (route IN
+    ('direct', 'opportunistic', 'propagated', 'via_bridge')),
+  destination_hash TEXT NOT NULL,
+  lxmf_hash TEXT,
+  packed BLOB,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  state INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK (status IN ('queued', 'blocked_bridge_off', 'done')),
+  created_ts INTEGER NOT NULL
+)''',
+    // sender_identity and route are fixed when the message is queued.
+    '''
+CREATE TRIGGER outbox_frozen BEFORE UPDATE OF sender_identity, route ON outbox
+WHEN NEW.sender_identity IS NOT OLD.sender_identity
+  OR NEW.route IS NOT OLD.route
+BEGIN
+  SELECT RAISE(ABORT, 'outbox sender_identity and route are frozen');
+END''',
+    '''
+CREATE TABLE delivery_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id INTEGER NOT NULL REFERENCES messages(id),
+  stage TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  detail TEXT
+)''',
+    'CREATE INDEX delivery_log_msg ON delivery_log(message_id, ts)',
+    "INSERT INTO settings(key, value) VALUES ('bridge_enabled', '0')",
+  ]),
+  // Peers learned from announces (new chat suggestions).
+  Migration(2, [
+    '''
+CREATE TABLE peers (
+  hash TEXT PRIMARY KEY,
+  display_name TEXT,
+  stamp_cost REAL,
+  hops INTEGER,
+  last_seen INTEGER NOT NULL
+)''',
+  ]),
+];
+
+int get latestSchemaVersion => migrations.last.version;
+
+/// Runs every migration with `version > from`.
+Future<void> migrate(DatabaseExecutor db, int from, int to) async {
+  for (final m in migrations) {
+    if (m.version <= from || m.version > to) continue;
+    for (final s in m.statements) {
+      await db.execute(s);
+    }
+  }
+}
+
+/// Well known setting keys.
+abstract final class SettingKeys {
+  static const bridgeEnabled = 'bridge_enabled';
+  static const displayName = 'display_name';
+  static const serverHost = 'server_host';
+  static const serverPort = 'server_port';
+}
+
+const defaultServerHost = 'rns.ostapyrih.com';
+const defaultServerPort = 4242;
+
+/// The app database: opens, migrates and notifies listeners about changes.
+class AppDatabase {
+  AppDatabase._(this.db);
+
+  final Database db;
+  final _changes = StreamController<void>.broadcast();
+
+  /// Emits after every write through [Repo]-level helpers ([notify]).
+  Stream<void> get changes => _changes.stream;
+
+  void notify() {
+    if (!_changes.isClosed) _changes.add(null);
+  }
+
+  /// Opens (and migrates) the database at [path] with [factory]; use
+  /// `inMemoryDatabasePath` for tests.
+  static Future<AppDatabase> open(
+    String path, {
+    DatabaseFactory? factory,
+  }) async {
+    final f = factory ?? databaseFactory;
+    final db = await f.openDatabase(
+      path,
+      options: OpenDatabaseOptions(
+        version: latestSchemaVersion,
+        onConfigure: (d) => d.execute('PRAGMA foreign_keys = ON'),
+        onCreate: (d, v) => migrate(d, 0, v),
+        onUpgrade: (d, from, to) => migrate(d, from, to),
+      ),
+    );
+    final a = AppDatabase._(db);
+    await a._ensureAccounts();
+    return a;
+  }
+
+  Future<void> _ensureAccounts() async {
+    await db.insert('accounts', {
+      'identity': 'B',
+      'kind': 'local',
+      'label': 'B',
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    await db.insert('accounts', {
+      'identity': 'A',
+      'kind': 'remote',
+      'label': 'A',
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+  }
+
+  Future<void> close() async {
+    await _changes.close();
+    await db.close();
+  }
+}
