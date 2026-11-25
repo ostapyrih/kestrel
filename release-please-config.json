@@ -1,0 +1,32 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "include-component-in-tag": true,
+  "changelog-sections": [
+    { "type": "feat", "section": "Нове" },
+    { "type": "fix", "section": "Виправлено" },
+    { "type": "perf", "section": "Продуктивність" },
+    { "type": "docs", "section": "Документація" },
+    { "type": "refactor", "section": "Refactor", "hidden": true },
+    { "type": "test", "section": "Tests", "hidden": true },
+    { "type": "build", "section": "Build", "hidden": true },
+    { "type": "ci", "section": "CI", "hidden": true },
+    { "type": "chore", "section": "Chores", "hidden": true },
+    { "type": "style", "section": "Style", "hidden": true },
+    { "type": "revert", "section": "Reverts", "hidden": true }
+  ],
+  "packages": {
+    "app": {
+      "release-type": "dart",
+      "component": "app",
+      "package-name": "kestrel",
+      "tag-separator": "-",
+      "include-component-in-tag": true
+    },
+    "bridge": {
+      "release-type": "python",
+      "component": "bridge",
+      "package-name": "kestrel-bridge",
+      "include-component-in-tag": true
+    }
+  }
+}

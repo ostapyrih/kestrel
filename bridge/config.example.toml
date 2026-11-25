@@ -1,0 +1,15 @@
+# Example only. Real config lives on the server and is never committed.
+
+[bridge]
+protocol_version = 0
+
+[meshchatx]
+url = "http://meshchatx.example.invalid:8000"
+username = "example-user"
+password = "example-password-do-not-use"
+
+[whitelist]
+# full public keys (hex) of allowed phone identities
+phone_public_keys = [
+    "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+]
