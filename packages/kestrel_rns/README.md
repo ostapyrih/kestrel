@@ -63,6 +63,42 @@ Crypto library choice: `package:cryptography` (pure-Dart X25519/Ed25519/AES-CBC,
 native implementations through `cryptography_flutter` without code changes) plus `package:crypto`
 for synchronous SHA/HMAC. `pointycastle` was not needed.
 
+### LXMF router (Phase 3b)
+
+`LxmRouter` (`lib/src/lxmf/lxm_router.dart`) sits on the `Reticulum` facade and implements the
+`LXMRouter` behaviour of LXMF 1.3.1 for one identity:
+
+* `lxmf.delivery` destination with ratchets, announce app_data
+  `msgpack([name, ceil(cost), [SF_COMPRESSION], cost])` (byte-identical to Python, see
+  `lxm_app_data.dart`), peers (display name, required stamp cost) learned from announces.
+* Outbound: OPPORTUNISTIC (single packet, auto-upgrade to DIRECT when it does not fit) and DIRECT
+  (link; packet when small, Resource when large), delivery proofs, states
+  `generating -> outbound -> sending -> sent -> delivered | failed | rejected | cancelled` with
+  fine grained stage events (`path_requested`, `link_established`, ...) and timestamps, retries
+  (`MAX_DELIVERY_ATTEMPTS`, retry wait, pathless tries, path rediscovery), path requests when no
+  path is known, queue held while no interface is online, outbound stamps generated on an isolate
+  when the peer announces a cost. Backchannel `identify()` after a direct delivery.
+* Inbound: opportunistic packets, link packets and resources, signature validation
+  (`signatureValidated`, `unverifiedReason`), dedup by message hash, optional inbound stamp cost
+  (announced, validated on an isolate, `enforceStamps` off by default like Python).
+* `LxmStore`: pluggable persistence of the outbound queue and inbound dedup (`MemoryLxmStore`
+  ships; the app provides SQLite).
+* PROPAGATED: API shape kept, throws `UnsupportedError` until Phase 5. Tickets: not implemented
+  (incoming ticket fields are ignored, no ticket stamps generated).
+
+```dart
+final router = await LxmRouter.start(rns, identity, displayName: 'Me', store: myStore);
+await router.announce();
+router.incoming.listen((m) => print(m.message.contentAsString));
+final out = await router.send(destinationHash: hash, content: 'hi', tag: 'row-1');
+router.outboundEvents.listen((e) => print('${e.state} ${e.stage}'));
+await out.done;
+```
+
+Interop is tested against Python LXMF 1.3.1 (`tools/it/lxmf_peer.py`): Dart to Python and back,
+opportunistic, direct, resource-sized messages, delivery proofs, stamp-requiring peers in both
+directions, path discovery after a late announce.
+
 ## Compatibility matrix
 
 | This package | RNS | LXMF | Python (vector generation) |
