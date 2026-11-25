@@ -5,6 +5,7 @@ and a Python client in the role of the phone identity B (see tests/it_client_b.p
 """
 import json
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -17,6 +18,10 @@ import urllib.request
 
 BRIDGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PEER = "11" * 16
+
+
+def _safe(text: str) -> str:
+    return text.encode("ascii", "replace").decode("ascii")
 
 
 def free_port() -> int:
@@ -75,6 +80,11 @@ class IntegrationTest(unittest.TestCase):
     def _cleanup(self):
         for p in reversed(self.procs):
             p.stop()
+
+    def _dump_logs(self):
+        for p in self.procs:
+            keep = [l for l in p.lines if re.search(r"nnounce|path|nterface|link|error|warn|conn", l, re.I)]
+            print(_safe(f"---- {p.name} ----\n" + "\n".join((keep or p.lines)[-80:])))
 
     def spawn(self, name, args):
         p = Proc(name, args)
@@ -142,6 +152,7 @@ config_dir = "{q(sc)}/rns"
 identity_path = "{q(sc)}/identity"
 lxmf_storage = "{q(sc)}/lxmf"
 announce_interval = 10
+log_level = {int(os.environ.get("IT_RNS_LOG", "2"))}
 [push]
 unknown_profile = "full"
 """)
@@ -153,10 +164,14 @@ unknown_profile = "full"
         sidecar = self.spawn("sidecar", ["-m", "kestrel_bridge", "--config", toml])
         sidecar.wait_for("bridge running", 90)
 
-        # phone B
-        os.makedirs(os.path.join(d, "b"))
-        with open(os.path.join(d, "b", "config"), "w") as f:
-            f.write(f"""[reticulum]
+        # phone B. Path discovery over the loopback TCP link is occasionally slow/stuck on some
+        # platforms (a Reticulum-level race, not the bridge): retry with a fresh process/connection.
+        client = None
+        for attempt in range(3):
+            bdir = os.path.join(d, f"b{attempt}")
+            os.makedirs(bdir)
+            with open(os.path.join(bdir, "config"), "w") as f:
+                f.write(f"""[reticulum]
   enable_transport = No
   share_instance = No
 
@@ -167,22 +182,28 @@ unknown_profile = "full"
     target_host = 127.0.0.1
     target_port = {tcp_port}
 """)
-        client = self.spawn("client_b", ["-m", "tests.it_client_b", os.path.join(d, "b"), b_file, s_pub, PEER])
+            client = self.spawn("client_b", ["-m", "tests.it_client_b", bdir, b_file, s_pub, PEER])
+            try:
+                client.wait_for("RESULT SUBSCRIBED", 120)
+                break
+            except AssertionError:
+                if attempt < 2 and any("TIMEOUT" in line for line in client.lines):
+                    client.stop()
+                    continue
+                self._dump_logs()
+                raise
         try:
-            client.wait_for("RESULT SUBSCRIBED", 120)
             http("POST", base + "/_test/emit", {
                 "type": "lxmf.delivery", "remote_identity_name": "Peer",
                 "lxmf_message": {"hash": "ab" * 16, "source_hash": PEER, "state": "delivered",
                                  "content": "pushed hello", "timestamp": time.time(), "fields": {}}})
             client.wait_for("RESULT DONE", 60)
         except AssertionError:
-            for p in self.procs:
-                if p.name in ("sidecar", "shared", "client_b"):
-                    print(f"---- {p.name} ----\n" + "\n".join(p.lines[-60:]))
+            self._dump_logs()
             raise
 
         if os.environ.get("IT_RNS_LOG"):
-            print("\n".join(client.lines))
+            print(_safe("\n".join(client.lines)))
         res = {}
         for line in client.lines:
             if line.startswith("RESULT "):
