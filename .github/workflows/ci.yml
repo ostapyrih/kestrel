@@ -52,3 +52,32 @@ jobs:
         with:
           context: bridge
           push: false
+
+  kestrel_rns:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/kestrel_rns
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python reference (RNS/LXMF)
+        working-directory: .
+        run: |
+          python -m venv tools/.venv
+          tools/.venv/bin/pip install -r tools/requirements.txt
+      - run: dart pub get
+      - run: dart analyze --fatal-infos
+      - name: Regenerate golden vectors and fail on drift
+        working-directory: .
+        run: |
+          tools/.venv/bin/python tools/gen_vectors.py
+          git diff --exit-code -- packages/kestrel_rns/test/vectors
+      - run: dart test
+      - name: Cross-check Dart output with Python reference
+        run: dart test -t python
