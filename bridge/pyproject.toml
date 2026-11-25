@@ -9,9 +9,17 @@ description = "Kestrel bridge sidecar for MeshChatX"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
-    "rns",
-    "lxmf",
+    "rns>=1.6.1",
+    "lxmf>=1.3.1",
+    "aiohttp>=3.9",
+    "msgpack>=1.0",
 ]
+
+[project.optional-dependencies]
+dev = ["pyflakes"]
+
+[project.scripts]
+kestrel-bridge = "kestrel_bridge.__main__:main"
 
 [tool.setuptools]
 packages = ["kestrel_bridge"]
