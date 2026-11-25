@@ -1,0 +1,214 @@
+"""End-to-end test with real Reticulum. Skipped unless KESTREL_IT=1.
+
+Subprocesses: rnsd-like shared instance (TCP server on 127.0.0.1), fake MeshChatX, the sidecar,
+and a Python client in the role of the phone identity B (see tests/it_client_b.py).
+"""
+import json
+import os
+import secrets
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+import urllib.request
+
+BRIDGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PEER = "11" * 16
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+class Proc:
+    def __init__(self, name, args):
+        self.name = name
+        self.lines: list[str] = []
+        self.p = subprocess.Popen([sys.executable, "-u", *args], cwd=BRIDGE_DIR, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+        threading.Thread(target=self._pump, daemon=True).start()
+
+    def _pump(self):
+        for line in self.p.stdout:
+            self.lines.append(line.rstrip())
+
+    def wait_for(self, needle, timeout):
+        end = time.time() + timeout
+        while time.time() < end:
+            for line in list(self.lines):
+                if needle in line:
+                    return line
+            if self.p.poll() is not None:
+                break
+            time.sleep(0.1)
+        raise AssertionError(f"{self.name}: '{needle}' not seen; output:\n" + "\n".join(self.lines[-40:]))
+
+    def stop(self):
+        if self.p.poll() is None:
+            self.p.terminate()
+            try:
+                self.p.wait(10)
+            except subprocess.TimeoutExpired:
+                self.p.kill()
+
+
+def http(method, url, body=None):
+    req = urllib.request.Request(url, method=method, data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read() or b"{}")
+
+
+@unittest.skipUnless(os.environ.get("KESTREL_IT") == "1", "set KESTREL_IT=1 to run the Reticulum integration test")
+class IntegrationTest(unittest.TestCase):
+    def setUp(self):
+        self.procs: list[Proc] = []
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self.tmp.cleanup)    # cleanups run LIFO: processes are stopped first
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        for p in reversed(self.procs):
+            p.stop()
+
+    def spawn(self, name, args):
+        p = Proc(name, args)
+        self.procs.append(p)
+        return p
+
+    def test_end_to_end(self):
+        import RNS
+        d = self.tmp.name
+        data_port, ctl_port, tcp_port, fake_port = (free_port() for _ in range(4))
+        rpc_key = secrets.token_hex(32)
+
+        # identity of the phone B
+        b_id = RNS.Identity()
+        b_file = os.path.join(d, "b.identity")
+        b_id.to_file(b_file)
+        b_pub = b_id.get_public_key().hex()
+
+        # shared instance (the "MeshChatX side" Reticulum) and fake MeshChatX
+        shared = self.spawn("shared", ["-m", "tests.it_shared_instance", os.path.join(d, "shared"),
+                                       str(data_port), str(ctl_port), str(tcp_port), rpc_key])
+        shared.wait_for("SHARED_READY", 60)
+        self.spawn("fake", ["-m", "tests.fake_meshchatx", "--port", str(fake_port)])
+        base = f"http://127.0.0.1:{fake_port}"
+        for _ in range(100):
+            try:
+                http("GET", base + "/api/v1/status")
+                break
+            except Exception:
+                time.sleep(0.1)
+        http("POST", base + "/_test/seed", {
+            "conversations": [{"display_name": "Peer", "custom_display_name": None, "destination_hash": PEER,
+                               "is_unread": False, "failed_messages_count": 0, "latest_message_preview": "hello",
+                               "latest_message_created_at": "2026-01-01T00:00:00"}],
+            "messages": [{"peer": PEER, "text": "earlier message", "incoming": True}]})
+
+        # sidecar config
+        sc = os.path.join(d, "sidecar")
+        os.makedirs(os.path.join(sc, "rns"))
+        with open(os.path.join(sc, "rns", "config"), "w") as f:
+            f.write(f"""[reticulum]
+  enable_transport = No
+  share_instance = Yes
+  shared_instance_type = tcp
+  shared_instance_port = {data_port}
+  instance_control_port = {ctl_port}
+  rpc_key = {rpc_key}
+
+[interfaces]
+""")
+        pw = os.path.join(sc, "password")
+        with open(pw, "w") as f:
+            f.write("test-password\n")
+        toml = os.path.join(sc, "bridge.toml")
+        q = lambda p: p.replace("\\", "/")  # noqa: E731
+        with open(toml, "w") as f:
+            f.write(f"""state_dir = "{q(sc)}/state"
+[meshchatx]
+base_url = "{base}"
+password_file = "{q(pw)}"
+[whitelist]
+phone_public_keys = ["{b_pub}"]
+[rns]
+config_dir = "{q(sc)}/rns"
+identity_path = "{q(sc)}/identity"
+lxmf_storage = "{q(sc)}/lxmf"
+announce_interval = 10
+[push]
+unknown_profile = "full"
+""")
+        chk = subprocess.run([sys.executable, "-m", "kestrel_bridge", "--config", toml, "--print-address"],
+                             cwd=BRIDGE_DIR, capture_output=True, text=True, timeout=60)
+        self.assertEqual(chk.returncode, 0, chk.stderr)
+        s_pub = next(l.split()[-1] for l in chk.stdout.splitlines() if l.startswith("bridge public key"))
+
+        sidecar = self.spawn("sidecar", ["-m", "kestrel_bridge", "--config", toml])
+        sidecar.wait_for("bridge running", 90)
+
+        # phone B
+        os.makedirs(os.path.join(d, "b"))
+        with open(os.path.join(d, "b", "config"), "w") as f:
+            f.write(f"""[reticulum]
+  enable_transport = No
+  share_instance = No
+
+[interfaces]
+  [[To Test Server]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = 127.0.0.1
+    target_port = {tcp_port}
+""")
+        client = self.spawn("client_b", ["-m", "tests.it_client_b", os.path.join(d, "b"), b_file, s_pub, PEER])
+        try:
+            client.wait_for("RESULT SUBSCRIBED", 120)
+            http("POST", base + "/_test/emit", {
+                "type": "lxmf.delivery", "remote_identity_name": "Peer",
+                "lxmf_message": {"hash": "ab" * 16, "source_hash": PEER, "state": "delivered",
+                                 "content": "pushed hello", "timestamp": time.time(), "fields": {}}})
+            client.wait_for("RESULT DONE", 60)
+        except AssertionError:
+            for p in self.procs:
+                if p.name in ("sidecar", "shared", "client_b"):
+                    print(f"---- {p.name} ----\n" + "\n".join(p.lines[-60:]))
+            raise
+
+        if os.environ.get("IT_RNS_LOG"):
+            print("\n".join(client.lines))
+        res = {}
+        for line in client.lines:
+            if line.startswith("RESULT "):
+                _, name, payload = line.split(" ", 2)
+                res[name] = json.loads(payload)
+
+        # impostor: refused (error response or link torn down), never a successful /hello
+        imp = res["impostor"]
+        self.assertTrue(imp is None or imp.get("ok") is False, imp)
+        self.assertEqual(res["pre_identify"]["error"]["code"], "unauthorized")
+        self.assertTrue(res["hello"]["ok"])
+        self.assertEqual(res["hello"]["result"]["protocol_version"], 1)
+        self.assertTrue(res["hello"]["result"]["compat"]["ok"])
+        self.assertEqual([c["peer"] for c in res["sync"]["result"]["lxmf"]], [PEER])
+        self.assertEqual(res["messages"]["result"]["messages"][0]["text"], "earlier message")
+        self.assertTrue(res["send"]["ok"])
+        self.assertEqual(len(res["send"]["result"]["lxmf_hash"]), 32)
+        self.assertEqual(res["send_replay"]["error"]["code"], "replay")
+        self.assertEqual(res["rrc_slash"]["error"]["code"], "rrc_command_rejected")
+        self.assertTrue(res["subscribe"]["ok"])
+        self.assertEqual(res["push"]["data"]["text"], "pushed hello")
+
+        calls = http("GET", base + "/_test/calls")
+        self.assertEqual([s["text"] for s in calls["sent"]], ["from phone"])   # exactly once despite the replay
+        self.assertEqual(calls["logins"], 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
