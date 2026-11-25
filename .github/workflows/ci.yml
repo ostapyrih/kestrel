@@ -78,6 +78,9 @@ jobs:
         run: |
           tools/.venv/bin/python tools/gen_vectors.py
           git diff --exit-code -- packages/kestrel_rns/test/vectors
-      - run: dart test
+      - name: Unit and golden-vector tests
+        run: dart test -x integration
       - name: Cross-check Dart output with Python reference
         run: dart test -t python
+      - name: Integration tests (live Python RNS reference peer over loopback TCP)
+        run: dart test -t integration
