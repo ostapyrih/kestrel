@@ -74,6 +74,14 @@ Reticulum на amd1 (transport + propagation node, shared instance)
 - Anti-replay для LXMF-команд: вікно за `ts` (напр. ±24 год для propagated) + журнал виконаних `cmd_id`.
 - Push **залежить від транспорту**: якщо `B` досяжна через LoRa-інтерфейс (`Transport.next_hop_interface`), шле лише особисті LXMF і згадки, з лімітом розміру; решта підтягнеться при TCP-sync.
 
+### Факти з Фази 1a (впливають на реалізацію мосту)
+- **Auth:** лише один пароль веб-інтерфейсу MeshChatX, без API-токенів і сервісних юзерів → sidecar тримає цей пароль (тільки в серверному конфігу, права 600). На 401 логіниться заново; **ніколи не викликає logout**, бо той інвалідує всі сесії. Логін має rate-limit, тож потрібен backoff.
+- **WS** не повторює пропущені події → після кожного reconnect sidecar робить resync по HTTP. Ping кожні 30 с; підписка лише на `lxmf` і `rrc`.
+- **Список розмов** не має `since` і лічильника непрочитаних → sidecar сам тримає курсори (останній `id` по кожній розмові) у своїй SQLite.
+- **RRC:** текст, що починається з `/`, виконується як команда хаба від імені `A` → у `send_rrc` такі повідомлення **відхиляються** (або екрануються). Читання історії скидає активну кімнату в десктоп-UI → після нього викликати `POST /rrc/active/clear`.
+- **Shared instance:** `network_mode: service:meshchatx`, `share_instance=Yes`, `require_shared_instance=True`, без інтерфейсів. Для path table (transport-aware push) потрібен `rpc_key`. Якщо контейнер MeshChatX пересоздали, sidecar треба перезапустити (healthcheck + `restart: unless-stopped` + watchdog).
+- **Сумісність:** `/status` → `version`; `/app/info` → `api_version`. Sidecar має allowlist версій, перевіряє ключі у відповідях API, а в CI є контракт-тести.
+
 ### Мобільні обмеження
 - iOS не тримає TCP у фоні → міст шле «порожній» пуш (ntfy/APNs/FCM, без вмісту), додаток синхронізується при відкритті. BLE до RNode в iOS може працювати у фоні.
 - Android: foreground service для постійного з'єднання.
@@ -100,7 +108,7 @@ Reticulum на amd1 (transport + propagation node, shared instance)
 |---|---|---|---|
 | R | Репо + CI/CD | публічний `ostapyrih/kestrel`, монорепо `app/` + `bridge/`, `ci.yml`, релізи (APK/AAB/IPA, Docker-образ мосту), release-please з changelog. Деталі — `CLAUDE.md` | ⏳ йде |
 | 0 | Розвідка Plugin API MeshChatX на `amd1` (read-only) | звіт у `docs/private/`. Висновок: офіційного Plugin API замало → sidecar | ✅ |
-| 1a | Розвідка HTTP/WebSocket API MeshChatX + підключення до shared instance (read-only) | звіт у `docs/private/`: auth, ендпоінти чатів/повідомлень/RRC, події WS, як sidecar приєднується до RNS | ⏳ йде |
+| 1a | Розвідка HTTP/WebSocket API MeshChatX + підключення до shared instance (read-only) | звіт у `docs/private/`: API покриває LXMF/RRC/WS; обмеження — нижче (§3, «Факти з 1a») | ✅ |
 | 1 | Sidecar `kestrel-bridge` + `python -m unittest` | Link-RPC з `identify()`, whitelist за ключем, LXMF-команди з anti-replay, ack з хешем, push з WS-подій, transport-aware push; Docker-образ; тест з Python-клієнтом у ролі `B`; деплой на `amd1` лише з «так» користувача | ⬜ |
 | 2 | Dart RNS core + golden-тести | identity, packet, announce, token-шифрування, HDLC, LXMF pack/unpack — байт-у-байт збіг з Python RNS/LXMF; інтеграційний тест з локальним `rnsd` | ⬜ |
 | 3 | TCP + LXMF (direct/opportunistic) + Standalone-режим + мінімальний UI | можна листуватися від `B` | ⬜ |
