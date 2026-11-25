@@ -53,7 +53,7 @@ def main() -> None:
     s_ident = RNS.Identity(create_keys=False)
     s_ident.load_public_key(bytes.fromhex(s_pub))
     dest = RNS.Destination(s_ident, RNS.Destination.OUT, RNS.Destination.SINGLE, "kestrel", "bridge")
-    end = time.time() + 90
+    end = time.time() + 35
     while not RNS.Transport.has_path(dest.hash):
         if time.time() > end:
             out("TIMEOUT", "path")
