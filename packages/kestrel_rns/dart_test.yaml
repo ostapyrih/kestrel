@@ -3,3 +3,7 @@ tags:
     # Cross-checks Dart output with the Python reference; skipped when
     # tools/.venv (or $KESTREL_PYTHON) with rns+lxmf is not available.
     timeout: 120s
+  integration:
+    # Dart network layer against a live Python RNS peer (tools/it/rns_peer.py)
+    # over loopback TCP; skipped when no Python reference is available.
+    timeout: 180s
