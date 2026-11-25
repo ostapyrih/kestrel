@@ -25,6 +25,7 @@
 ```
 app/       Flutter-додаток (lib/rns, lib/lxmf, lib/bridge, lib/storage, lib/screens)
 bridge/    sidecar kestrel-bridge (Python): Dockerfile, kestrel_bridge/, tests/, config.example.toml
+packages/kestrel_rns/  pure-Dart RNS + LXMF (без Flutter, `dart test`), використовується app/
 tools/     генератори golden-векторів (Python RNS/LXMF → JSON для Dart-тестів)
 docs/      PLAN.md, протокол мосту, ADR; docs/private/ — не в git
 .github/   workflows, release-please config

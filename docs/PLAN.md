@@ -106,7 +106,7 @@ Reticulum на amd1 (transport + propagation node, shared instance)
 
 | # | Фаза | Результат / критерій готовності | Статус |
 |---|---|---|---|
-| R | Репо + CI/CD | публічний `ostapyrih/kestrel`, монорепо `app/` + `bridge/`, `ci.yml`, релізи (APK/AAB/IPA, Docker-образ мосту), release-please з changelog. Деталі — `CLAUDE.md` | ⏳ йде |
+| R | Репо + CI/CD | публічний `ostapyrih/kestrel`, монорепо `app/` + `bridge/`, `ci.yml`, релізи (APK/AAB/IPA, Docker-образ мосту), release-please з changelog. Деталі — `CLAUDE.md` | ✅ |
 | 0 | Розвідка Plugin API MeshChatX на `amd1` (read-only) | звіт у `docs/private/`. Висновок: офіційного Plugin API замало → sidecar | ✅ |
 | 1a | Розвідка HTTP/WebSocket API MeshChatX + підключення до shared instance (read-only) | звіт у `docs/private/`: API покриває LXMF/RRC/WS; обмеження — нижче (§3, «Факти з 1a») | ✅ |
 | 1 | Sidecar `kestrel-bridge` + `python -m unittest` | Link-RPC з `identify()`, whitelist за ключем, LXMF-команди з anti-replay, ack з хешем, push з WS-подій, transport-aware push; Docker-образ; тест з Python-клієнтом у ролі `B`; деплой на `amd1` лише з «так» користувача | ⬜ |
