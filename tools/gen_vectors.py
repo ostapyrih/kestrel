@@ -1088,6 +1088,264 @@ def gen_lxmf():
     })
 
 
+
+# ==========================================================================
+# network.json  (stamps, link crypto, request packing, resource advertisement)
+# ==========================================================================
+STAMPS_MOD = sys.modules["RNS.Stamps"]
+
+
+def gen_network():
+    from RNS.Cryptography import X25519PrivateKey, X25519PublicKey, Ed25519PrivateKey
+    import bz2
+
+    out = {}
+
+    # ---- stamps ----
+    S = STAMPS_MOD
+    costs = [0, 1, 4, 8, 9.5, 12.5, 15.8, 23.5, 25.0, 99.5, 100]
+    out["stamp_tab"] = [f"{v:x}" for v in S.TAB]
+    out["stamp_costs"] = [
+        {"cost": c, "fp": S.cost_to_fp(c), "bytes": hx(S.cost_to_bytes(c)),
+         "target": f"{S.target_from_cost(c):064x}", "quantized": S.quantize_cost(c)}
+        for c in costs
+    ]
+    values = []
+    for i in range(12):
+        material = det(f"stamp/material/{i}", 40 + 3 * i)
+        stamp = det(f"stamp/stamp/{i}", 14)
+        wb = S.stamp_workblock(material, expand_rounds=0)
+        values.append({
+            "material": hx(material), "stamp": hx(stamp), "value": S.stamp_value(wb, stamp),
+            "valid_at": {str(c): S.stamp_valid(stamp, c, wb) for c in (0, 2, 4, 6, 8, 12)},
+        })
+    out["stamp_values"] = values
+    # deterministic mined stamps (counter search) at costs that are cheap to verify
+    mined = []
+    for i, cost in enumerate((6, 8, 9.5)):
+        material = det(f"stamp/mined/{i}", 42)
+        wb = S.stamp_workblock(material, expand_rounds=0)
+        n = 0
+        while True:
+            st = n.to_bytes(14, "big")
+            if S.stamp_valid(st, cost, wb):
+                break
+            n += 1
+        mined.append({"material": hx(material), "cost": cost, "stamp": hx(st), "value": S.stamp_value(wb, st)})
+    out["stamp_mined"] = mined
+
+    # ---- stamped announce ----
+    alice = IDENTITIES["alice"]
+    d = dest_in(alice, "kestrel", "net", "stamped")
+    d._target_value = 8.0  # keep the (cheap) mined stamp instead of regenerating at cost 25
+    wb = S.stamp_workblock(d.stamp_material(), expand_rounds=0)
+    n = 0
+    while not S.stamp_valid(n.to_bytes(14, "big"), 8, wb):
+        n += 1
+    stamp = n.to_bytes(14, "big")
+    d.stamp = stamp
+    d.stamp_value = S.stamp_value(wb, stamp)
+    saved_val = RNS.Transport.DESTINATION_VALUE
+    RNS.Transport.DESTINATION_VALUE = 8.0
+    RNS.Transport.STAMP_DESTINATIONS = True
+    try:
+        random_hash = det("netann/rh", 16)
+        now = 1700001234
+        for app_data in (None, b"stamped-app"):
+            with deterministic(now=now, random_hash=random_hash):
+                p = d._announce(app_data=app_data, send=False)
+            p.hops = 0
+            p.pack()
+            raw = p.raw
+            IM.Identity._reset_validation_caches()
+            IM.Identity.known_destinations.clear()
+            q = RNS.Packet(None, raw)
+            assert q.unpack()
+            ok_low = RNS.Identity.validate_announce(q, required_value=8.0)
+            known = IM.Identity.known_destinations.get(d.hash)
+            out.setdefault("stamped_announces", []).append({
+                "identity": "alice", "app_name": "kestrel", "aspects": ["net", "stamped"],
+                "destination_hash": hx(d.hash), "app_data": hx(app_data), "stamp": hx(stamp),
+                "stamp_value": d.stamp_value, "random_hash_seed5": hx(random_hash[:5]),
+                "timestamp": now, "raw": hx(raw), "packet_hash": hx(p.packet_hash),
+                "python_valid_at_8": ok_low is True,
+                "stored_app_data": hx(known[3]) if known else None,
+                "stored_stamp_value": known[6] if known else None,
+                "stored_lr_cost": known[7] if known else None,
+            })
+    finally:
+        RNS.Transport.DESTINATION_VALUE = saved_val
+        RNS.Transport.STAMP_DESTINATIONS = False
+
+    # ---- link key agreement ----
+    bob = IDENTITIES["bob"]
+    bob_dest = dest_out(bob, "kestrel", "net", "linkdest")
+    init_x = det("link/init/x25519", 32)
+    init_sig_seed = det("link/init/sig", 32)
+    init_pub = X25519PrivateKey.from_private_bytes(init_x).public_key().public_bytes()
+    init_sig_pub = Ed25519PrivateKey.from_private_bytes(init_sig_seed).public_key().public_bytes()
+    resp_x = det("link/resp/x25519", 32)
+    resp_pub = X25519PrivateKey.from_private_bytes(resp_x).public_key().public_bytes()
+
+    links = []
+    for mtu in (500, 16384, 262144):
+        sig_b = RNS.Link.signalling_bytes(mtu, RNS.Link.MODE_AES256_CBC)
+        req_data = init_pub + init_sig_pub + sig_b
+        lr = RNS.Packet(bob_dest, req_data, packet_type=RNS.Packet.LINKREQUEST)
+        lr.pack()
+        link_id = RNS.Link.link_id_from_lr_packet(lr)
+        lr_no_sig = RNS.Packet(bob_dest, init_pub + init_sig_pub, packet_type=RNS.Packet.LINKREQUEST)
+        lr_no_sig.pack()
+
+        def mk(prv, peer_pub):
+            l = object.__new__(RNS.Link)
+            l.status = RNS.Link.PENDING
+            l.prv = X25519PrivateKey.from_private_bytes(prv)
+            l.peer_pub = X25519PublicKey.from_public_bytes(peer_pub)
+            l.mode = RNS.Link.MODE_AES256_CBC
+            l.link_id = link_id
+            l.token = None
+            l.handshake()
+            return l
+
+        resp_link = mk(resp_x, init_pub)
+        init_link = mk(init_x, resp_pub)
+        assert resp_link.derived_key == init_link.derived_key
+        signed = link_id + resp_pub + bob.get_public_key()[32:64] + sig_b
+        signature = bob.sign(signed)
+        proof_data = signature + resp_pub + sig_b
+        iv = det(f"link/iv/{mtu}", 16)
+        plaintext = det(f"link/plain/{mtu}", 77)
+        with deterministic(iv=iv):
+            ct = init_link.encrypt(plaintext)
+        rtt = 0.0123 + mtu / 1e7
+        init_link.token = None
+        with deterministic(iv=iv):
+            rtt_ct = init_link.encrypt(umsgpack.packb(rtt))
+        mdu_link = object.__new__(RNS.Link)
+        mdu_link.mtu = mtu
+        mdu_link.update_mdu()
+        links.append({
+            "mtu": mtu, "signalling": hx(sig_b), "mdu": mdu_link.mdu,
+            "initiator_x25519_private": hx(init_x), "initiator_sig_seed": hx(init_sig_seed),
+            "initiator_pub": hx(init_pub), "initiator_sig_pub": hx(init_sig_pub),
+            "responder_x25519_private": hx(resp_x), "responder_pub": hx(resp_pub),
+            "destination_identity": "bob", "destination_hash": hx(bob_dest.hash),
+            "link_request_raw": hx(lr.raw), "link_request_without_signalling_raw": hx(lr_no_sig.raw),
+            "link_id": hx(link_id), "link_id_without_signalling": hx(RNS.Link.link_id_from_lr_packet(lr_no_sig)),
+            "shared_key": hx(init_link.shared_key), "derived_key": hx(init_link.derived_key),
+            "proof_signed_data": hx(signed), "proof_data": hx(proof_data),
+            "iv": hx(iv), "plaintext": hx(plaintext), "ciphertext": hx(ct),
+            "rtt": rtt, "rtt_ciphertext": hx(rtt_ct),
+            "mtu_from_lr": RNS.Link.mtu_from_lr_packet(lr),
+        })
+    out["links"] = links
+    out["signalling"] = [
+        {"mtu": m, "mode": 1, "bytes": hx(RNS.Link.signalling_bytes(m, 1))} for m in (500, 1000, 8192, 16384, 262144, 2097151)
+    ]
+    out["keepalive"] = [
+        {"rtt": r, "keepalive": max(min(r * (RNS.Link.KEEPALIVE_MAX / RNS.Link.KEEPALIVE_MAX_RTT), RNS.Link.KEEPALIVE_MAX), RNS.Link.KEEPALIVE_MIN)}
+        for r in (0.001, 0.05, 0.5, 1.75, 10.0)
+    ]
+
+    # ---- request / response packing ----
+    reqs = []
+    for i, (path, data) in enumerate([
+        ("/echo", b"\x01\x02"), ("/status", None), ("/get", {"a": 1, "b": [1, 2, b"x"]}),
+        ("/long/path/name", "text"), ("/n", 12345678901),
+    ]):
+        ph = RNS.Identity.truncated_hash(path.encode("utf-8"))
+        ts = 1700000000.25 + i
+        packed = umsgpack.packb([ts, ph, data])
+        body = det(f"req/body/{i}", 48 + 16 * i)
+        raw = bytes([0x0C, 0x00]) + bytes.fromhex(links[1]["link_id"]) + bytes([RNS.Packet.REQUEST]) + body
+        q = RNS.Packet(None, raw)
+        assert q.unpack()
+        rid = q.getTruncatedHash()
+        resp = umsgpack.packb([rid, {"ok": True, "n": i}])
+        reqs.append({
+            "path": path, "path_hash": hx(ph), "timestamp": ts, "data": to_tree(data),
+            "packed": hx(packed), "request_packet_raw": hx(raw), "request_id": hx(rid),
+            "response_obj": to_tree({"ok": True, "n": i}), "packed_response": hx(resp),
+        })
+    out["requests"] = reqs
+
+    # ---- resource ----
+    RA = RNS.ResourceAdvertisement
+
+    class FakeLink:
+        type = RNS.Destination.LINK
+        status = RNS.Link.ACTIVE
+        rtt = 0.05
+        traffic_timeout_factor = 6
+
+        def __init__(self, mtu):
+            self.mtu = mtu
+            self.link_id = det("resource/linkid", 16)
+            self.hash = self.link_id
+            self.mdu = ((mtu - 1 - 19 - 48) // 16) * 16 - 1
+
+        def encrypt(self, p):
+            return p  # identity: advertisement/hashmap structure (not link crypto) is under test
+
+    def make_resource(data, mtu, compress, label, **kw):
+        fl = FakeLink(mtu)
+        seq = iter([det(f"{label}/prefix", 16), det(f"{label}/rh", 16)])
+        saved = RNS.Identity.get_random_hash
+        RNS.Identity.get_random_hash = staticmethod(lambda: next(seq))
+        try:
+            res = RNS.Resource(data, fl, advertise=False, auto_compress=compress, **kw)
+        finally:
+            RNS.Identity.get_random_hash = saved
+        return fl, res
+
+    resources = []
+    cases = [
+        ("small_uncompressed", 1000, 500, False, "random"),
+        ("multi_part_hmu", 60000, 500, False, "random"),
+        ("compressible", 3000, 500, True, "text"),
+        ("large_mtu_single_part", 5000, 16384, False, "random"),
+    ]
+    for name, n, mtu, compress, kind in cases:
+        data = det(f"resource/{name}", n) if kind == "random" else (b"kestrel resource " * 400)[:n]
+        fl, res = make_resource(data, mtu, compress, f"resource/{name}")
+        adv = RA(res, mdu=fl.mdu)
+        rec = {
+            "name": name, "mtu": mtu, "link_mdu": fl.mdu, "auto_compress": compress,
+            "data_sha256": hashlib.sha256(data).hexdigest(), "data": hx(data),
+            "data_len": n,
+            "random_prefix": hx(det(f"resource/{name}/prefix", 16)[:4]),
+            "random_hash": hx(res.random_hash), "hash": hx(res.hash), "original_hash": hx(res.original_hash),
+            "expected_proof": hx(res.expected_proof), "compressed": res.compressed,
+            "size": res.size, "total_size": res.total_size, "sdu": res.sdu, "parts": [hx(p.data) for p in res.parts],
+            "hashmap": hx(res.hashmap), "flags": adv.f, "adv": hx(adv.pack()),
+        }
+        if res.total_parts > RA.HASHMAP_MAX_LEN:
+            rec["adv_segment_1"] = hx(adv.pack(segment=1))
+            seg = RA.HASHMAP_MAX_LEN
+            rec["hmu_segment_1"] = hx(res.hash + umsgpack.packb([1, res.hashmap[seg * 4:2 * seg * 4]]))
+        resources.append(rec)
+    out["resources"] = resources
+    out["resource_constants"] = {
+        "hashmap_max_len": RA.HASHMAP_MAX_LEN,
+        "collision_guard_size": RA.COLLISION_GUARD_SIZE,
+        "max_efficient_size": RNS.Resource.MAX_EFFICIENT_SIZE,
+    }
+    flagged = []
+    for is_resp in (False, True):
+        fl, res = make_resource(det("resource/flag/data", 600), 500, False, "resource/flag",
+                                request_id=det("resource/flag/rid", 16), is_response=is_resp)
+        adv = RA(res, mdu=fl.mdu)
+        flagged.append({"is_response": is_resp, "request_id": hx(res.request_id), "flags": adv.f, "adv": hx(adv.pack())})
+    out["resource_flagged"] = flagged
+    out["bz2"] = [
+        {"plain": hx(pl), "compressed": hx(bz2.compress(pl))}
+        for pl in (b"a", det("bz2/random", 700), (b"abcabcabd" * 3000))
+    ]
+
+    write("network.json", out)
+
+
 def main():
     gen_identity()
     gen_token()
@@ -1098,6 +1356,7 @@ def main():
     gen_kiss()
     gen_msgpack()
     gen_lxmf()
+    gen_network()
     print(f"RNS {RNS.__version__ if hasattr(RNS, '__version__') else '?'}; LXMF {LXMF.__version__ if hasattr(LXMF, '__version__') else '?'}")
 
 
