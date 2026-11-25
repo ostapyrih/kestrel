@@ -2,3 +2,5 @@ tests
 __pycache__
 *.egg-info
 config.toml
+.venv
+deploy
