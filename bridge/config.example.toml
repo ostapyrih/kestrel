@@ -1,15 +1,40 @@
-# Example only. Real config lives on the server and is never committed.
+# Example only. The real config lives on the server and is never committed.
+# All values below are placeholders.
 
-[bridge]
-protocol_version = 0
+state_dir = "/sidecar/state"   # sqlite (cursors, cmd_id journal, pending acks) + health file
+log_level = "INFO"             # INFO never logs message text or secrets
 
 [meshchatx]
-url = "http://meshchatx.example.invalid:8000"
-username = "example-user"
-password = "example-password-do-not-use"
+# The sidecar shares the network namespace of the MeshChatX container (network_mode: service:meshchatx).
+base_url = "http://127.0.0.1:8000"
+# Exactly one of password_file / password_env. Prefer a read-only mounted file (mode 600).
+password_file = "/run/secrets/meshchatx_password"
+# password_env = "KESTREL_MESHCHATX_PASSWORD"
+# Tested MeshChatX versions (prefix match) and /app/info api_version values.
+allowed_versions = ["4.12."]
+allowed_api_versions = [2]
 
 [whitelist]
-# full public keys (hex) of allowed phone identities
+# Full public keys (128 hex chars = 64 bytes) of allowed phone identities (B).
 phone_public_keys = [
     "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
 ]
+
+[rns]
+config_dir = "/sidecar/.reticulum"         # minimal config, share_instance = Yes, no interfaces
+identity_path = "/sidecar/storage/identity"  # identity S (created on first start)
+lxmf_storage = "/sidecar/storage/lxmf"
+announce_interval = 1800
+announce_lxmf = false                       # keep S out of MeshChatX's announce list
+
+[limits]
+max_text_bytes = 4096
+constrained_max_text_bytes = 160           # LoRa profile truncation
+lxmf_ts_window = 86400                     # +/- seconds accepted for LXMF command ts
+send_rate_per_minute = 30
+
+[push]
+unknown_profile = "constrained"            # when the path to the phone is unknown
+lxmf_offline_push = true
+offline_push_max_per_hour = 30
+# propagation_node = "00000000000000000000000000000000"   # optional LXMF propagation node
