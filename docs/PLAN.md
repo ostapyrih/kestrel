@@ -111,7 +111,7 @@ Reticulum на amd1 (transport + propagation node, shared instance)
 | 1a | Розвідка HTTP/WebSocket API MeshChatX + підключення до shared instance (read-only) | звіт у `docs/private/`: API покриває LXMF/RRC/WS; обмеження — нижче (§3, «Факти з 1a») | ✅ |
 | 1 | Sidecar `kestrel-bridge` + тести | PR #2 злитий: протокол v1 (`docs/bridge-protocol.md`), Link-RPC з `identify()`, LXMF-команди з anti-replay, push, LoRa-профіль; 82 unit + інтеграційний тест у CI. **Залишилось:** smoke-тест проти справжнього MeshChatX і деплой на `amd1` — лише з «так» користувача | 🟡 код готовий |
 | 2 | Dart RNS core + golden-тести (`packages/kestrel_rns`) | PR #1 злитий: identity, token, packet, announce, HDLC/KISS, msgpack, LXMF — збіг з Python RNS 1.6.1 / LXMF 1.3.1 в обидва боки (271 тест + 80 крос-перевірок у Python) | ✅ |
-| 3a | Мережевий шар у `kestrel_rns` | TCP-клієнт, мінімальний Transport (announce, path request), Link (+ identify, request/response), Resource; інтеграційний тест з локальним `rnsd` | ⏳ йде |
+| 3a | Мережевий шар у `kestrel_rns` | PR #3 злитий: TCP, Transport (endpoint), Link + identify + request/response, Resource (≤1 MiB), ratchets, announce-штампи; 345 тестів, 36 інтеграційних проти Python RNS 1.6.1, включно з Dart↔Dart через Python-транспорт. Відкладено: Resource >1 MiB, Channel/Buffer, IFAC | ✅ |
 | 3b | LXMF direct/opportunistic + Standalone-режим + мінімальний UI | можна листуватися від `B` | ⬜ |
 | 4 | Bridge-режим у додатку | перемикач, акаунти A/B, sync, відправка через міст, бейджі маршруту/транспорту/статусу, черга | ⬜ |
 | 5 | Propagation sync + офлайн-черга | `B` забирає повідомлення з propagation node | ⬜ |
@@ -128,7 +128,7 @@ Reticulum на amd1 (transport + propagation node, shared instance)
 2. Одна identity `B` на обидві ролі чи окрема прихована control-identity (див. §2)?
 3. Канал фонових сповіщень: ntfy (свій сервер) чи APNs/FCM?
 4. ~~Plugin API~~ — вирішено: sidecar (§3).
-6. **Announce stamps:** RNS 1.6 за замовчуванням додає PoW-штамп до announce; Dart його поки не генерує. На `amd1` штампи не вимагаються, але інші вузли мережі можуть — генерацію штампів робимо у Фазі 3a/3b.
+6. **Announce stamps:** RNS 1.6 за замовчуванням додає PoW-штамп до announce; Dart його поки не генерує. На `amd1` штампи не вимагаються, але інші вузли мережі можуть — генерацію зроблено у 3a (cost 25, окремий isolate, кешується per destination). У 3b заміряти час на реальному телефоні.
 5. На сервері зараз **немає RNode-інтерфейсу**: для LoRa потрібен шлюз (RNode на `amd1` або інший транспорт-вузол із LoRa і виходом у мережу).
 
 ---
