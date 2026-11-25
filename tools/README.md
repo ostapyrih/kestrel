@@ -1,4 +1,14 @@
 # tools
 
-Golden-vector generators will live here: Python scripts using the reference `rns` / `lxmf`
-packages to produce JSON vectors consumed by the Dart tests in `app/`.
+Python scripts using the reference `rns` / `lxmf` packages (pinned in `requirements.txt`).
+
+- `gen_vectors.py` - deterministic golden vectors -> `packages/kestrel_rns/test/vectors/*.json`
+  (CI regenerates them and fails on any diff).
+- `verify_dart_output.py` - verifies random Dart-generated signatures / ciphertexts / announces /
+  LXMF messages with the Python reference (driven by the Dart `python`-tagged test).
+
+```
+python -m venv tools/.venv
+tools/.venv/bin/pip install -r tools/requirements.txt   # Windows: tools\.venv\Scripts\pip
+tools/.venv/bin/python tools/gen_vectors.py
+```

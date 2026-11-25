@@ -1,0 +1,193 @@
+{
+  "destinations": [
+    {
+      "app_name": "lxmf",
+      "aspects": [
+        "delivery"
+      ],
+      "full_name": "lxmf.delivery",
+      "name_hash": "6ec60bc318e2c0f0d908",
+      "per_identity": [
+        {
+          "identity": "alice",
+          "hash": "336a11d8beb354b1aaab3c403f2b9cda",
+          "expanded_name": "lxmf.delivery.9c1e46c9682bbe9168c3b33b4c796d91"
+        },
+        {
+          "identity": "bob",
+          "hash": "b39a4b913748105ce2b764df98194db5",
+          "expanded_name": "lxmf.delivery.7e5a1355f8544dc31abba76551d22956"
+        },
+        {
+          "identity": "carol",
+          "hash": "c4aa453b0d204bbb209244bfbbe8e380",
+          "expanded_name": "lxmf.delivery.c5deb3e50dbf30b7b83a31c45c5f3aaa"
+        }
+      ],
+      "plain_hash": "9497d16c52ac5faec04c36db5c301e8e",
+      "plain_expanded_name": "lxmf.delivery"
+    },
+    {
+      "app_name": "lxmf",
+      "aspects": [
+        "propagation"
+      ],
+      "full_name": "lxmf.propagation",
+      "name_hash": "e03a09b77ac21b22258e",
+      "per_identity": [
+        {
+          "identity": "alice",
+          "hash": "e2d93d28fb9629bb8bec47f1035cf1f3",
+          "expanded_name": "lxmf.propagation.9c1e46c9682bbe9168c3b33b4c796d91"
+        },
+        {
+          "identity": "bob",
+          "hash": "3a47fba4c8357232992a9732f67ab2dc",
+          "expanded_name": "lxmf.propagation.7e5a1355f8544dc31abba76551d22956"
+        },
+        {
+          "identity": "carol",
+          "hash": "84e169ca907db611136dcb2c328adb3a",
+          "expanded_name": "lxmf.propagation.c5deb3e50dbf30b7b83a31c45c5f3aaa"
+        }
+      ],
+      "plain_hash": "8801321bf89cce83419e3e80a7df53e8",
+      "plain_expanded_name": "lxmf.propagation"
+    },
+    {
+      "app_name": "kestrel",
+      "aspects": [
+        "bridge"
+      ],
+      "full_name": "kestrel.bridge",
+      "name_hash": "bd8a08f556f4d1690050",
+      "per_identity": [
+        {
+          "identity": "alice",
+          "hash": "9d93de33cd314cae772bceffabc7d188",
+          "expanded_name": "kestrel.bridge.9c1e46c9682bbe9168c3b33b4c796d91"
+        },
+        {
+          "identity": "bob",
+          "hash": "f7c37a416b15522470d7026ea348e32a",
+          "expanded_name": "kestrel.bridge.7e5a1355f8544dc31abba76551d22956"
+        },
+        {
+          "identity": "carol",
+          "hash": "92c02ef38f6694d0b9a075e2f1d8db58",
+          "expanded_name": "kestrel.bridge.c5deb3e50dbf30b7b83a31c45c5f3aaa"
+        }
+      ],
+      "plain_hash": "765cd8b3f8f834f7b5ee7299ca84ce7f",
+      "plain_expanded_name": "kestrel.bridge"
+    },
+    {
+      "app_name": "nomadnetwork",
+      "aspects": [
+        "node"
+      ],
+      "full_name": "nomadnetwork.node",
+      "name_hash": "213e6311bcec54ab4fde",
+      "per_identity": [
+        {
+          "identity": "alice",
+          "hash": "51ec399314a5f7107641f40720425186",
+          "expanded_name": "nomadnetwork.node.9c1e46c9682bbe9168c3b33b4c796d91"
+        },
+        {
+          "identity": "bob",
+          "hash": "2c62cabc1a620dc613d0821c8fea6caf",
+          "expanded_name": "nomadnetwork.node.7e5a1355f8544dc31abba76551d22956"
+        },
+        {
+          "identity": "carol",
+          "hash": "38ee5e7956950482da23a85cbb90b92d",
+          "expanded_name": "nomadnetwork.node.c5deb3e50dbf30b7b83a31c45c5f3aaa"
+        }
+      ],
+      "plain_hash": "b11b1094382ebd4a9fe43b061b3da93e",
+      "plain_expanded_name": "nomadnetwork.node"
+    },
+    {
+      "app_name": "rnstransport",
+      "aspects": [
+        "probe"
+      ],
+      "full_name": "rnstransport.probe",
+      "name_hash": "fd68805f2ea383c8d6f6",
+      "per_identity": [
+        {
+          "identity": "alice",
+          "hash": "45a9caba8fb34a6ab9cb00b89d8a0b6d",
+          "expanded_name": "rnstransport.probe.9c1e46c9682bbe9168c3b33b4c796d91"
+        },
+        {
+          "identity": "bob",
+          "hash": "3483613395c7bab7ba6735fae7730a7c",
+          "expanded_name": "rnstransport.probe.7e5a1355f8544dc31abba76551d22956"
+        },
+        {
+          "identity": "carol",
+          "hash": "430d1002936787648b32b562aac60484",
+          "expanded_name": "rnstransport.probe.c5deb3e50dbf30b7b83a31c45c5f3aaa"
+        }
+      ],
+      "plain_hash": "06e30d804d11315cceab0ab65482e837",
+      "plain_expanded_name": "rnstransport.probe"
+    },
+    {
+      "app_name": "app",
+      "aspects": [],
+      "full_name": "app",
+      "name_hash": "a172cedcae47474b615c",
+      "per_identity": [
+        {
+          "identity": "alice",
+          "hash": "3627442f91c47331287b972ea69fe04d",
+          "expanded_name": "app.9c1e46c9682bbe9168c3b33b4c796d91"
+        },
+        {
+          "identity": "bob",
+          "hash": "cf64cf6fe83a880d3043c88a4fab93bf",
+          "expanded_name": "app.7e5a1355f8544dc31abba76551d22956"
+        },
+        {
+          "identity": "carol",
+          "hash": "14d996f7ac20df9136849be65e9788b1",
+          "expanded_name": "app.c5deb3e50dbf30b7b83a31c45c5f3aaa"
+        }
+      ],
+      "plain_hash": "f4bac96668c4aabdd18cc1a690beb634",
+      "plain_expanded_name": "app"
+    },
+    {
+      "app_name": "example",
+      "aspects": [
+        "a",
+        "b",
+        "c"
+      ],
+      "full_name": "example.a.b.c",
+      "name_hash": "27cf894176b2d64b9590",
+      "per_identity": [
+        {
+          "identity": "alice",
+          "hash": "7f3f042c16ab9318fb22d4396cdcce61",
+          "expanded_name": "example.a.b.c.9c1e46c9682bbe9168c3b33b4c796d91"
+        },
+        {
+          "identity": "bob",
+          "hash": "7c3a61a43e8619e050115c0992d6e75d",
+          "expanded_name": "example.a.b.c.7e5a1355f8544dc31abba76551d22956"
+        },
+        {
+          "identity": "carol",
+          "hash": "ce5c1c139c0f0aad201e89fd2019a64f",
+          "expanded_name": "example.a.b.c.c5deb3e50dbf30b7b83a31c45c5f3aaa"
+        }
+      ],
+      "plain_hash": "876bef777f8b186ed7908f20a470375a",
+      "plain_expanded_name": "example.a.b.c"
+    }
+  ]
+}
