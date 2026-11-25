@@ -1,0 +1,48 @@
+# Example only: placeholder names. Merge the `kestrel-bridge` service into the compose project that
+# already runs MeshChatX (service name `meshchatx` below). Nothing here is deployed automatically.
+services:
+  meshchatx:
+    image: ghcr.io/quad4-software/meshchatx:latest-extra
+    # ... your existing MeshChatX service. Its Reticulum config needs:
+    #   [reticulum]  share_instance = Yes  /  instance_name = default
+    #   and (optional, for transport-aware push) a known rpc_key, see README.
+
+  kestrel-bridge:
+    image: ghcr.io/ostapyrih/kestrel-bridge:latest   # pin a version tag in production
+    restart: unless-stopped
+    # Same network namespace as MeshChatX: reaches its HTTP API on 127.0.0.1:8000 and the
+    # Reticulum shared instance (abstract unix socket on Linux). No ports are published; the
+    # phone reaches the bridge through Reticulum.
+    network_mode: "service:meshchatx"
+    depends_on:
+      - meshchatx
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      # bridge.toml (whitelist of phone public keys, MeshChatX URL, limits): read-only
+      - ./kestrel/config/bridge.toml:/sidecar/config/bridge.toml:ro
+      # the MeshChatX web password (file, mode 600, owner uid 10001): read-only
+      - ./kestrel/secrets/meshchatx_password:/run/secrets/meshchatx_password:ro
+      # Reticulum config dir of the sidecar. If it has no `config` file the bridge writes a minimal one
+      # (share_instance = Yes, instance_name = default, no interfaces). Own dir: never mount MeshChatX's.
+      - ./kestrel/reticulum:/sidecar/.reticulum
+      # sidecar identity S, LXMF router state, sqlite state (cursors, cmd_id journal): persistent
+      - ./kestrel/storage:/sidecar/storage
+      - ./kestrel/state:/sidecar/state
+    healthcheck:
+      test: ["CMD", "python", "-m", "kestrel_bridge", "--healthcheck"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    # NOTE: with network_mode "service:meshchatx" the sidecar is bound to the *container instance*
+    # of meshchatx. If meshchatx is RECREATED (image update, `compose up` with a changed config)
+    # its network namespace is replaced and the sidecar must be recreated too:
+    #   docker compose up -d --force-recreate kestrel-bridge
+    # (`docker restart meshchatx` keeps the namespace and is fine.) Watchtower/Dozzle style
+    # auto-updates of meshchatx need the same follow-up.
