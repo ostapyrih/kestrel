@@ -41,7 +41,30 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m unittest discover -s tests -t .
+          cache: pip
+          cache-dependency-path: bridge/pyproject.toml
+      - run: pip install -e ".[dev]"
+      - run: python -m pyflakes kestrel_bridge tests
+      - run: python -m unittest discover -s tests -t . -v
+
+  bridge-integration:
+    # Real Reticulum (shared instance + TCP) + fake MeshChatX + sidecar + a Python phone client.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: bridge/pyproject.toml
+      - run: pip install -e ".[dev]"
+      - run: python -m unittest tests.test_integration_rns -v
+        env:
+          KESTREL_IT: "1"
 
   bridge-docker:
     runs-on: ubuntu-latest
