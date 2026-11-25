@@ -1,0 +1,5 @@
+tags:
+  integration:
+    # NodeService against a live Python LXMF reference peer (tools/it/lxmf_peer.py)
+    # over loopback TCP; skipped when no Python reference is available.
+    timeout: 180s
