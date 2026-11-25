@@ -109,7 +109,7 @@ Reticulum на amd1 (transport + propagation node, shared instance)
 | R | Репо + CI/CD | публічний `ostapyrih/kestrel`, монорепо `app/` + `bridge/`, `ci.yml`, релізи (APK/AAB/IPA, Docker-образ мосту), release-please з changelog. Деталі — `CLAUDE.md` | ✅ |
 | 0 | Розвідка Plugin API MeshChatX на `amd1` (read-only) | звіт у `docs/private/`. Висновок: офіційного Plugin API замало → sidecar | ✅ |
 | 1a | Розвідка HTTP/WebSocket API MeshChatX + підключення до shared instance (read-only) | звіт у `docs/private/`: API покриває LXMF/RRC/WS; обмеження — нижче (§3, «Факти з 1a») | ✅ |
-| 1 | Sidecar `kestrel-bridge` + `python -m unittest` | Link-RPC з `identify()`, whitelist за ключем, LXMF-команди з anti-replay, ack з хешем, push з WS-подій, transport-aware push; Docker-образ; тест з Python-клієнтом у ролі `B`; деплой на `amd1` лише з «так» користувача | ⬜ |
+| 1 | Sidecar `kestrel-bridge` + тести | PR #2 злитий: протокол v1 (`docs/bridge-protocol.md`), Link-RPC з `identify()`, LXMF-команди з anti-replay, push, LoRa-профіль; 82 unit + інтеграційний тест у CI. **Залишилось:** smoke-тест проти справжнього MeshChatX і деплой на `amd1` — лише з «так» користувача | 🟡 код готовий |
 | 2 | Dart RNS core + golden-тести (`packages/kestrel_rns`) | PR #1 злитий: identity, token, packet, announce, HDLC/KISS, msgpack, LXMF — збіг з Python RNS 1.6.1 / LXMF 1.3.1 в обидва боки (271 тест + 80 крос-перевірок у Python) | ✅ |
 | 3a | Мережевий шар у `kestrel_rns` | TCP-клієнт, мінімальний Transport (announce, path request), Link (+ identify, request/response), Resource; інтеграційний тест з локальним `rnsd` | ⏳ йде |
 | 3b | LXMF direct/opportunistic + Standalone-режим + мінімальний UI | можна листуватися від `B` | ⬜ |
