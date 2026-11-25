@@ -1,0 +1,5 @@
+tags:
+  python:
+    # Cross-checks Dart output with the Python reference; skipped when
+    # tools/.venv (or $KESTREL_PYTHON) with rns+lxmf is not available.
+    timeout: 120s
