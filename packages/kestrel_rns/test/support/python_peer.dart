@@ -37,17 +37,20 @@ class PythonPeer {
     int port = 0,
     bool stamps = false,
     double? destCost,
+    String script = 'rns_peer.py',
+    List<String> extraArgs = const [],
   }) async {
     final python = findPython();
     if (python == null) throw StateError('no python with rns found');
     final proc = await Process.start(python, [
-      '../../tools/it/rns_peer.py',
+      '../../tools/it/$script',
       '--transport',
       transport ? 'yes' : 'no',
       '--port',
       '$port',
       if (stamps) '--stamps',
       if (destCost != null) ...['--dest-cost', '$destCost'],
+      ...extraArgs,
     ]);
     final readyC = Completer<Map<String, Object?>>();
     late PythonPeer peer;
@@ -73,6 +76,22 @@ class PythonPeer {
     peer = PythonPeer._(proc, ready);
     return peer;
   }
+
+  /// Starts `tools/it/lxmf_peer.py` (RNS + LXMRouter).
+  static Future<PythonPeer> startLxmf({
+    String name = 'Python Peer',
+    int? stampCost,
+    bool enforceStamps = false,
+  }) =>
+      start(
+        script: 'lxmf_peer.py',
+        extraArgs: [
+          '--name',
+          name,
+          if (stampCost != null) ...['--stamp-cost', '$stampCost'],
+          if (enforceStamps) '--enforce-stamps',
+        ],
+      );
 
   void _dispatch(Map<String, Object?> m) {
     for (final w in _waiters) {
