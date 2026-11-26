@@ -114,6 +114,66 @@ String bridgeErrorText(Strings s, Object e) {
   return '$e';
 }
 
+/// The choices of the "turn the bridge off" confirmation.
+enum TurnOffChoice { cancel, sendFromB, discard }
+
+/// Asks before the bridge goes off: account A's chats are removed from this
+/// device (they stay in MeshChatX). Unsent A messages are not on MeshChatX
+/// yet, so when there are [queued] the dialog says they will be lost and
+/// offers to send them from this device (B) instead. Cancel has the focus.
+Future<TurnOffChoice?> confirmTurnOffBridge(
+  BuildContext context, {
+  required int queued,
+}) {
+  final s = Strings.of(context);
+  return showDialog<TurnOffChoice>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      key: const ValueKey('bridge-off-dialog'),
+      title: Text(s.t('bridge_off_title')),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(s.t('bridge_off_body')),
+          if (queued > 0) ...[
+            const SizedBox(height: 12),
+            Text(
+              s.t('bridge_off_queued', {'n': '$queued'}),
+              key: const ValueKey('bridge-off-queued'),
+              style: TextStyle(
+                color: Theme.of(ctx).colorScheme.error,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          key: const ValueKey('bridge-off-cancel'),
+          autofocus: true,
+          onPressed: () => Navigator.of(ctx).pop(TurnOffChoice.cancel),
+          child: Text(s.t('cancel')),
+        ),
+        if (queued > 0)
+          TextButton(
+            key: const ValueKey('bridge-off-send-b'),
+            onPressed: () => Navigator.of(ctx).pop(TurnOffChoice.sendFromB),
+            child: Text(s.t('bridge_off_send_b')),
+          ),
+        TextButton(
+          key: const ValueKey('bridge-off-confirm'),
+          onPressed: () => Navigator.of(ctx).pop(TurnOffChoice.discard),
+          child: Text(
+            queued > 0 ? s.t('bridge_off_discard') : s.t('bridge_off_confirm'),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 /// What the user can do with a queued A message while the bridge cannot take
 /// it: wait (nothing), cancel, or explicitly send from B instead. Never
 /// automatic.

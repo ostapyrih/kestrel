@@ -306,6 +306,17 @@ ORDER BY o.id''');
     ];
   }
 
+  /// Account A messages that were typed but never reached the bridge: they
+  /// are not on MeshChatX, so turning the bridge off would lose them.
+  Future<List<int>> queuedAMessageIds() async {
+    final rows = await _db.rawQuery('''
+SELECT id FROM messages
+WHERE sender_identity = 'A' AND direction = 'out' AND status = 'queued'
+  AND lxmf_hash IS NULL
+ORDER BY id''');
+    return [for (final r in rows) r['id']! as int];
+  }
+
   Future<void> outboxFinished(int outboxId) async {
     await _db.update(
       'outbox',

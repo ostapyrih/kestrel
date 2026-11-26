@@ -46,7 +46,10 @@ final selectedChatProvider = NotifierProvider<SelectedChat, int?>(
 final chatsProvider = StreamProvider<List<ChatRow>>((ref) {
   final repo = ref.watch(repoProvider);
   final f = ref.watch(accountFilterProvider);
-  return repo.watch(() => repo.chats(accountIdentity: f));
+  // bridge off: only this device's own chats are shown
+  final mode = ref.watch(bridgeModeProvider);
+  final effective = mode ? f : 'B';
+  return repo.watch(() => repo.chats(accountIdentity: effective));
 });
 
 final chatProvider = StreamProvider.family<ChatRow?, int>((ref, id) {
@@ -87,6 +90,21 @@ final ownDeviceNameProvider = Provider<String>((ref) {
 final bridgeEnabledProvider = StreamProvider<bool>((ref) {
   final repo = ref.watch(repoProvider);
   return repo.watch(repo.bridgeEnabled);
+});
+
+/// The single source of truth for the UI: true when the bridge mode is on.
+/// Off = a plain single-identity LXMF messenger: no account chips, no A/B
+/// badges or labels, no devices, rooms or pairing screens. Widgets watch this
+/// instead of reading the setting themselves.
+final bridgeModeProvider = Provider<bool>(
+  (ref) => ref.watch(bridgeEnabledProvider).value ?? false,
+);
+
+/// True while the bridge sync runs (a progress indicator in the chat list).
+final bridgeSyncingProvider = StreamProvider<bool>((ref) async* {
+  final b = ref.watch(bridgeProvider);
+  yield b.syncing;
+  yield* b.syncingChanges;
 });
 
 /// Identity B facts shown in settings (available once the node is up).

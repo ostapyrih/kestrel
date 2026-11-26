@@ -13,9 +13,10 @@ class Migration {
 /// Schema per docs/PLAN.md section 4.
 ///
 /// Rules that must hold for every future migration:
-///  * Switching bridge mode only changes `settings.bridge_enabled`; nothing
-///    here (or in the repositories) ever deletes chats or messages because of
-///    a mode change.
+///  * Switching bridge mode changes `settings.bridge_enabled`. Turning the
+///    bridge off additionally drops account A (a cache of MeshChatX) through
+///    the one method `Repo.purgeBridgeAccountData`; account B (this device)
+///    is never deleted by anything.
 ///  * `outbox.sender_identity` and `outbox.route` are frozen when the row is
 ///    created (enforced by triggers).
 const List<Migration> migrations = [
@@ -122,8 +123,8 @@ CREATE TABLE peers (
 )''',
   ]),
   // Bridge mode (account A, protocol v2): per-chat cursors, origin device,
-  // command ids, the device registry cache and RRC rooms. Nothing here ever
-  // deletes data; every row of account A is kept like account B.
+  // command ids, the device registry cache and RRC rooms. All of it is a
+  // cache of the bridge and is purged when the bridge is turned off.
   Migration(3, [
     'ALTER TABLE chats ADD COLUMN bridge_last_id INTEGER',
     'ALTER TABLE chats ADD COLUMN bridge_older_done INTEGER NOT NULL DEFAULT 0',

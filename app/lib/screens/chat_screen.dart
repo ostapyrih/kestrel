@@ -88,6 +88,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           }
         : const <String, String>{};
     final ownDevice = ref.watch(ownDeviceNameProvider);
+    final bridgeMode = ref.watch(bridgeModeProvider);
     final olderItem = isA && !(chat?.olderDone ?? true);
     return Scaffold(
       appBar: AppBar(
@@ -100,8 +101,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            const SizedBox(width: 8),
-            IdentityBadge(identity),
+            if (bridgeMode) ...[
+              const SizedBox(width: 8),
+              IdentityBadge(identity),
+            ],
           ],
         ),
       ),
@@ -127,6 +130,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   return MessageBubble(
                     message: m,
                     deviceName: ownDevice,
+                    showAccount: bridgeMode,
                     originLabel: originLabel(s, m, deviceNames),
                   );
                 },
@@ -142,15 +146,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    isA
-                        ? s.t('from_a_bridge')
-                        : s.t('from', {'account': s.account(identity)}),
-                    key: const ValueKey('composer-from'),
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.primary,
+                  if (bridgeMode)
+                    Text(
+                      isA
+                          ? s.t('from_a_bridge')
+                          : s.t('from', {'account': s.account(identity)}),
+                      key: const ValueKey('composer-from'),
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
                     ),
-                  ),
                   Row(
                     children: [
                       Expanded(
@@ -210,8 +215,12 @@ class MessageBubble extends StatelessWidget {
     required this.message,
     this.originLabel,
     this.deviceName,
+    this.showAccount = true,
   });
   final MessageRow message;
+
+  /// False when the bridge is off: no `B · name` / `A` label in the line.
+  final bool showAccount;
 
   /// Name of this device, shown as `B · <name>` on messages sent from B.
   final String? deviceName;
@@ -227,8 +236,8 @@ class MessageBubble extends StatelessWidget {
     final out = m.outgoing;
     final failed = m.status == MsgStatus.failed;
     final meta = [
-      s.account(m.senderIdentity, device: deviceName),
-      ?originLabel,
+      if (showAccount) s.account(m.senderIdentity, device: deviceName),
+      if (showAccount) ?originLabel,
       if (m.route != null)
         m.route == 'via_bridge' ? s.t('route_via_bridge') : m.route!,
       s.t('transport_${m.transport}'),
@@ -339,8 +348,11 @@ class MessageDetails extends ConsumerWidget {
               m.lxmfHash ?? '-',
               key: const ValueKey('detail-hash'),
             ),
-            row(s.t('sender'), s.account(m.senderIdentity)),
-            if (m.senderIdentity == 'A' && m.outgoing)
+            if (ref.watch(bridgeModeProvider))
+              row(s.t('sender'), s.account(m.senderIdentity)),
+            if (ref.watch(bridgeModeProvider) &&
+                m.senderIdentity == 'A' &&
+                m.outgoing)
               row(
                 s.t('origin_device'),
                 m.originDevice == null

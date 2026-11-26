@@ -255,6 +255,22 @@ class FakeBridge extends Fake implements BridgeService {
   @override
   Future<void> setEnabled(bool on) async => enabled.add(on);
 
+  int queuedUnsent = 0;
+  final List<String> turnedOff = [];
+
+  @override
+  Future<int> queuedSendCount() async => queuedUnsent;
+
+  @override
+  Future<void> turnOff({bool sendQueuedFromB = false}) async =>
+      turnedOff.add(sendQueuedFromB ? 'send-from-b' : 'discard');
+
+  @override
+  bool get syncing => false;
+
+  @override
+  Stream<bool> get syncingChanges => const Stream.empty();
+
   @override
   Future<void> setFallback(bool on) async {}
 }
@@ -321,6 +337,11 @@ List<Override> fixtureOverrides({
   FakeBridge? bridge,
   BridgeStatus bridgeStatus = const BridgeStatus(BridgeState.off),
   bool bridgeConfigured = false,
+
+  /// Bridge mode on/off; defaults to [bridgeConfigured]. [bridgeEnabledStream]
+  /// lets a test flip it while the widgets are on screen.
+  bool? bridgeEnabled,
+  Stream<bool>? bridgeEnabledStream,
   List<DeviceRecord>? devices,
 }) => [
   bridgeProvider.overrideWithValue(bridge ?? FakeBridge()),
@@ -348,9 +369,11 @@ List<Override> fixtureOverrides({
   connectionProvider.overrideWith((ref) => Stream.value(conn)),
   chatsProvider.overrideWith((ref) {
     final f = ref.watch(accountFilterProvider);
+    final mode = ref.watch(bridgeModeProvider);
+    final eff = mode ? f : 'B';
     return Stream.value([
       for (final c in fixtureChats)
-        if (f == null || c.accountIdentity == f) c,
+        if (eff == null || c.accountIdentity == eff) c,
     ]);
   }),
   chatProvider.overrideWith(
@@ -370,7 +393,10 @@ List<Override> fixtureOverrides({
     (ref) => Stream.value([PeerRow('aa' * 16, 'Alice', _t0, 1)]),
   ),
   settingProvider.overrideWith((ref, key) => Stream.value(null)),
-  bridgeEnabledProvider.overrideWith((ref) => Stream.value(false)),
+  bridgeEnabledProvider.overrideWith(
+    (ref) =>
+        bridgeEnabledStream ?? Stream.value(bridgeEnabled ?? bridgeConfigured),
+  ),
   identityInfoProvider.overrideWith(
     (ref) async => (address: fakeAddress, publicKey: fakePublicKey),
   ),

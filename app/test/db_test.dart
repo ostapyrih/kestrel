@@ -183,21 +183,143 @@ void main() {
     },
   );
 
-  test('no code path deletes chats or messages', () {
+  test('the only code that deletes chats or messages is '
+      'Repo.purgeBridgeAccountData, and it only touches account A', () {
+    final re = RegExp(
+      r'''(DELETE\s+FROM\s+(chats|messages|outbox|delivery_log)|\.delete\(\s*['"](chats|messages|outbox|delivery_log)['"]|DROP\s+TABLE)''',
+      caseSensitive: false,
+    );
     final offenders = <String>[];
+    String? purge;
     for (final f
         in Directory('lib')
             .listSync(recursive: true)
             .whereType<File>()
             .where((f) => f.path.endsWith('.dart'))) {
-      final src = f.readAsStringSync();
-      final re = RegExp(
-        r'''(DELETE\s+FROM\s+(chats|messages|outbox|delivery_log)|\.delete\(\s*['"](chats|messages|outbox|delivery_log)['"]|DROP\s+TABLE)''',
-        caseSensitive: false,
-      );
+      var src = f.readAsStringSync().replaceAll('\r\n', '\n');
+      if (f.path.replaceAll('\\', '/').endsWith('storage/repo.dart')) {
+        final start = src.indexOf('Future<void> purgeBridgeAccountData()');
+        expect(start, greaterThan(0), reason: 'the purge method exists');
+        final end = src.indexOf('\n  }\n', start);
+        purge = src.substring(start, end);
+        src = src.substring(0, start) + src.substring(end);
+      }
       if (re.hasMatch(src)) offenders.add(f.path);
     }
     expect(offenders, isEmpty);
+    // every statement of the purge on account tables is bound to account A
+    expect(purge, isNotNull);
+    final stmts = RegExp(r'DELETE FROM (chats|messages|outbox|delivery_log)')
+        .allMatches(purge!)
+        .toList();
+    expect(stmts, hasLength(4));
+    for (final m in stmts) {
+      final tail = purge.substring(
+        m.start,
+        (m.start + 160).clamp(0, purge.length),
+      );
+      expect(
+        tail,
+        contains('account_id = ?'),
+        reason: 'DELETE FROM ${m.group(1)} must be limited to account A',
+      );
+    }
+  });
+
+  test('purgeBridgeAccountData removes account A only and keeps B and the '
+      'pairing', () async {
+    final a = await _open();
+    final repo = Repo(a);
+    final chatB = await repo.findOrCreateChat('B', 'aa' * 16, title: 'Alice');
+    final chatA = await repo.findOrCreateChat('A', 'bb' * 16, title: 'Via');
+    final roomChat = await repo.findOrCreateChat('A', 'cc' * 16, title: 'Two');
+    await repo.insertIncoming(
+      identity: 'B',
+      chatId: chatB,
+      lxmfHash: 'h-b',
+      text: 'hello b',
+      ts: DateTime.now(),
+      route: 'direct',
+      transport: 'tcp',
+      signatureValid: true,
+    );
+    await repo.insertIncoming(
+      identity: 'A',
+      chatId: chatA,
+      lxmfHash: 'h-a',
+      text: 'hello a',
+      ts: DateTime.now(),
+      route: 'via_bridge',
+      transport: 'tcp',
+      signatureValid: true,
+    );
+    final outB = await repo.insertOutgoing(
+      identity: 'B',
+      chatId: chatB,
+      destinationHash: 'aa' * 16,
+      text: 'b out',
+      route: 'opportunistic',
+      transport: 'none',
+    );
+    final outA = await repo.insertOutgoing(
+      identity: 'A',
+      chatId: roomChat,
+      destinationHash: 'cc' * 16,
+      text: 'a out',
+      route: 'via_bridge',
+      transport: 'none',
+    );
+    await repo.addLog(outB.messageId, 'queued');
+    await repo.addLog(outA.messageId, 'queued');
+    await a.db.insert('rrc_rooms', {'hub': 'h', 'room': 'r'});
+    await a.db.insert('rrc_messages', {
+      'hub': 'h',
+      'room': 'r',
+      'seq': 1,
+      'text': 't',
+      'ts': 1,
+    });
+    await a.db.insert('bridge_devices', {'device_id': 'dd', 'name': 'x'});
+    await repo.setSetting(SettingKeys.bridgePubkey, 'ab' * 64);
+    await repo.setSetting(SettingKeys.bridgeCursor, '42');
+    await repo.setSetting(SettingKeys.bridgeStateId, 'st');
+    await repo.setSetting(SettingKeys.deviceName, 'Mine');
+    await repo.setBridgeEnabled(true);
+
+    Future<int> logOf(String id) async => Sqflite.firstIntValue(
+      await a.db.rawQuery(
+        'SELECT COUNT(*) FROM delivery_log WHERE message_id IN '
+        '(SELECT m.id FROM messages m JOIN accounts x ON x.id = m.account_id '
+        'WHERE x.identity = ?)',
+        [id],
+      ),
+    )!;
+    final logB = await logOf('B');
+    expect(logB, greaterThan(0));
+    expect(await logOf('A'), greaterThan(0));
+
+    await repo.purgeBridgeAccountData();
+
+    // account B is intact
+    expect((await repo.chats()).map((c) => c.title), ['Alice']);
+    expect((await repo.messages(chatB)).map((m) => m.text), [
+      'hello b',
+      'b out',
+    ]);
+    expect(await _count(a, 'outbox'), 1);
+    expect(await _count(a, 'delivery_log'), logB);
+    expect(await logOf('B'), logB);
+    // everything of account A is gone
+    expect(await _count(a, 'messages'), 2);
+    expect(await _count(a, 'rrc_rooms'), 0);
+    expect(await _count(a, 'rrc_messages'), 0);
+    expect(await _count(a, 'bridge_devices'), 0);
+    expect(await repo.getSetting(SettingKeys.bridgeCursor), '0');
+    expect(await repo.getSetting(SettingKeys.bridgeStateId), '');
+    // the pairing and the user's settings stay
+    expect(await repo.getSetting(SettingKeys.bridgePubkey), 'ab' * 64);
+    expect(await repo.getSetting(SettingKeys.deviceName), 'Mine');
+    await a.close();
   });
 
   test('outbox sender_identity and route are frozen', () async {

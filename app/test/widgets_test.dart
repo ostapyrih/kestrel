@@ -30,6 +30,8 @@ void main() {
     FakeBridge? bridge,
     BridgeStatus bridgeStatus = const BridgeStatus(BridgeState.off),
     bool bridgeConfigured = false,
+    bool? bridgeEnabled,
+    Stream<bool>? bridgeEnabledStream,
     Locale locale = const Locale('uk'),
     Size size = const Size(420, 860),
   }) async {
@@ -49,6 +51,8 @@ void main() {
           bridge: bridge,
           bridgeStatus: bridgeStatus,
           bridgeConfigured: bridgeConfigured,
+          bridgeEnabled: bridgeEnabled,
+          bridgeEnabledStream: bridgeEnabledStream,
         ),
         child: KestrelApp(home: home),
       ),
@@ -70,7 +74,12 @@ void main() {
     testWidgets('wide: list on the left, selected chat on the right', (
       tester,
     ) async {
-      await show(tester, const ChatsScreen(), size: const Size(1200, 800));
+      await show(
+        tester,
+        const ChatsScreen(),
+        size: const Size(1200, 800),
+        bridgeEnabled: true,
+      );
       expect(find.text('Оберіть чат зі списку'), findsOneWidget);
       expect(find.byType(ChatScreen), findsNothing);
       await tester.tap(find.text('Alice'));
@@ -88,7 +97,7 @@ void main() {
     testWidgets('shows chats with identity badges and the TCP indicator', (
       tester,
     ) async {
-      await show(tester, const ChatsScreen());
+      await show(tester, const ChatsScreen(), bridgeEnabled: true);
       expect(find.text('Alice'), findsOneWidget);
       expect(find.text('Marichka'), findsOneWidget);
       expect(find.text('TCP Online'), findsOneWidget);
@@ -107,7 +116,7 @@ void main() {
     testWidgets('account switcher: B, A (disabled, hint) and All', (
       tester,
     ) async {
-      await show(tester, const ChatsScreen());
+      await show(tester, const ChatsScreen(), bridgeEnabled: true);
       expect(find.text('B · ${defaultDeviceName()}'), findsOneWidget);
       expect(find.text('A (міст)'), findsWidgets);
       expect(find.text('Усі'), findsOneWidget);
@@ -128,7 +137,12 @@ void main() {
     });
 
     testWidgets('English fallback for English devices', (tester) async {
-      await show(tester, const ChatsScreen(), locale: const Locale('en'));
+      await show(
+        tester,
+        const ChatsScreen(),
+        locale: const Locale('en'),
+        bridgeEnabled: true,
+      );
       expect(find.text('New chat'), findsOneWidget);
       expect(find.text('B · ${defaultDeviceName()}'), findsOneWidget);
       await show(tester, const ChatsScreen(), locale: const Locale('de'));
@@ -140,7 +154,7 @@ void main() {
     testWidgets('bubbles show sender, route, transport and status icon', (
       tester,
     ) async {
-      await show(tester, const ChatScreen(chatId: 1));
+      await show(tester, const ChatScreen(chatId: 1), bridgeEnabled: true);
       expect(find.text('Привіт!'), findsOneWidget);
       expect(find.text('Вітаю, як справи?'), findsOneWidget);
       expect(find.text('Невдала спроба'), findsOneWidget);
@@ -164,12 +178,12 @@ void main() {
     });
 
     testWidgets('composer states who the message is sent from', (tester) async {
-      await show(tester, const ChatScreen(chatId: 1));
+      await show(tester, const ChatScreen(chatId: 1), bridgeEnabled: true);
       expect(find.text('Від: B (цей пристрій)'), findsOneWidget);
     });
 
     testWidgets('composer for an A chat shows A', (tester) async {
-      await show(tester, const ChatScreen(chatId: 2));
+      await show(tester, const ChatScreen(chatId: 2), bridgeEnabled: true);
       expect(find.text('Від: A (через міст)'), findsOneWidget);
     });
 
@@ -369,6 +383,7 @@ void main() {
         const SettingsScreen(),
         bridge: bridge,
         bridgeConfigured: true,
+        bridgeEnabled: false,
         bridgeStatus: const BridgeStatus(BridgeState.connected),
       );
       await tester.scrollUntilVisible(
@@ -377,10 +392,10 @@ void main() {
         scrollable: find.byType(Scrollable).first,
       );
       expect(find.text('Міст: онлайн'), findsOneWidget);
+      expect(find.byKey(const ValueKey('my-devices')), findsNothing);
       await tester.tap(find.byKey(const ValueKey('bridge-switch')));
       await tester.pump();
-      expect(bridge.enabled, [true]);
-      expect(find.byKey(const ValueKey('my-devices')), findsOneWidget);
+      expect(bridge.enabled, [true]); // turning on needs no confirmation
     });
   });
 

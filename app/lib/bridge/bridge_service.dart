@@ -231,16 +231,48 @@ class BridgeService {
     await _attach(key);
   }
 
-  /// The mode switch. Turning it off only disconnects; no data is touched.
+  /// The mode switch. Off = [turnOff] (account A is dropped, nothing is
+  /// kept running); on = connect and sync from scratch.
   Future<void> setEnabled(bool on) async {
-    await repo.setBridgeEnabled(on);
     if (!on) {
-      await _detach();
+      await turnOff();
       return;
     }
+    await repo.setBridgeEnabled(true);
     final key = await configuredKey();
     if (key != null && !await isRevoked()) await _attach(key);
   }
+
+  /// How many typed-but-unsent account A messages exist (the confirmation
+  /// dialog tells the user they are lost when the bridge goes off).
+  Future<int> queuedSendCount() async =>
+      (await store.queuedAMessageIds()).length;
+
+  /// Turns the bridge off: stops the connection completely (no background
+  /// reconnects), then removes account A's local data in one transaction.
+  /// Account A is only a cache of MeshChatX, which keeps the history; the
+  /// pairing (identity, bridge address, trusted status) is kept, so turning
+  /// the bridge on again syncs everything back without re-pairing.
+  ///
+  /// Unsent A messages are discarded, unless [sendQueuedFromB] is set: then
+  /// each one is first re-sent as a NEW message from this device (B), the
+  /// user's explicit choice.
+  Future<void> turnOff({bool sendQueuedFromB = false}) async {
+    if (sendQueuedFromB) {
+      for (final id in await store.queuedAMessageIds()) {
+        await sendFromBInstead(id);
+      }
+    }
+    await repo.setBridgeEnabled(false);
+    await _detach();
+    await flushEvents(); // nothing from the old connection writes after this
+    await repo.purgeBridgeAccountData();
+  }
+
+  /// True while a sync from the bridge is running (progress indicator).
+  bool get syncing => _syncing;
+  Stream<bool> get syncingChanges => _syncCtl.stream;
+  final _syncCtl = StreamController<bool>.broadcast();
 
   Future<void> setFallback(bool on) async {
     _fallbackSetting = on;
@@ -260,6 +292,7 @@ class BridgeService {
     _stopped = true;
     await _detach();
     await _status.close();
+    await _syncCtl.close();
   }
 
   /// Offers an inbound LXMF message to the bridge connection; true if it was
@@ -291,6 +324,7 @@ class BridgeService {
     final api = _api;
     if (api == null || _syncing) return;
     _syncing = true;
+    if (!_syncCtl.isClosed) _syncCtl.add(true);
     try {
       var cursor = await store.cursor();
       var stateId = await store.stateId();
@@ -345,6 +379,7 @@ class BridgeService {
       // the link will drop and reconnect; resync runs again then
     } finally {
       _syncing = false;
+      if (!_syncCtl.isClosed) _syncCtl.add(false);
     }
   }
 
