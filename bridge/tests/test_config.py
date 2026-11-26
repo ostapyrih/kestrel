@@ -3,7 +3,7 @@ import tempfile
 import unittest
 
 from kestrel_bridge.config import ConfigError, load_config, parse_config
-from tests.helpers import PHONE_KEY
+from tests.helpers import PHONE_KEY, raw_config
 
 
 class ConfigTest(unittest.TestCase):
@@ -124,3 +124,25 @@ class ConfigTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StampConfigTest(unittest.TestCase):
+    def test_stamping_is_off_by_default(self):
+        rns = raw_config().rns
+        self.assertEqual((rns.stamps, rns.stamp_destinations, rns.stamp_path_requests, rns.stamp_link_requests),
+                         (False, False, False, False))
+
+    def test_stamps_true_enables_all_three(self):
+        rns = raw_config(rns={"stamps": True}).rns
+        self.assertTrue(rns.stamp_destinations and rns.stamp_path_requests and rns.stamp_link_requests)
+
+    def test_sub_options_override(self):
+        rns = raw_config(rns={"stamps": True, "stamp_link_requests": False}).rns
+        self.assertTrue(rns.stamp_destinations)
+        self.assertFalse(rns.stamp_link_requests)
+        rns = raw_config(rns={"stamp_path_requests": True}).rns
+        self.assertEqual((rns.stamp_destinations, rns.stamp_path_requests), (False, True))
+
+    def test_must_be_boolean(self):
+        with self.assertRaises(ConfigError):
+            raw_config(rns={"stamps": "no"})

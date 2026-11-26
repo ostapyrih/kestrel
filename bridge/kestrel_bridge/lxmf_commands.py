@@ -93,6 +93,8 @@ class LxmfCommands:
     def __init__(self, cfg: Config, identity, service: Service, state: State, loop: asyncio.AbstractEventLoop):
         import LXMF
         import RNS
+        from .rns_setup import require_stamping_applied
+        require_stamping_applied()   # the LXMRouter creates destinations: stamping policy must be set first
         self._LXMF, self._RNS = LXMF, RNS
         self.cfg, self.service, self.state, self.loop = cfg, service, state, loop
         self.whitelist = frozenset(cfg.whitelist)

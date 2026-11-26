@@ -66,6 +66,12 @@ class RnsConfig:
     announce_interval: int = 1800
     announce_lxmf: bool = False
     log_level: int = 2
+    # RNS >= 1.6 proof-of-work "stamps". Off by default: on a small CPU the announce stamp never
+    # finishes and the announce is never emitted (see README). The three sub-options default to ``stamps``.
+    stamps: bool = False
+    stamp_destinations: bool = False   # stamp our own announces
+    stamp_path_requests: bool = False  # stamp the path requests we emit
+    stamp_link_requests: bool = False  # stamp the link requests we emit
     # standalone only
     tcp_host: str | None = "meshchatx"
     tcp_port: int = 4242
@@ -252,8 +258,10 @@ def parse_config(raw: dict) -> Config:
     r = _table(raw, "rns")
     _check_unknown("rns", r, {"mode", "config_dir", "identity_path", "lxmf_storage", "announce_interval",
                               "announce_lxmf", "log_level", "tcp_host", "tcp_port", "ifac_name",
-                              "ifac_passphrase_file", "require_shared_instance"})
+                              "ifac_passphrase_file", "require_shared_instance", "stamps", "stamp_destinations",
+                              "stamp_path_requests", "stamp_link_requests"})
     d = RnsConfig()
+    stamps = _bool("rns", r, "stamps", d.stamps)
     mode = _str("rns", r, "mode", d.mode)
     if mode not in RNS_MODES:
         raise ConfigError("rns.mode must be 'standalone' or 'shared'")
@@ -285,6 +293,10 @@ def parse_config(raw: dict) -> Config:
         announce_interval=_int("rns", r, "announce_interval", d.announce_interval, 5),
         announce_lxmf=_bool("rns", r, "announce_lxmf", d.announce_lxmf),
         log_level=_int("rns", r, "log_level", d.log_level, 0),
+        stamps=stamps,
+        stamp_destinations=_bool("rns", r, "stamp_destinations", stamps),
+        stamp_path_requests=_bool("rns", r, "stamp_path_requests", stamps),
+        stamp_link_requests=_bool("rns", r, "stamp_link_requests", stamps),
         tcp_host=tcp_host,
         tcp_port=tcp_port,
         ifac_name=ifac_name,

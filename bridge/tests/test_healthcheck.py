@@ -66,3 +66,30 @@ class HealthcheckTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_old_heartbeat_without_announce_fields_is_ok(self):
+        self.beat()
+        self.assertEqual(self.run_check(), (EXIT_OK, "ok"))
+
+    def test_announce_never_emitted_is_degraded_after_grace(self):
+        self.beat(started_at=time.time() - 120, last_announce_emitted_at=None, announce_pending=True)
+        self.assertEqual(self.run_check(), (EXIT_OK, "ok"))                     # still within the grace period
+        self.beat(started_at=time.time() - 3600, last_announce_emitted_at=None, announce_pending=True)
+        code, text = self.run_check()
+        self.assertEqual(code, EXIT_OK)                                          # exit 0 unless --strict
+        self.assertEqual(text, "degraded: announce never emitted for > 5 min (stamp pending)")
+        self.assertEqual(self.run_check(strict=True)[0], EXIT_DEGRADED)
+
+    def test_announce_emitted_recently_is_ok(self):
+        self.beat(started_at=time.time() - 7200, last_announce_emitted_at=time.time() - 1700)
+        self.assertEqual(self.run_check(), (EXIT_OK, "ok"))
+
+    def test_announce_not_emitted_for_longer_than_interval_is_degraded(self):
+        self.beat(started_at=time.time() - 9000, last_announce_emitted_at=time.time() - 3000)
+        code, text = self.run_check(strict=True)
+        self.assertEqual(code, EXIT_DEGRADED)
+        self.assertEqual(text, "degraded: announce not emitted for > 35 min")
+
+    def test_rns_offline_does_not_also_report_announce(self):
+        self.beat(rns_online=False, started_at=time.time() - 3600, last_announce_emitted_at=None)
+        self.assertEqual(self.run_check()[1], "degraded: RNS interface offline")

@@ -35,6 +35,7 @@ config_dir = "/sidecar/.reticulum"         # standalone: generated config; share
 identity_path = "/sidecar/storage/identity"  # identity S (created on first start)
 lxmf_storage = "/sidecar/storage/lxmf"
 announce_interval = 1800                    # kestrel.bridge announce period (s); also announced at start and after reconnects
+stamps = false                              # RNS proof-of-work stamping; keep false on small servers (see README)
 announce_lxmf = false                       # keep S out of MeshChatX's announce list
 
 [limits]

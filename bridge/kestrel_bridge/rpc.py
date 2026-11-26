@@ -11,7 +11,7 @@ import RNS
 from . import codec, errors
 from .config import Config
 from .push import FULL, CONSTRAINED, PushHub, Subscriber, classify_interface, classify_link
-from .rns_setup import AnnounceWatcher, tcp_client_interfaces
+from .rns_setup import AnnounceWatcher, require_stamping_applied, tcp_client_interfaces
 from .service import PATHS, Ctx, Service
 
 log = logging.getLogger("kestrel.rpc")
@@ -114,6 +114,7 @@ class RpcServer:
 
     # ---- lifecycle ---------------------------------------------------------------------------
     def start(self) -> None:
+        require_stamping_applied()   # the stamping policy must be set before the first destination exists
         d = RNS.Destination(self.identity, RNS.Destination.IN, RNS.Destination.SINGLE, APP_NAME, ASPECT)
         for path in PATHS:
             # authorization is done in the handler (the whitelist is checked against the full public key)
@@ -123,9 +124,26 @@ class RpcServer:
         # standalone: announce on start, every announce_interval and after every TCP reconnect;
         # shared: periodic only (the shared instance owns the interface)
         watch = tcp_client_interfaces if self.cfg.rns.mode == "standalone" else None
-        self._announcer = AnnounceWatcher(lambda: d.announce(), watch, self.cfg.rns.announce_interval)
+        self._announcer = AnnounceWatcher(
+            lambda: d.announce(), watch, self.cfg.rns.announce_interval,
+            emitted_at=lambda: self._announce_emitted_at(d), stamping=lambda: bool(RNS.Transport.STAMP_DESTINATIONS))
         self._announcer.start()
         log.info("RPC destination %s ready", RNS.prettyhexrep(d.hash))
+
+    @staticmethod
+    def _announce_emitted_at(d) -> float | None:
+        """Wall-clock time of the last announce RNS built for ``d`` (``_announce`` records it in
+        ``path_responses[None]`` right before sending), or None when this RNS does not expose it."""
+        entry = getattr(d, "path_responses", {}).get(None)
+        return float(entry[0]) if entry else None
+
+    @property
+    def last_announce_emitted_at(self) -> float | None:
+        return self._announcer.last_emitted_at if self._announcer is not None else None
+
+    @property
+    def announce_pending(self) -> bool:
+        return self._announcer is not None and self._announcer.pending
 
     def active_link(self, phone: str):
         """The most recent active Link of an identified phone, or None."""
