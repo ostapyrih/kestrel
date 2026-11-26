@@ -37,7 +37,7 @@ The transport is the same in both modes: **TCP** → `rns.ostapyrih.com:4242` wh
 
 ---
 
-7. **Bridge off = a normal messenger** (decided 2026-11-26). With the bridge disabled the app is a plain single-identity LXMF client: there is no account switcher and no A/B badges or labels, and the message line shows only route · transport · status. Everything related to account A is hidden from the UI but never deleted; turning the bridge back on restores it. Turning the bridge off while A messages are still queued asks for confirmation; those messages stay queued as A and are never converted to B. With the bridge off its connection is fully stopped.
+7. **Bridge off = a normal messenger** (decided 2026-11-26). With the bridge disabled the app is a plain single-identity LXMF client: there is no account switcher and no A/B badges or labels, and the message line shows only route · transport · status. Account A's local data is only a cache of MeshChatX, so turning the bridge off **deletes it from the device** (chats, messages, rooms, cursors) after a confirmation, and turning the bridge back on resyncs it from scratch (decision updated 2026-11-26). The device keeps its pairing, so no re-pairing is needed. Unsent A messages exist only on the device: the confirmation names them and offers Cancel / send them from B instead / discard. The device's own data (B) is never deleted by a mode switch. With the bridge off its connection is fully stopped.
 
 ## 3. Architecture
 
