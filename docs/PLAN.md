@@ -37,6 +37,8 @@ The transport is the same in both modes: **TCP** → `rns.ostapyrih.com:4242` wh
 
 ---
 
+7. **Bridge off = a normal messenger** (decided 2026-11-26). With the bridge disabled the app is a plain single-identity LXMF client: there is no account switcher and no A/B badges or labels, and the message line shows only route · transport · status. Everything related to account A is hidden from the UI but never deleted; turning the bridge back on restores it. Turning the bridge off while A messages are still queued asks for confirmation; those messages stay queued as A and are never converted to B. With the bridge off its connection is fully stopped.
+
 ## 3. Architecture
 
 > **Decision (2026-11-25, after Phase 0):** the bridge is the **`kestrel-bridge` sidecar container**, not a MeshChatX plugin.
