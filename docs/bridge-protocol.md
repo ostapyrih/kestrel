@@ -200,7 +200,7 @@ Request: `{"protocol_version": 2, "client": "<name/version>"?}`. A `protocol_ver
 {"protocol_version": 2, "min_protocol_version": 2, "max_protocol_version": 2, "server": "kestrel-bridge/<ver>",
  "time": <float>, "state_id": "<hex16>", "cursor": <int>, "device": <device record>,
  "capabilities": ["lxmf","rrc","push","lxmf_transport","devices","pairing","read_state","origin_device","vault"],
- "compat": {"ok": bool, "meshchatx_version": str|null, "api_version": int|null},
+ "compat": {"ok": bool, "meshchatx_version": str|null, "api_version": int|null, "checked": bool, "error": str|null},
  "profile": "full"|"constrained"|null,
  "vault": {"key_epoch": int, "in_use": bool, "used_bytes": int},
  "limits": {"max_text_bytes","page_max","constrained_max_text_bytes","lxmf_max_response_bytes","lxmf_ts_window",
@@ -208,8 +208,13 @@ Request: `{"protocol_version": 2, "client": "<name/version>"?}`. A `protocol_ver
             "vault_get_max_ids"}}
 ```
 `time` lets the client estimate its clock offset (it matters for pairing and LXMF `ts`). `compat.ok = false` means the MeshChatX
-version/API is not on the allowlist; every request except `/hello`, `/subscribe`, `/devices/*`, `/vault/*` then fails with
-`upstream_incompatible`. `profile` is the push profile for this device (null over LXMF).
+version/API is not usable; every request except `/hello`, `/subscribe`, `/devices/*`, `/vault/*` then fails. `compat.checked`
+is false until the first MeshChatX compatibility check has reached a verdict (right after start, or while MeshChatX is slow or
+unreachable); while it is false, or the last check failed because MeshChatX was unavailable, those requests fail with the
+retryable `upstream_unavailable` (`details.retry_after`, about 10 s). Only an actual failed check (version or API version not
+on the allowlist, or an unexpected response shape) yields `upstream_incompatible`; `compat.error` then carries the reason, and
+after an unavailability failure it carries that message (null once compatible). `checked` and `error` are additive fields
+within v2: older clients that ignore unknown keys are unaffected, and clients should treat a missing `checked` as unknown. `profile` is the push profile for this device (null over LXMF).
 
 ### 6.2 `/sync_chats`  (conversation changes)
 Request: `{"cursor": int?, "limit": int?, "state_id": str?}`. Result:
