@@ -121,6 +121,54 @@ CREATE TABLE peers (
   last_seen INTEGER NOT NULL
 )''',
   ]),
+  // Bridge mode (account A, protocol v2): per-chat cursors, origin device,
+  // command ids, the device registry cache and RRC rooms. Nothing here ever
+  // deletes data; every row of account A is kept like account B.
+  Migration(3, [
+    'ALTER TABLE chats ADD COLUMN bridge_last_id INTEGER',
+    'ALTER TABLE chats ADD COLUMN bridge_older_done INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE messages ADD COLUMN origin_device TEXT',
+    'ALTER TABLE messages ADD COLUMN bridge_id INTEGER',
+    'ALTER TABLE messages ADD COLUMN cmd_id TEXT',
+    'CREATE UNIQUE INDEX messages_cmd ON messages(account_id, cmd_id) '
+        'WHERE cmd_id IS NOT NULL',
+    'ALTER TABLE outbox ADD COLUMN cmd_id TEXT',
+    '''
+CREATE TABLE bridge_devices (
+  device_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  platform TEXT,
+  roles TEXT NOT NULL DEFAULT '',
+  bootstrap INTEGER NOT NULL DEFAULT 0,
+  added_at REAL,
+  last_seen REAL,
+  revoked_at REAL,
+  online INTEGER NOT NULL DEFAULT 0
+)''',
+    '''
+CREATE TABLE rrc_rooms (
+  hub TEXT NOT NULL,
+  hub_name TEXT,
+  room TEXT NOT NULL,
+  unread INTEGER NOT NULL DEFAULT 0,
+  mention INTEGER NOT NULL DEFAULT 0,
+  connected INTEGER,
+  PRIMARY KEY (hub, room)
+)''',
+    '''
+CREATE TABLE rrc_messages (
+  hub TEXT NOT NULL,
+  room TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  kind TEXT,
+  nick TEXT,
+  text TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  mention INTEGER NOT NULL DEFAULT 0,
+  src TEXT,
+  PRIMARY KEY (hub, room, seq)
+)''',
+  ]),
 ];
 
 int get latestSchemaVersion => migrations.last.version;
@@ -142,6 +190,16 @@ abstract final class SettingKeys {
   static const serverHost = 'server_host';
   static const serverPort = 'server_port';
   static const deviceName = 'device_name';
+
+  // Bridge (account A). The public key is the S identity; the cursor and the
+  // state id belong together and are reset together.
+  static const bridgePubkey = 'bridge_pubkey';
+  static const bridgeStateId = 'bridge_state_id';
+  static const bridgeCursor = 'bridge_cursor';
+  static const bridgeLxmfFallback = 'bridge_lxmf_fallback';
+  static const bridgeClockOffset = 'bridge_clock_offset';
+  static const bridgeRevoked = 'bridge_revoked';
+  static const bridgeOwnRoles = 'bridge_own_roles';
 }
 
 const defaultServerHost = 'rns.ostapyrih.com';

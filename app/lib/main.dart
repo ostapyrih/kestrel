@@ -7,6 +7,8 @@ import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'bridge/bridge_connection.dart';
+import 'bridge/bridge_service.dart';
 import 'l10n/strings.dart';
 import 'node/identity_store.dart';
 import 'node/node_service.dart';
@@ -29,10 +31,24 @@ Future<void> main() async {
     secrets: SecureSecretStore(),
     rnsStorage: JsonFileStorage(rnsDir),
   );
+  final bridge = BridgeService(
+    repo: repo,
+    ownDeviceId: () => toHex(node.identity.hash),
+    identity: () => node.identity,
+    sendAsB: node.sendMessage,
+    apiFactory: (key, allowFallback) => BridgeConnection(
+      rns: node.rns,
+      identity: node.identity,
+      bridgePublicKey: key,
+      router: node.router,
+      allowFallback: allowFallback,
+    ),
+  );
+  node.bridge = bridge;
   // The UI comes up immediately; the node starts in the background and the
   // connection indicator reports progress.
   unawaited(
-    node.start().catchError((Object e) {
+    node.start().then((_) => bridge.start()).catchError((Object e) {
       debugPrint('node start failed: $e');
     }),
   );
@@ -41,6 +57,7 @@ Future<void> main() async {
       overrides: [
         repoProvider.overrideWithValue(repo),
         nodeProvider.overrideWithValue(node),
+        bridgeProvider.overrideWithValue(bridge),
       ],
       child: const KestrelApp(),
     ),

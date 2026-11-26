@@ -13,6 +13,7 @@ abstract final class MsgStatus {
   static const delivered = 'delivered';
   static const failed = 'failed';
   static const received = 'received';
+  static const cancelled = 'cancelled';
 }
 
 class ChatRow {
@@ -25,6 +26,8 @@ class ChatRow {
     required this.lastTs,
     required this.unread,
     this.lastText,
+    this.bridgeLastId,
+    this.olderDone = false,
   });
 
   factory ChatRow.fromMap(Map<String, Object?> m) => ChatRow(
@@ -36,6 +39,8 @@ class ChatRow {
     lastTs: m['last_ts'] as int?,
     unread: (m['unread'] as int?) ?? 0,
     lastText: m['last_text'] as String?,
+    bridgeLastId: m['bridge_last_id'] as int?,
+    olderDone: (m['bridge_older_done'] as int?) == 1,
   );
 
   final int id;
@@ -48,6 +53,12 @@ class ChatRow {
   final int? lastTs;
   final int unread;
   final String? lastText;
+
+  /// Highest bridge (MeshChatX) message id stored for this chat (account A).
+  final int? bridgeLastId;
+
+  /// True once the bridge said there is nothing older to page back to.
+  final bool olderDone;
 
   String get displayTitle => (title != null && title!.isNotEmpty)
       ? title!
@@ -68,6 +79,9 @@ class MessageRow {
     required this.status,
     required this.error,
     required this.signatureValid,
+    this.originDevice,
+    this.bridgeId,
+    this.cmdId,
   });
 
   factory MessageRow.fromMap(Map<String, Object?> m) => MessageRow(
@@ -85,6 +99,9 @@ class MessageRow {
     signatureValid: m['signature_valid'] == null
         ? null
         : m['signature_valid'] == 1,
+    originDevice: m['origin_device'] as String?,
+    bridgeId: m['bridge_id'] as int?,
+    cmdId: m['cmd_id'] as String?,
   );
 
   final int id;
@@ -101,6 +118,16 @@ class MessageRow {
   final String status;
   final String? error;
   final bool? signatureValid;
+
+  /// Device id that sent this message through the bridge (account A); null
+  /// for incoming messages and for messages typed in the MeshChatX web UI.
+  final String? originDevice;
+
+  /// MeshChatX message id (account A).
+  final int? bridgeId;
+
+  /// Idempotency key of the bridge command that sent this message.
+  final String? cmdId;
 
   bool get outgoing => direction == 'out';
 }
@@ -342,6 +369,8 @@ FROM chats c JOIN accounts a ON a.id = c.account_id''';
     String? title,
     required String route,
     required String transport,
+    String? cmdId,
+    String? originDevice,
   }) async {
     final acc = await accountId(identity);
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -359,6 +388,8 @@ FROM chats c JOIN accounts a ON a.id = c.account_id''';
         'route': route,
         'transport': transport,
         'status': MsgStatus.queued,
+        'cmd_id': cmdId,
+        'origin_device': originDevice,
       });
       oid = await t.insert('outbox', {
         'message_id': mid,
@@ -367,6 +398,7 @@ FROM chats c JOIN accounts a ON a.id = c.account_id''';
         'sender_identity': identity,
         'route': route,
         'destination_hash': destinationHash,
+        'cmd_id': cmdId,
         'created_ts': now,
       });
       await t.update(
@@ -393,6 +425,8 @@ FROM chats c JOIN accounts a ON a.id = c.account_id''';
     String? route,
     String? transport,
     String? error,
+    String? originDevice,
+    int? bridgeId,
   }) async {
     final v = <String, Object?>{
       'lxmf_hash': ?lxmfHash,
@@ -400,6 +434,8 @@ FROM chats c JOIN accounts a ON a.id = c.account_id''';
       'route': ?route,
       'transport': ?transport,
       'error': ?error,
+      'origin_device': ?originDevice,
+      'bridge_id': ?bridgeId,
     };
     if (v.isEmpty) return;
     await _db.update('messages', v, where: 'id = ?', whereArgs: [id]);
