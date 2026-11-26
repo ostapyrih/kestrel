@@ -1,7 +1,7 @@
 # Example only. The real config lives on the server and is never committed.
 # All values below are placeholders.
 
-state_dir = "/sidecar/state"   # sqlite (cursors, cmd_id journal, pending acks) + health file
+state_dir = "/sidecar/state"   # sqlite (devices, cursors, cmd_id journal, vault) + health file
 log_level = "INFO"             # INFO never logs message text or secrets
 
 [meshchatx]
@@ -15,11 +15,26 @@ password_file = "/run/secrets/meshchatx_password"
 allowed_versions = ["4.12."]
 allowed_api_versions = [2]
 
-[whitelist]
-# Full public keys (128 hex chars = 64 bytes) of allowed phone identities (B).
-phone_public_keys = [
-    "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-]
+# Bootstrap devices: the trust anchors of the bridge. Every device has its OWN identity; more devices are added
+# at runtime by scanning a pairing QR code in the app (protocol v2) and live in the bridge's state database.
+# public_key = full public key (128 hex chars = 64 bytes) shown by the app (Settings -> My devices).
+# roles: "field" = also gets the LXMF/LoRa fallback push while it has no live Link.
+# A device revoked through the protocol stays revoked across restarts even though it is listed here
+# (undo with `kestrel-bridge --reinstate <device_id>`); a device removed from this list is revoked at the next start.
+[[devices]]
+public_key = "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+name = "Phone"
+platform = "android"
+roles = ["field"]
+
+[[devices]]
+public_key = "11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+name = "Laptop"
+platform = "linux"
+
+# Deprecated (still read, with a warning, as bootstrap devices without name/roles):
+# [whitelist]
+# phone_public_keys = ["<128 hex chars>"]
 
 [rns]
 # "standalone" (default, recommended): the bridge runs its own Reticulum instance with one TCPClientInterface
@@ -38,6 +53,11 @@ announce_interval = 1800                    # kestrel.bridge announce period (s)
 announce_lxmf = false                       # keep S out of MeshChatX's announce list
 
 [limits]
+max_devices = 16                           # trusted (non-revoked) devices
+pairing_window = 600                       # seconds a pairing QR code stays valid (max 600)
+vault_max_blob_bytes = 131072              # one encrypted blob
+vault_device_quota_bytes = 67108864        # per device, 64 MiB
+vault_total_quota_bytes = 536870912        # all devices, 512 MiB
 max_text_bytes = 4096
 constrained_max_text_bytes = 160           # LoRa profile truncation
 lxmf_ts_window = 86400                     # +/- seconds accepted for LXMF command ts

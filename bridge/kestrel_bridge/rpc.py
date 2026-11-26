@@ -30,30 +30,38 @@ def identity_from_public_key(pub_hex: str) -> "RNS.Identity":
     return ident
 
 
-def phone_of(identity, whitelist) -> str | None:
-    """Return the whitelisted full public key (hex) of ``identity`` or None."""
+def device_of(identity, registry):
+    """Return the trusted (registered, not revoked) Device whose FULL public key is ``identity``'s, or None.
+
+    A 16-byte identity hash alone never matches: the registry is looked up by the hash of the full key and
+    the stored key must equal the presented one.
+    """
     if identity is None:
         return None
     try:
         key = identity.get_public_key().hex()
     except Exception:
         return None
-    return key if key in whitelist else None
+    return registry.trusted_by_pubkey(key)
 
 
 class PathProfile:
-    """Maps a phone to 'full'/'constrained' using the path table of the shared instance (RPC)."""
+    """Maps a device to 'full'/'constrained' using the path table of the shared instance (RPC)."""
 
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, registry):
         self.cfg = cfg
+        self.registry = registry
         self._hashes: dict[str, bytes] = {}
 
-    def __call__(self, phone: str) -> str | None:
+    def __call__(self, device_id: str) -> str | None:
         try:
-            dh = self._hashes.get(phone)
+            dh = self._hashes.get(device_id)
             if dh is None:
-                dh = RNS.Destination.hash(identity_from_public_key(phone), "lxmf", "delivery")
-                self._hashes[phone] = dh
+                dev = self.registry.get(device_id)
+                if dev is None:
+                    return None
+                dh = RNS.Destination.hash(identity_from_public_key(dev.public_key), "lxmf", "delivery")
+                self._hashes[device_id] = dh
             name = RNS.Reticulum.get_instance().get_next_hop_if_name(dh)
         except Exception as e:  # RPC key mismatch, instance gone, ...
             log.debug("next-hop lookup failed: %s", type(e).__name__)
@@ -64,17 +72,17 @@ class PathProfile:
 
 
 class LinkProfile:
-    """Standalone mode: profile of a phone from the measured RTT/MTU of its current Link.
+    """Standalone mode: profile of a device from the measured RTT/MTU of its current Link.
 
-    ``link_of(phone)`` returns the phone's active Link (or None). No access to any path table needed.
+    ``link_of(device_id)`` returns the device's active Link (or None). No access to any path table needed.
     """
 
     def __init__(self, cfg: Config, link_of):
         self.cfg = cfg
         self.link_of = link_of
 
-    def __call__(self, phone: str) -> str | None:
-        link = self.link_of(phone)
+    def __call__(self, device_id: str) -> str | None:
+        link = self.link_of(device_id)
         if link is None:
             return None
         return classify_link(getattr(link, "rtt", None), getattr(link, "mtu", None),
@@ -84,7 +92,7 @@ class LinkProfile:
 class _LinkState:
     def __init__(self, link):
         self.link = link
-        self.phone: str | None = None
+        self.device_id: str | None = None
         self.sub: Subscriber | None = None
 
     def send(self, data: bytes) -> bool:
@@ -105,12 +113,15 @@ class RpcServer:
         self.service = service
         self.push = push
         self.loop = loop
-        self.whitelist = frozenset(cfg.whitelist)
+        self.registry = service.registry
         self.destination: RNS.Destination | None = None
         self._links: dict[bytes, _LinkState] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._announcer: AnnounceWatcher | None = None
+        self._busy: dict[bytes, int] = {}       # link_id -> requests being handled right now
+        self.service.online = self.has_link
+        self.registry.subscribe(self._on_device_event)
 
     # ---- lifecycle ---------------------------------------------------------------------------
     def start(self) -> None:
@@ -127,14 +138,40 @@ class RpcServer:
         self._announcer.start()
         log.info("RPC destination %s ready", RNS.prettyhexrep(d.hash))
 
-    def active_link(self, phone: str):
-        """The most recent active Link of an identified phone, or None."""
+    def active_link(self, device_id: str):
+        """The most recent active Link of an identified device, or None."""
         with self._lock:
             states = list(self._links.values())
         for st in reversed(states):
-            if st.phone == phone and st.link.status == RNS.Link.ACTIVE:
+            if st.device_id == device_id and st.link.status == RNS.Link.ACTIVE:
                 return st.link
         return None
+
+    def has_link(self, device_id: str) -> bool:
+        return self.active_link(device_id) is not None
+
+    def close_device(self, device_id: str) -> int:
+        """Tear down every Link of a device. A Link that is answering a request right now (a device that
+        revokes itself) is closed one second later so that it still receives the response."""
+        with self._lock:
+            states = [st for st in self._links.values() if st.device_id == device_id]
+        for st in states:
+            st.device_id = None          # no further command is accepted on this Link
+            if self._busy.get(st.link.link_id):
+                t = threading.Timer(1.0, st.link.teardown)
+                t.daemon = True
+                t.start()
+            else:
+                try:
+                    st.link.teardown()
+                except Exception:
+                    log.exception("could not close a link")
+        return len(states)
+
+    def _on_device_event(self, event: str, device) -> None:
+        if event == "revoked":
+            n = self.close_device(device.device_id)
+            log.info("device %s revoked, %d link(s) closed", device.device_id[:8], n)
 
     def stop(self) -> None:
         self._stop.set()
@@ -161,21 +198,22 @@ class RpcServer:
 
     def _identify_timeout(self, link) -> None:
         st = self._links.get(link.link_id)
-        if st is not None and st.phone is None and link.status == RNS.Link.ACTIVE:
+        if st is not None and st.device_id is None and link.status == RNS.Link.ACTIVE:
             log.info("link did not identify in time, closing")
             link.teardown()
 
     def _remote_identified(self, link, identity) -> None:
-        phone = phone_of(identity, self.whitelist)
-        if phone is None:
-            log.warning("link identified with a key outside the whitelist (identity %s), closing",
+        dev = device_of(identity, self.registry)
+        if dev is None:
+            log.warning("link identified with an unknown or revoked key (identity %s), closing",
                         RNS.prettyhexrep(identity.hash))
             link.teardown()
             return
         st = self._links.get(link.link_id)
         if st is not None:
-            st.phone = phone
-        log.info("phone linked (identity %s)", RNS.prettyhexrep(identity.hash))
+            st.device_id = dev.device_id
+        self.registry.touch_seen(dev.device_id)
+        log.info("device linked (%s, identity %s)", dev.name, RNS.prettyhexrep(identity.hash))
 
     def _link_closed(self, link) -> None:
         with self._lock:
@@ -190,17 +228,27 @@ class RpcServer:
         return handler
 
     def _handle(self, path: str, data, link_id: bytes, remote_identity) -> dict:
-        phone = phone_of(remote_identity, self.whitelist)
-        if phone is None:
-            return codec.err(errors.UNAUTHORIZED, "identify() with a whitelisted key first")
+        dev = device_of(remote_identity, self.registry)
+        if dev is None:
+            revoked = None
+            try:
+                revoked = self.registry.by_pubkey(remote_identity.get_public_key().hex())
+            except Exception:
+                pass
+            if revoked is not None:
+                return codec.err(errors.DEVICE_REVOKED, "this device was revoked")
+            return codec.err(errors.UNAUTHORIZED, "identify() with a trusted device key first")
         st = self._links.get(link_id)
         if st is None:
             return codec.err(errors.INTERNAL, "unknown link")
+        if st.device_id != dev.device_id:
+            return codec.err(errors.UNAUTHORIZED, "identify() with a trusted device key first")
+        device_id = dev.device_id
 
         def subscribe(topics, hint):
             if st.sub is not None:
                 self.push.unsubscribe(st.sub)
-            st.sub = Subscriber(phone, st.send, topics, hint)
+            st.sub = Subscriber(device_id, st.send, topics, hint)
             self.push.subscribe(st.sub)
             return {"topics": sorted(st.sub.topics), "profile": self.push.effective_profile(st.sub),
                     "mdu": st.link.get_mdu()}
@@ -208,12 +256,20 @@ class RpcServer:
         if data is not None and not isinstance(data, dict):
             return codec.err(errors.BAD_REQUEST, "request must be a map")
         forced = self.cfg.push.profile if self.cfg.push.profile != "auto" else None
-        ctx = Ctx(phone=phone, transport="link", subscribe=subscribe,
-                  profile=forced or self.push.profile_of(phone))
-        fut = asyncio.run_coroutine_threadsafe(self.service.dispatch(path, data, ctx), self.loop)
+        ctx = Ctx(device_id=device_id, transport="link", subscribe=subscribe,
+                  profile=forced or self.push.profile_of(device_id))
+        self._busy[link_id] = self._busy.get(link_id, 0) + 1
         try:
-            resp = fut.result(timeout=self.cfg.limits.rpc_timeout)
-        except (concurrent.futures.TimeoutError, TimeoutError):
-            fut.cancel()
-            return codec.err(errors.UPSTREAM_UNAVAILABLE, "request timed out")
+            fut = asyncio.run_coroutine_threadsafe(self.service.dispatch(path, data, ctx), self.loop)
+            try:
+                resp = fut.result(timeout=self.cfg.limits.rpc_timeout)
+            except (concurrent.futures.TimeoutError, TimeoutError):
+                fut.cancel()
+                return codec.err(errors.UPSTREAM_UNAVAILABLE, "request timed out")
+        finally:
+            left = self._busy.get(link_id, 1) - 1
+            if left > 0:
+                self._busy[link_id] = left
+            else:
+                self._busy.pop(link_id, None)
         return codec.clamp_response(resp, self.cfg.limits.max_response_bytes)

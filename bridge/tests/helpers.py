@@ -6,9 +6,13 @@ import copy
 from aiohttp.test_utils import TestServer
 
 from kestrel_bridge.config import parse_config
+from kestrel_bridge.devices import DeviceRegistry
+from kestrel_bridge.state import State, device_id_of_pubkey
 
 PHONE_KEY = "ab" * 64     # fake 64-byte public key (hex)
 OTHER_KEY = "cd" * 64
+PHONE_ID = device_id_of_pubkey(PHONE_KEY)
+OTHER_ID = device_id_of_pubkey(OTHER_KEY)
 PEER = "11" * 16
 
 
@@ -17,7 +21,7 @@ def raw_config(**over) -> dict:
         "state_dir": ".",
         "meshchatx": {"base_url": "http://127.0.0.1:1", "password_env": "KESTREL_TEST_PASSWORD",
                       "login_backoff_base": 1.0, "login_backoff_max": 8.0},
-        "whitelist": {"phone_public_keys": [PHONE_KEY]},
+        "devices": [{"public_key": PHONE_KEY, "name": "phone-1", "platform": "android"}],
         "push": {"unknown_profile": "full"},
     }
     for k, v in over.items():
@@ -46,3 +50,24 @@ class FakeClock:
 
     def advance(self, dt: float) -> None:
         self.t += dt
+
+
+def make_registry(cfg, state=None, clock=None):
+    """(state, registry) with the config's bootstrap devices loaded."""
+    state = state or State()
+    reg = DeviceRegistry(state, cfg.limits.max_devices, *([clock] if clock else []))
+    reg.sync_bootstrap(cfg.devices)
+    return state, reg
+
+
+class RealDevice:
+    """A device with a real RNS identity (can sign / be signed to)."""
+
+    def __init__(self):
+        import RNS
+        self.identity = RNS.Identity()
+        self.public_key = self.identity.get_public_key().hex()
+        self.device_id = device_id_of_pubkey(self.public_key)
+
+    def sign(self, message: bytes) -> bytes:
+        return self.identity.sign(message)
