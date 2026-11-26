@@ -127,9 +127,16 @@ class MeshChatXClient:
 
     # ---- requests ------------------------------------------------------------------------
     async def request(self, method: str, path: str, *, params=None, json=None, timeout: float | None = None):
-        """Authenticated request returning parsed JSON. Retries once after 401 / csrf_invalid."""
+        """Authenticated request returning parsed JSON.
+
+        Survives a MeshChatX restart/recreate: while the server is down the call fails with
+        UPSTREAM_UNAVAILABLE (no state is lost); afterwards the old cookie is dead, which shows up as
+        401 (log in again) or as csrf_invalid (refetch the token; if that is not enough, log in again).
+        Each recovery step is tried once per call.
+        """
         await self.login()
-        for attempt in (0, 1):
+        relogged = csrf_refreshed = False
+        for _ in range(3):
             headers = {}
             if method.upper() not in ("GET", "HEAD", "OPTIONS"):
                 headers["X-CSRF-Token"] = self._csrf or ""
@@ -145,13 +152,27 @@ class MeshChatXClient:
                         body = None
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 raise BridgeError(errors.UPSTREAM_UNAVAILABLE, f"cannot reach MeshChatX: {type(e).__name__}") from None
-            if status == 401 and attempt == 0:
+            if status == 401 and not relogged:
                 log.info("MeshChatX session expired, logging in again")
+                relogged = True
                 self._logged_in = False
                 await self.login(force=True)
                 continue
-            if status == 403 and attempt == 0 and isinstance(body, dict) and body.get("code") == "csrf_invalid":
-                self._csrf = await self._fetch_csrf()
+            csrf_invalid = status == 403 and isinstance(body, dict) and body.get("code") == "csrf_invalid"
+            if csrf_invalid and csrf_refreshed and not relogged:
+                # a fresh token did not help: the session itself is gone (server was recreated)
+                log.info("MeshChatX still rejects the CSRF token, logging in again")
+                relogged = True
+                self._logged_in = False
+                await self.login(force=True)
+                continue
+            if csrf_invalid and not csrf_refreshed:
+                csrf_refreshed = True
+                try:
+                    self._csrf = await self._fetch_csrf()
+                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                    raise BridgeError(errors.UPSTREAM_UNAVAILABLE,
+                                      f"cannot reach MeshChatX: {type(e).__name__}") from None
                 continue
             break
         if status == 401:

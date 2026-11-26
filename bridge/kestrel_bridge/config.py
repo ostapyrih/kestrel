@@ -46,15 +46,44 @@ class MeshChatXConfig:
         return value
 
 
+RNS_MODES = ("standalone", "shared")
+PUSH_PROFILES = ("auto", "full", "constrained")
+
+
 @dataclass
 class RnsConfig:
+    """Reticulum settings.
+
+    ``standalone`` (default): the bridge runs its own Reticulum instance (not a transport node,
+    ``share_instance = No``) with one TCPClientInterface to ``tcp_host:tcp_port`` and writes the RNS
+    config itself. ``shared``: attach to the shared instance of another process (``rpc_key`` etc. live
+    in that instance's config, see README).
+    """
+    mode: str = "standalone"
     config_dir: str = "/sidecar/.reticulum"
     identity_path: str = "/sidecar/storage/identity"
     lxmf_storage: str = "/sidecar/storage/lxmf"
     announce_interval: int = 1800
     announce_lxmf: bool = False
-    require_shared_instance: bool = True
     log_level: int = 2
+    # standalone only
+    tcp_host: str | None = "meshchatx"
+    tcp_port: int = 4242
+    ifac_name: str | None = None
+    ifac_passphrase_file: str | None = None
+    # shared only
+    require_shared_instance: bool = True
+
+    def read_ifac_passphrase(self) -> str | None:
+        if not self.ifac_passphrase_file:
+            return None
+        try:
+            value = Path(self.ifac_passphrase_file).read_text(encoding="utf-8").strip("\r\n")
+        except OSError as e:
+            raise ConfigError(f"cannot read rns.ifac_passphrase_file: {e.strerror}") from None
+        if not value:
+            raise ConfigError("rns.ifac_passphrase_file is empty")
+        return value
 
 
 @dataclass
@@ -74,7 +103,10 @@ class Limits:
 
 @dataclass
 class PushConfig:
-    unknown_profile: str = "constrained"  # profile when the path to the phone is unknown
+    profile: str = "auto"                 # auto | full | constrained (override)
+    unknown_profile: str = "constrained"  # auto: profile when the transport to the phone is unknown
+    full_max_rtt: float = 1.5             # standalone auto: Link RTT (seconds) must be below this for "full"
+    full_min_link_mtu: int = 1000         # standalone auto: Link MTU (bytes) must be at least this for "full"
     fast_interfaces: tuple[str, ...] = DEFAULT_FAST_INTERFACES
     lxmf_offline_push: bool = True
     offline_push_max_per_hour: int = 30
@@ -152,6 +184,17 @@ def _strlist(section: str, d: dict, key: str, default: tuple) -> tuple:
     return tuple(v)
 
 
+def rns_config_value(what: str, value: str) -> str:
+    """Quote ``value`` for the RNS (configobj) config file; refuse what cannot be written safely."""
+    if any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise ConfigError(f"{what} must not contain control characters")
+    if '"' not in value:
+        return f'"{value}"'
+    if "'" not in value:
+        return f"'{value}'"
+    raise ConfigError(f"{what} must not contain both ' and \"")
+
+
 def parse_config(raw: dict) -> Config:
     _check_unknown("root", raw, {"state_dir", "log_level", "meshchatx", "whitelist", "rns", "limits", "push"})
 
@@ -207,19 +250,48 @@ def parse_config(raw: dict) -> Config:
             norm.append(k)
 
     r = _table(raw, "rns")
-    _check_unknown("rns", r, {"config_dir", "identity_path", "lxmf_storage", "announce_interval", "announce_lxmf",
-                              "require_shared_instance", "log_level"})
+    _check_unknown("rns", r, {"mode", "config_dir", "identity_path", "lxmf_storage", "announce_interval",
+                              "announce_lxmf", "log_level", "tcp_host", "tcp_port", "ifac_name",
+                              "ifac_passphrase_file", "require_shared_instance"})
     d = RnsConfig()
+    mode = _str("rns", r, "mode", d.mode)
+    if mode not in RNS_MODES:
+        raise ConfigError("rns.mode must be 'standalone' or 'shared'")
+    if mode == "standalone":
+        if "require_shared_instance" in r:
+            raise ConfigError('rns.require_shared_instance only applies to rns.mode = "shared"')
+        tcp_port = _int("rns", r, "tcp_port", d.tcp_port)
+        if tcp_port > 65535:
+            raise ConfigError("rns.tcp_port must be 1..65535")
+        tcp_host = _str("rns", r, "tcp_host", d.tcp_host)
+        if any(c.isspace() for c in tcp_host):
+            raise ConfigError("rns.tcp_host must be a host name or IP address")
+        ifac_name = _str("rns", r, "ifac_name", None)
+        ifac_pf = _str("rns", r, "ifac_passphrase_file", None)
+        if ifac_name is not None:
+            rns_config_value("rns.ifac_name", ifac_name)
+        if "'" in tcp_host or '"' in tcp_host:
+            raise ConfigError("rns.tcp_host must be a host name or IP address")
+    else:
+        for k in ("tcp_host", "tcp_port", "ifac_name", "ifac_passphrase_file"):
+            if k in r:
+                raise ConfigError(f"rns.{k} only applies to rns.mode = \"standalone\"")
+        tcp_host, tcp_port, ifac_name, ifac_pf = d.tcp_host, d.tcp_port, None, None
     rns = RnsConfig(
+        mode=mode,
         config_dir=_str("rns", r, "config_dir", d.config_dir),
         identity_path=_str("rns", r, "identity_path", d.identity_path),
         lxmf_storage=_str("rns", r, "lxmf_storage", d.lxmf_storage),
         announce_interval=_int("rns", r, "announce_interval", d.announce_interval, 5),
         announce_lxmf=_bool("rns", r, "announce_lxmf", d.announce_lxmf),
-        require_shared_instance=_bool("rns", r, "require_shared_instance", True),
         log_level=_int("rns", r, "log_level", d.log_level, 0),
+        tcp_host=tcp_host,
+        tcp_port=tcp_port,
+        ifac_name=ifac_name,
+        ifac_passphrase_file=ifac_pf,
+        require_shared_instance=_bool("rns", r, "require_shared_instance", True),
     )
-    if not rns.require_shared_instance:
+    if mode == "shared" and not rns.require_shared_instance:
         raise ConfigError("rns.require_shared_instance must stay true (the sidecar must never become the shared instance)")
 
     li = _table(raw, "limits")
@@ -242,8 +314,11 @@ def parse_config(raw: dict) -> Config:
         raise ConfigError("limits.journal_ttl must exceed limits.lxmf_ts_window (otherwise replays slip through)")
 
     p = _table(raw, "push")
-    _check_unknown("push", p, {"unknown_profile", "fast_interfaces", "lxmf_offline_push",
-                               "offline_push_max_per_hour", "propagation_node"})
+    _check_unknown("push", p, {"profile", "unknown_profile", "full_max_rtt", "full_min_link_mtu", "fast_interfaces",
+                               "lxmf_offline_push", "offline_push_max_per_hour", "propagation_node"})
+    prof = _str("push", p, "profile", "auto")
+    if prof not in PUSH_PROFILES:
+        raise ConfigError("push.profile must be 'auto', 'full' or 'constrained'")
     up = _str("push", p, "unknown_profile", "constrained")
     if up not in ("full", "constrained"):
         raise ConfigError("push.unknown_profile must be 'full' or 'constrained'")
@@ -251,7 +326,10 @@ def parse_config(raw: dict) -> Config:
     if pn is not None and (len(pn) != 32 or any(c not in "0123456789abcdef" for c in pn.lower())):
         raise ConfigError("push.propagation_node must be a 32-char hex destination hash")
     push = PushConfig(
+        profile=prof,
         unknown_profile=up,
+        full_max_rtt=_num("push", p, "full_max_rtt", 1.5, 0.05),
+        full_min_link_mtu=_int("push", p, "full_min_link_mtu", 1000, 100),
         fast_interfaces=_strlist("push", p, "fast_interfaces", DEFAULT_FAST_INTERFACES),
         lxmf_offline_push=_bool("push", p, "lxmf_offline_push", True),
         offline_push_max_per_hour=_int("push", p, "offline_push_max_per_hour", 30),
