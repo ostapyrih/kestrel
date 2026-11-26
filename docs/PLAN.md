@@ -131,7 +131,7 @@ Switching modes changes only `settings.bridge_enabled`; no DELETEs on data.
 | 5 | Propagation sync + offline queue | `B` fetches messages from a propagation node | ⬜ |
 | 6 | RNode: BLE on mobile, USB serial on desktop | KISS + radio config (parameters = those of the LoRa gateway), `LoRa` transport badge | ⬜ |
 | 7 | iOS build on Mac + background notifications | `flutter build ios`, push without content | ⬜ |
-| D | Desktop builds (Windows/macOS/Linux) + USB RNode on desktop | Windows .zip/installer, macOS .dmg (unsigned), Linux AppImage/tar.gz from the same code | ⬜ |
+| D | Desktop builds (Windows/macOS/Linux) + USB RNode on desktop | PR #9 merged: Windows .zip, macOS .dmg, Linux tar.gz + AppImage (all unsigned) in releases; two-pane layout ≥ 900 px; device name setting; Windows/Linux CI. Remaining: USB RNode (Phase 6), verify unsigned macOS keychain on a real Mac | 🟡 builds done |
 
 **Environment:** development on Windows (`C:\Users\ostap\Projects\meshchatx-mobile`), Flutter is installed here. The iOS build is done on a Mac (x86_64) with git.
 
