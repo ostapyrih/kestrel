@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.0](https://github.com/ostapyrih/kestrel/compare/app-v0.5.0...app-v0.6.0) (2026-11-26)
+
+
+### Features
+
+* **app:** desktop updater with signed releases ([fc7c9ed](https://github.com/ostapyrih/kestrel/commit/fc7c9ed9ff78c6f235491ec643cfbbf6cee18a96))
+* **ci:** signed Android builds and release signatures ([a00a059](https://github.com/ostapyrih/kestrel/commit/a00a059ef2a4fd76bde6263bb66bc1e6cd906901))
+* invite-QR pairing, app-owned device name, plain messenger when the bridge is off ([#22](https://github.com/ostapyrih/kestrel/issues/22)) ([c316067](https://github.com/ostapyrih/kestrel/commit/c316067f2c5a110ccc5b587d77f97f817a6c22ff))
+
+
+### Bug Fixes
+
+* **app:** satisfy curly_braces lint in the macOS installer ([0418b11](https://github.com/ostapyrih/kestrel/commit/0418b114928f64f24f0391f6c2f826bdea366953))
+* **app:** show waiting-for-approval and revoked states from the bridge reject reason ([41532d9](https://github.com/ostapyrih/kestrel/commit/41532d90c9f83efc4e026900c4d6c3243208dd3e))
+
 ## [0.5.0](https://github.com/ostapyrih/kestrel/compare/app-v0.4.0...app-v0.5.0) (2026-11-26)
 
 
