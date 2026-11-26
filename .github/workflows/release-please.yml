@@ -11,8 +11,39 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      app_released: ${{ steps.rp.outputs['app--release_created'] }}
+      app_tag: ${{ steps.rp.outputs['app--tag_name'] }}
+      bridge_released: ${{ steps.rp.outputs['bridge--release_created'] }}
+      bridge_tag: ${{ steps.rp.outputs['bridge--tag_name'] }}
     steps:
       - uses: googleapis/release-please-action@v4
+        id: rp
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # Tags created with GITHUB_TOKEN do not trigger push-tag workflows,
+  # so the release builds are chained explicitly via workflow_call.
+  release-app:
+    needs: release-please
+    if: needs.release-please.outputs.app_released == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-app.yml
+    with:
+      tag: ${{ needs.release-please.outputs.app_tag }}
+    secrets: inherit
+
+  release-bridge:
+    needs: release-please
+    if: needs.release-please.outputs.bridge_released == 'true'
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release-bridge.yml
+    with:
+      tag: ${{ needs.release-please.outputs.bridge_tag }}
+    secrets: inherit
