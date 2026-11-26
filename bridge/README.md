@@ -67,6 +67,10 @@ tcp_port = 4242                # standalone (default 4242)
 # ifac_name = "example-network"                          # standalone, optional
 # ifac_passphrase_file = "/run/secrets/ifac_passphrase"  # standalone, optional; the passphrase is never inline
 announce_interval = 1800       # seconds, default 30 min
+stamps = false                 # RNS proof-of-work stamping, default false (see "RNS stamping" below)
+# stamp_destinations = false   # sub-options, each defaults to the value of `stamps`
+# stamp_path_requests = false
+# stamp_link_requests = false
 ```
 
 * `meshchatx.base_url` is the MeshChatX HTTP/WS API, e.g. `http://meshchatx:8000` (Docker DNS on the
@@ -86,6 +90,25 @@ path table. Every start/reconnect is followed by two short follow-up announces (
 60 s): a transport node may register the very first announce on a brand-new connection late (observed
 with RNS 1.6), and a phone would otherwise wait for the next periodic announce. In shared mode only
 the startup/periodic announces apply.
+
+### RNS stamping (off by default)
+
+Reticulum 1.6 can attach a proof-of-work "stamp" to announces, path requests and link requests it
+emits, and enabled it by default. `Destination.announce()` then only *queues* the announce until the
+stamp has been computed on a single worker thread. On a small, CPU-starved server that computation
+may never finish: no announce is ever emitted (no `stamps/` directory appears in the RNS storage),
+phones find no path to `kestrel.bridge`, and the bridge burns CPU. Receivers accept unstamped
+announces (RNS only enforces stamps when explicitly configured), and RNS's own `[stamps]` config
+section can only switch stamping on, never off.
+
+The bridge therefore turns all three off right after starting Reticulum, before any destination is
+created, and logs `RNS stamping disabled ...` at INFO. Set `rns.stamps = true` to enable all three,
+or use `stamp_destinations` / `stamp_path_requests` / `stamp_link_requests` individually (each
+defaults to `stamps`). Only enable it if your network enforces stamps and the host has CPU to spare.
+
+With stamping on, the log distinguishes `announce queued ... awaiting stamp` from
+`announce emitted ...`, and no new announce is queued while one is still waiting for its stamp (a
+queued announce that is not emitted within 15 minutes is queued again).
 
 ### Push profile (full vs constrained)
 
@@ -111,8 +134,12 @@ MeshChatX is unreachable) and prints what it sees:
 |---|---|---|
 | `ok` | 0 | RNS interface online and MeshChatX reachable (WebSocket connected) |
 | `degraded: MeshChatX unreachable` / `degraded: RNS interface offline` | 0 | the bridge runs and is reconnecting by itself; the container stays *healthy* so Docker does not flap while MeshChatX restarts |
+| `degraded: announce never emitted for > 5 min` / `degraded: announce not emitted for > N min` | 0 | the RNS interface is up but our `kestrel.bridge` announce never reached the wire (stamping starved of CPU, see above); N is `announce_interval` + 5 min |
 | `unhealthy: no heartbeat` / `unhealthy: stale heartbeat` | 1 | the bridge process is stuck or not running |
 | `degraded: ...` with `--strict` | 3 | for monitoring that wants to alert on degraded states |
+
+The heartbeat JSON also carries `started_at`, `stamping`, `announce_pending` and
+`last_announce_emitted_at` (Unix time of the last announce Reticulum actually built, or `null`).
 
 While MeshChatX is down the bridge refuses commands with a retryable `upstream_unavailable` error
 and resyncs (`resync` push event) when MeshChatX is back.
