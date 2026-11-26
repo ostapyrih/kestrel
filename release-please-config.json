@@ -20,12 +20,14 @@
       "component": "app",
       "package-name": "kestrel",
       "tag-separator": "-",
+      "bump-minor-pre-major": true,
       "include-component-in-tag": true
     },
     "bridge": {
       "release-type": "python",
       "component": "bridge",
       "package-name": "kestrel-bridge",
+      "bump-minor-pre-major": true,
       "include-component-in-tag": true
     }
   }
