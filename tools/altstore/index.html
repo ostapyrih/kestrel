@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kestrel for AltStore and SideStore</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; color: #0f172a; background: #f8fafc; }
+  img { width: 96px; height: 96px; border-radius: 22%; }
+  code { background: #e2e8f0; padding: .1em .35em; border-radius: 4px; word-break: break-all; }
+  a.button { display: inline-block; margin: .25rem .5rem .25rem 0; padding: .5rem 1rem; border-radius: 8px; background: #0f766e; color: #fff; text-decoration: none; }
+  @media (prefers-color-scheme: dark) { body { color: #e2e8f0; background: #0f172a; } code { background: #1e293b; } }
+</style>
+</head>
+<body>
+<img src="icon.png" alt="Kestrel icon">
+<h1>Kestrel</h1>
+<p>A Reticulum / LXMF messenger. This page hosts the app source for AltStore and SideStore, so the iOS app can be installed and updated automatically.</p>
+
+<h2>Add the source</h2>
+<p>Source URL: <code id="url">https://ostapyrih.github.io/kestrel/altstore.json</code></p>
+<p>
+  <a class="button" href="altstore://source?url=https://ostapyrih.github.io/kestrel/altstore.json">Add to AltStore</a>
+  <a class="button" href="sidestore://source?url=https://ostapyrih.github.io/kestrel/altstore.json">Add to SideStore</a>
+</p>
+<p>Or add it by hand: open <strong>Browse</strong>, then <strong>Sources</strong>, tap <strong>+</strong>, and paste the URL above. Then open Kestrel in the source and tap <strong>Free</strong> to install it.</p>
+
+<p>The IPA is unsigned: AltStore and SideStore sign it with your own Apple ID, so a free Apple ID needs a refresh every 7 days (both do it automatically). On iOS 16 and later, enable Developer Mode first.</p>
+<p><a href="https://github.com/ostapyrih/kestrel/releases">All releases</a> &middot; <a href="https://github.com/ostapyrih/kestrel">Source code</a></p>
+</body>
+</html>

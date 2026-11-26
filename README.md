@@ -27,6 +27,22 @@ See [docs/PLAN.md](docs/PLAN.md) for the full plan and phase status, and
 | macOS | built | unsigned DMG (Gatekeeper warning) |
 | Linux | built | AppImage and tar.gz; needs libsecret and a Secret Service (GNOME Keyring / KWallet) |
 
+### Install on iOS
+
+The IPA is unsigned; AltStore and SideStore sign it with your Apple ID and keep it updated.
+Add the Kestrel source (AltStore: Browse, Sources, `+`; SideStore: Sources, `+`) with this URL:
+
+```
+https://ostapyrih.github.io/kestrel/altstore.json
+```
+
+Or open a deep link on the iPhone:
+[AltStore](altstore://source?url=https://ostapyrih.github.io/kestrel/altstore.json) /
+[SideStore](sidestore://source?url=https://ostapyrih.github.io/kestrel/altstore.json)
+(`altstore://source?url=...`, `sidestore://source?url=...`; some viewers do not open custom
+schemes, in which case use the [source page](https://ostapyrih.github.io/kestrel/)).
+The source is regenerated from the GitHub releases after every app release (`tools/altstore/generate.py`).
+
 Each install generates its own identity (a desktop install is its own identity B).
 RNode (LoRa) support is planned: BLE on mobile, USB serial on desktop.
 
