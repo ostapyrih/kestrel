@@ -1,4 +1,10 @@
+import 'dart:typed_data';
+
 import 'package:flutter_riverpod/misc.dart';
+import 'package:kestrel/bridge/bridge_connection.dart';
+import 'package:kestrel/bridge/bridge_service.dart';
+import 'package:kestrel/bridge/bridge_store.dart';
+import 'package:kestrel/bridge/codec.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kestrel/node/node_service.dart';
 import 'package:kestrel/providers.dart';
@@ -111,11 +117,197 @@ final fixtureLog = [
   LogRow('delivered', _t0 + 5000, null),
 ];
 
+/// Records bridge actions instead of touching the network.
+class FakeBridge extends Fake implements BridgeService {
+  final List<int> cancelled = [];
+  final List<int> sentFromB = [];
+  final List<String> renamed = [];
+  final List<(String, bool)> roles = [];
+  final List<String> revoked = [];
+  final List<String> approved = [];
+  final List<String> configured = [];
+  final List<String> rrcSent = [];
+  final List<bool> enabled = [];
+  Object? approveError;
+
+  @override
+  Future<bool> cancelQueued(int messageId) async {
+    cancelled.add(messageId);
+    return true;
+  }
+
+  @override
+  Future<int?> sendFromBInstead(int messageId) async {
+    sentFromB.add(messageId);
+    return 99;
+  }
+
+  @override
+  Future<void> markRead(int chatId) async {}
+
+  @override
+  Future<bool> loadOlder(int chatId) async => false;
+
+  @override
+  Future<List<DeviceRecord>> refreshDevices() async => const [];
+
+  @override
+  Future<void> refreshRooms() async {}
+
+  @override
+  Future<void> loadRoom(String hub, String room) async {}
+
+  @override
+  Future<bool> loadOlderRoom(String hub, String room) async => false;
+
+  @override
+  Future<void> sendRrc(String hub, String room, String text) async {
+    if (BridgeService.isRrcCommand(text)) throw RrcCommandBlocked();
+    rrcSent.add(text);
+  }
+
+  @override
+  Future<void> renameDevice(String deviceId, String name) async =>
+      renamed.add('$deviceId=$name');
+
+  @override
+  Future<void> setFieldRole(String deviceId, bool enabled) async =>
+      roles.add((deviceId, enabled));
+
+  @override
+  Future<void> revokeDevice(String deviceId, {String? reason}) async =>
+      revoked.add(deviceId);
+
+  @override
+  Future<DeviceRecord> approveDevice(
+    DecodedPairing d, {
+    String? name,
+    bool field = false,
+  }) async {
+    if (approveError != null) throw approveError!;
+    approved.add('${d.payload.name}:$field');
+    return DeviceRecord(
+      deviceId: d.payload.deviceId,
+      publicKey: '',
+      name: d.payload.name,
+      platform: d.payload.platform,
+      roles: [if (field) 'field'],
+      bootstrap: false,
+    );
+  }
+
+  @override
+  Future<PairingPayload> newPairingPayload() async => PairingPayload(
+    pubkey: Uint8List.fromList(List.filled(64, 7)),
+    name: 'New phone',
+    platform: 'android',
+    nonce: Uint8List.fromList(List.filled(16, 9)),
+    ts: 1700000000,
+  );
+
+  @override
+  Future<void> beginPairing() async {}
+
+  @override
+  void endPairing() {}
+
+  @override
+  Future<void> configure(String text) async {
+    if (extractBridgePublicKey(text) == null) throw const FormatException('x');
+    configured.add(text);
+  }
+
+  @override
+  Future<void> setEnabled(bool on) async => enabled.add(on);
+
+  @override
+  Future<void> setFallback(bool on) async {}
+}
+
+MessageRow _ma(
+  int id,
+  String dir,
+  String text,
+  String status, {
+  String? origin,
+  String route = 'direct',
+  String? hash,
+}) => MessageRow(
+  id: id,
+  chatId: 2,
+  direction: dir,
+  lxmfHash: hash,
+  text: text,
+  ts: _t0 + id * 1000,
+  senderIdentity: 'A',
+  route: route,
+  transport: 'tcp',
+  status: status,
+  error: null,
+  signatureValid: null,
+  originDevice: origin,
+);
+
+final fixtureADevices = [
+  DeviceRecord(
+    deviceId: 'd1' * 16,
+    publicKey: '',
+    name: 'iPhone',
+    platform: 'ios',
+    roles: const [],
+    bootstrap: true,
+    lastSeen: 1700000000,
+    online: true,
+  ),
+  DeviceRecord(
+    deviceId: 'd2' * 16,
+    publicKey: '',
+    name: 'Old laptop',
+    platform: 'windows',
+    roles: const ['field'],
+    bootstrap: false,
+    revokedAt: 1700000500,
+  ),
+];
+
+/// Messages of the A chat (id 2): from the iPhone, typed in MeshChatX, and
+/// one that waits for the bridge.
+final fixtureAMessages = [
+  _ma(11, 'in', 'Через міст', 'received'),
+  _ma(12, 'out', 'З айфона', 'delivered', origin: 'd1' * 16, hash: 'cd' * 16),
+  _ma(13, 'out', 'З вебу', 'delivered', hash: 'ef' * 16),
+  _ma(14, 'out', 'Чекає', 'queued', route: 'via_bridge'),
+];
+
 List<Override> fixtureOverrides({
   required NodeConnection conn,
   FakeNode? node,
   Repo? repo,
+  FakeBridge? bridge,
+  BridgeStatus bridgeStatus = const BridgeStatus(BridgeState.off),
+  bool bridgeConfigured = false,
+  List<DeviceRecord>? devices,
 }) => [
+  bridgeProvider.overrideWithValue(bridge ?? FakeBridge()),
+  bridgeStatusProvider.overrideWith((ref) => Stream.value(bridgeStatus)),
+  bridgeConfiguredProvider.overrideWith(
+    (ref) => Stream.value(bridgeConfigured),
+  ),
+  bridgeRevokedProvider.overrideWith((ref) => Stream.value(false)),
+  bridgeDevicesProvider.overrideWith(
+    (ref) => Stream.value(devices ?? fixtureADevices),
+  ),
+  rrcRoomsProvider.overrideWith(
+    (ref) => Stream.value([
+      RrcRoomRow('ee' * 16, 'Hub', 'general', 2, true),
+      RrcRoomRow('ee' * 16, 'Hub', 'ops', 0, false),
+    ]),
+  ),
+  rrcMessagesProvider.overrideWith(
+    (ref, k) => Stream.value([
+      RrcMessageRow(1, 'msg', 'ann', 'hello room', _t0, false),
+    ]),
+  ),
   nodeProvider.overrideWithValue(node ?? FakeNode()),
   if (repo != null) repoProvider.overrideWithValue(repo),
   connectionProvider.overrideWith((ref) => Stream.value(conn)),
@@ -130,7 +322,13 @@ List<Override> fixtureOverrides({
     (ref, id) => Stream.value(fixtureChats.firstWhere((c) => c.id == id)),
   ),
   messagesProvider.overrideWith(
-    (ref, id) => Stream.value(id == 1 ? fixtureMessages : const []),
+    (ref, id) => Stream.value(
+      id == 1
+          ? fixtureMessages
+          : id == 2
+          ? fixtureAMessages
+          : const <MessageRow>[],
+    ),
   ),
   deliveryLogProvider.overrideWith((ref, id) => Stream.value(fixtureLog)),
   peersProvider.overrideWith(
