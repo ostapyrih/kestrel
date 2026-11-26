@@ -41,6 +41,7 @@ class FakeMeshChatX:
         self.ws_inbound: list[dict] = []
         self.next_id = 1
         self.drop_csrf_once = False
+        self.csrf_before_auth = False   # an unknown session on a POST gets 403 csrf_invalid instead of 401
         self.app = self._build()
 
     # ---- helpers ----------------------------------------------------------------------------
@@ -63,14 +64,22 @@ class FakeMeshChatX:
     def _session(self, request: web.Request) -> dict | None:
         return self.sessions.get(request.cookies.get("AIOHTTP_SESSION", ""))
 
+    def _authed(self, request: web.Request) -> bool:
+        s = self._session(request)
+        return s is not None and bool(s.get("authed"))
+
     # ---- app --------------------------------------------------------------------------------------
     def _build(self) -> web.Application:
         @web.middleware
         async def mw(request: web.Request, handler):
             self.calls.append((request.method, request.path))
+            if (self.csrf_before_auth and request.path.startswith(API) and request.method == "POST"
+                    and request.path not in (f"{API}/auth/login", f"{API}/auth/logout")
+                    and not self._authed(request)):
+                return web.json_response({"error": "bad csrf", "code": "csrf_invalid"}, status=403)
             if request.path.startswith(API) and request.path not in (
                     f"{API}/status", f"{API}/auth/csrf", f"{API}/auth/login", f"{API}/auth/logout"):
-                if self._session(request) is None:
+                if not self._authed(request):
                     return web.json_response({"error": "Authentication required"}, status=401)
             if request.path.startswith(API) and request.method not in ("GET", "HEAD", "OPTIONS") \
                     and request.path != f"{API}/auth/csrf":

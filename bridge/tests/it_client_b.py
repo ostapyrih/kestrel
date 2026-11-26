@@ -1,7 +1,9 @@
 """Integration helper: a Python client in the role of the phone identity B.
 
-usage: python -m tests.it_client_b <config_dir> <identity_file> <bridge_pubkey_hex> <peer_hash_hex>
-Prints "RESULT <name> <json>" lines; the test driver reads them.
+usage: python -m tests.it_client_b <config_dir> <identity_file> <bridge_pubkey_hex> <peer_hash_hex> [<go_file>]
+Prints "RESULT <name> <json>" lines; the test driver reads them. With <go_file> the client pauses after
+phase 1 (RESULT PHASE1) until that file exists, then forgets the path to S and calls /hello again
+(phase 2: used after the test driver restarted the transport node).
 """
 import json
 import os
@@ -46,20 +48,25 @@ def connect(dest):
     return link
 
 
-def main() -> None:
-    cfgdir, idfile, s_pub, peer = sys.argv[1:5]
-    RNS.Reticulum(configdir=cfgdir, loglevel=int(os.environ.get("IT_RNS_LOG", RNS.LOG_WARNING)))
-    b = RNS.Identity.from_file(idfile)
-    s_ident = RNS.Identity(create_keys=False)
-    s_ident.load_public_key(bytes.fromhex(s_pub))
-    dest = RNS.Destination(s_ident, RNS.Destination.OUT, RNS.Destination.SINGLE, "kestrel", "bridge")
-    end = time.time() + 35
+def find_path(dest, timeout):
+    end = time.time() + timeout
     while not RNS.Transport.has_path(dest.hash):
         if time.time() > end:
             out("TIMEOUT", "path")
             sys.exit(3)
         RNS.Transport.request_path(dest.hash)
         time.sleep(4)
+
+
+def main() -> None:
+    cfgdir, idfile, s_pub, peer = sys.argv[1:5]
+    go_file = sys.argv[5] if len(sys.argv) > 5 else None
+    RNS.Reticulum(configdir=cfgdir, loglevel=int(os.environ.get("IT_RNS_LOG", RNS.LOG_WARNING)))
+    b = RNS.Identity.from_file(idfile)
+    s_ident = RNS.Identity(create_keys=False)
+    s_ident.load_public_key(bytes.fromhex(s_pub))
+    dest = RNS.Destination(s_ident, RNS.Destination.OUT, RNS.Destination.SINGLE, "kestrel", "bridge")
+    find_path(dest, 35)
 
     # 1. an impostor (key not in the whitelist) must not get any service
     bad = connect(dest)
@@ -94,6 +101,18 @@ def main() -> None:
     out("push", [p for p in pushes if p.get("event") == "lxmf.message"][0])
     link.teardown()
     time.sleep(0.5)
+    if go_file:
+        out("PHASE1", True)
+        wait(lambda: os.path.exists(go_file), 180, "go file")
+        # the transport node was restarted: its path table is empty; S must be (re)found again
+        RNS.Transport.expire_path(dest.hash)
+        find_path(dest, 90)
+        link2 = connect(dest)
+        link2.identify(b)
+        time.sleep(1.0)
+        out("hello2", request(link2, "/hello", {"protocol_version": 1, "client": "it"}))
+        link2.teardown()
+        time.sleep(0.5)
     out("DONE", True)
 
 

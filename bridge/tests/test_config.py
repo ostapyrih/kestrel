@@ -16,8 +16,10 @@ class ConfigTest(unittest.TestCase):
     def test_valid_defaults(self):
         cfg = parse_config(self.base())
         self.assertEqual(cfg.whitelist, (PHONE_KEY,))
-        self.assertTrue(cfg.rns.require_shared_instance)
+        self.assertEqual(cfg.rns.mode, "standalone")
+        self.assertEqual(cfg.push.profile, "auto")
         self.assertEqual(cfg.push.unknown_profile, "constrained")
+        self.assertEqual((cfg.push.full_max_rtt, cfg.push.full_min_link_mtu), (1.5, 1000))
 
     def test_whitelist_normalised_and_deduplicated(self):
         raw = self.base()
@@ -61,9 +63,22 @@ class ConfigTest(unittest.TestCase):
 
     def test_shared_instance_cannot_be_disabled(self):
         raw = self.base()
-        raw["rns"] = {"require_shared_instance": False}
+        raw["rns"] = {"mode": "shared", "require_shared_instance": False}
         with self.assertRaises(ConfigError):
             parse_config(raw)
+
+    def test_push_profile_override_and_thresholds(self):
+        for good in ("auto", "full", "constrained"):
+            raw = self.base()
+            raw["push"] = {"profile": good, "full_max_rtt": 2, "full_min_link_mtu": 500}
+            cfg = parse_config(raw)
+            self.assertEqual((cfg.push.profile, cfg.push.full_max_rtt, cfg.push.full_min_link_mtu),
+                             (good, 2.0, 500))
+        for bad in ({"profile": "lora"}, {"full_max_rtt": 0}, {"full_min_link_mtu": 10}):
+            raw = self.base()
+            raw["push"] = bad
+            with self.assertRaises(ConfigError, msg=repr(bad)):
+                parse_config(raw)
 
     def test_journal_ttl_must_exceed_window(self):
         raw = self.base()

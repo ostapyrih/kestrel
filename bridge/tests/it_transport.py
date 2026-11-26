@@ -1,6 +1,10 @@
-"""Integration helper: an rnsd-like shared instance with a TCPServerInterface on 127.0.0.1.
+"""Integration helper: a Reticulum transport node standing in for MeshChatX's RNS.
 
-usage: python -m tests.it_shared_instance <config_dir> <data_port> <control_port> <tcp_port> <rpc_key_hex>
+A TCPServerInterface on 127.0.0.1; the bridge (standalone mode) and the phone B both connect to it as
+TCP clients. The process can be killed and started again with the same config dir to simulate a MeshChatX
+restart/recreate.
+
+usage: python -m tests.it_transport <config_dir> <tcp_port>
 """
 import os
 import sys
@@ -10,16 +14,12 @@ import RNS
 
 
 def main() -> None:
-    cfgdir, data_port, ctl_port, tcp_port, rpc_key = sys.argv[1:6]
+    cfgdir, tcp_port = sys.argv[1:3]
     os.makedirs(cfgdir, exist_ok=True)
     with open(os.path.join(cfgdir, "config"), "w") as f:
         f.write(f"""[reticulum]
   enable_transport = Yes
-  share_instance = Yes
-  shared_instance_type = tcp
-  shared_instance_port = {data_port}
-  instance_control_port = {ctl_port}
-  rpc_key = {rpc_key}
+  share_instance = No
 
 [interfaces]
   [[Test TCP Server]]
@@ -29,7 +29,7 @@ def main() -> None:
     listen_port = {tcp_port}
 """)
     RNS.Reticulum(configdir=cfgdir, loglevel=int(os.environ.get("IT_RNS_LOG", RNS.LOG_WARNING)))
-    print("SHARED_READY", flush=True)
+    print("TRANSPORT_READY", flush=True)
     while True:
         time.sleep(1)
 

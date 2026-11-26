@@ -1,8 +1,8 @@
 import unittest
 
 from kestrel_bridge import codec
-from kestrel_bridge.push import (CONSTRAINED, FULL, PushHub, Subscriber, classify_interface, filter_event,
-                                 more_restrictive, truncate_utf8)
+from kestrel_bridge.push import (CONSTRAINED, FULL, PushHub, Subscriber, classify_interface, classify_link,
+                                 filter_event, more_restrictive, truncate_utf8)
 from tests.helpers import PEER, PHONE_KEY, FakeClock, raw_config
 
 DM = {"event": "lxmf.message", "data": {"peer": PEER, "hash": "h", "incoming": True, "ts": 1.0,
@@ -142,6 +142,65 @@ class HubTest(unittest.TestCase):
         self.sub(h)
         h.publish(DM)
         self.assertEqual(sent, [])
+
+
+class ClassifyLinkTest(unittest.TestCase):
+    def test_thresholds(self):
+        self.assertEqual(classify_link(0.2, 262144, 1.5, 1000), FULL)
+        self.assertEqual(classify_link(1.49, 1000, 1.5, 1000), FULL)
+        self.assertEqual(classify_link(1.5, 262144, 1.5, 1000), CONSTRAINED)    # RTT too high (LoRa-like)
+        self.assertEqual(classify_link(0.2, 999, 1.5, 1000), CONSTRAINED)       # base 500-byte MTU
+        self.assertEqual(classify_link(4.0, 500, 1.5, 1000), CONSTRAINED)
+
+    def test_unmeasured_is_unknown(self):
+        self.assertIsNone(classify_link(None, 262144, 1.5, 1000))
+        self.assertIsNone(classify_link(0.2, None, 1.5, 1000))
+        self.assertIsNone(classify_link(0, 500, 1.5, 1000))
+
+
+class FakeLink:
+    def __init__(self, rtt, mtu):
+        self.rtt, self.mtu = rtt, mtu
+
+
+class LinkProfileTest(unittest.TestCase):
+    def setUp(self):
+        self.cfg = raw_config()
+        self.link = None
+
+    def profile(self, phone=PHONE_KEY):
+        from kestrel_bridge.rpc import LinkProfile
+        return LinkProfile(self.cfg, lambda p: self.link)(phone)
+
+    def test_from_link_measurements(self):
+        self.link = FakeLink(0.3, 262144)
+        self.assertEqual(self.profile(), FULL)
+        self.link = FakeLink(3.0, 500)
+        self.assertEqual(self.profile(), CONSTRAINED)
+
+    def test_no_link_is_unknown(self):
+        self.assertIsNone(self.profile())
+
+    def test_hub_uses_link_profile_then_unknown_default_and_override(self):
+        from kestrel_bridge.rpc import LinkProfile
+        got = []
+        h = PushHub(self.cfg, profile_of=LinkProfile(self.cfg, lambda p: self.link), clock=FakeClock())
+        sub = Subscriber(PHONE_KEY, lambda b: got.append(b) or True)
+        self.link = FakeLink(3.0, 500)
+        self.assertEqual(h.effective_profile(sub), CONSTRAINED)
+        sub = Subscriber(PHONE_KEY, lambda b: True)
+        self.link = FakeLink(0.1, 262144)
+        self.assertEqual(h.effective_profile(sub), FULL)
+        # config override beats the measurement, the phone hint can still downgrade
+        self.cfg.push.profile = "constrained"
+        sub = Subscriber(PHONE_KEY, lambda b: True)
+        self.assertEqual(h.effective_profile(sub), CONSTRAINED)
+        self.cfg.push.profile = "full"
+        sub = Subscriber(PHONE_KEY, lambda b: True)
+        self.link = FakeLink(9.0, 500)
+        self.assertEqual(h.effective_profile(sub), FULL)
+        sub = Subscriber(PHONE_KEY, lambda b: True, hint=CONSTRAINED)
+        self.assertEqual(h.effective_profile(sub), CONSTRAINED)
 
 
 if __name__ == "__main__":

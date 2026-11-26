@@ -1,0 +1,47 @@
+# Example only: placeholder names. SHARED mode (rns.mode = "shared" in bridge.toml): the bridge attaches to the
+# Reticulum shared instance of the MeshChatX container by sharing that container's network namespace.
+# Prefer the standalone setup in docker-compose.example.yml: the namespace trick breaks when MeshChatX is recreated.
+#
+# Merge the `kestrel-bridge` service into the compose project that already runs MeshChatX (service name
+# `meshchatx` below). Nothing here is deployed automatically.
+services:
+  meshchatx:
+    image: ghcr.io/quad4-software/meshchatx:latest-extra
+    # ... your existing MeshChatX service. Its Reticulum config needs:
+    #   [reticulum]  share_instance = Yes  /  instance_name = default
+    #   and (optional, for rns.mode = "shared" path-based push profile) a known rpc_key, see README.
+
+  kestrel-bridge:
+    image: ghcr.io/ostapyrih/kestrel-bridge:latest   # pin a version tag in production
+    restart: unless-stopped
+    # Same network namespace as MeshChatX: reaches its HTTP API on 127.0.0.1:8000 (meshchatx.base_url) and
+    # the Reticulum shared instance (abstract unix socket on Linux). No ports are published.
+    network_mode: "service:meshchatx"
+    depends_on:
+      - meshchatx
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./kestrel/config/bridge.toml:/sidecar/config/bridge.toml:ro
+      - ./kestrel/secrets/meshchatx_password:/run/secrets/meshchatx_password:ro
+      # If it has no `config` file the bridge writes a minimal one (share_instance = Yes, no interfaces).
+      - ./kestrel/reticulum:/sidecar/.reticulum
+      - ./kestrel/storage:/sidecar/storage
+      - ./kestrel/state:/sidecar/state
+    healthcheck:
+      test: ["CMD", "python", "-m", "kestrel_bridge", "--healthcheck"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    # CAVEAT: with network_mode "service:meshchatx" the bridge is bound to the *container instance* of
+    # meshchatx. If meshchatx is RECREATED (image update, `compose up` with a changed config, auto-updaters)
+    # its network namespace is replaced and the bridge stays in the dead one: it must be recreated too:
+    #   docker compose up -d --force-recreate kestrel-bridge
+    # (`docker restart meshchatx` keeps the namespace and is fine.) Restart policy and healthcheck do NOT
+    # fix this. If MeshChatX auto-updates, use standalone mode instead.
