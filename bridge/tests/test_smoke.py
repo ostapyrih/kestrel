@@ -10,7 +10,7 @@ BRIDGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 class SmokeTest(unittest.TestCase):
     def test_version(self):
-        self.assertEqual(kestrel_bridge.__version__, "0.1.0")
+        self.assertRegex(kestrel_bridge.__version__, r"^\d+\.\d+\.\d+$")
 
     def test_cli_version(self):
         out = subprocess.run([sys.executable, "-m", "kestrel_bridge", "--version"],

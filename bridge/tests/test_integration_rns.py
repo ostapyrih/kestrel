@@ -1,12 +1,16 @@
 """End-to-end test with real Reticulum. Skipped unless KESTREL_IT=1.
 
-Subprocesses: rnsd-like shared instance (TCP server on 127.0.0.1), fake MeshChatX, the sidecar,
-and a Python client in the role of the phone identity B (see tests/it_client_b.py).
+Standalone mode: subprocesses are a Reticulum transport node with a TCPServerInterface on 127.0.0.1
+(standing in for MeshChatX's RNS), a fake MeshChatX HTTP/WS server, the sidecar (own RNS instance,
+TCP client to the transport node) and a Python client in the role of the phone identity B
+(see tests/it_client_b.py), also a TCP client of the transport node.
+
+Part 2 kills and restarts the transport node (a MeshChatX container recreate): the sidecar must
+reconnect and re-announce by itself, and B must be able to call /hello again.
 """
 import json
 import os
 import re
-import secrets
 import socket
 import subprocess
 import sys
@@ -94,8 +98,7 @@ class IntegrationTest(unittest.TestCase):
     def test_end_to_end(self):
         import RNS
         d = self.tmp.name
-        data_port, ctl_port, tcp_port, fake_port = (free_port() for _ in range(4))
-        rpc_key = secrets.token_hex(32)
+        tcp_port, fake_port = (free_port() for _ in range(2))
 
         # identity of the phone B
         b_id = RNS.Identity()
@@ -103,10 +106,10 @@ class IntegrationTest(unittest.TestCase):
         b_id.to_file(b_file)
         b_pub = b_id.get_public_key().hex()
 
-        # shared instance (the "MeshChatX side" Reticulum) and fake MeshChatX
-        shared = self.spawn("shared", ["-m", "tests.it_shared_instance", os.path.join(d, "shared"),
-                                       str(data_port), str(ctl_port), str(tcp_port), rpc_key])
-        shared.wait_for("SHARED_READY", 60)
+        # transport node (the "MeshChatX side" Reticulum) and fake MeshChatX
+        transport_args = ["-m", "tests.it_transport", os.path.join(d, "transport"), str(tcp_port)]
+        transport = self.spawn("transport", transport_args)
+        transport.wait_for("TRANSPORT_READY", 60)
         self.spawn("fake", ["-m", "tests.fake_meshchatx", "--port", str(fake_port)])
         base = f"http://127.0.0.1:{fake_port}"
         for _ in range(100):
@@ -123,18 +126,7 @@ class IntegrationTest(unittest.TestCase):
 
         # sidecar config
         sc = os.path.join(d, "sidecar")
-        os.makedirs(os.path.join(sc, "rns"))
-        with open(os.path.join(sc, "rns", "config"), "w") as f:
-            f.write(f"""[reticulum]
-  enable_transport = No
-  share_instance = Yes
-  shared_instance_type = tcp
-  shared_instance_port = {data_port}
-  instance_control_port = {ctl_port}
-  rpc_key = {rpc_key}
-
-[interfaces]
-""")
+        os.makedirs(sc)
         pw = os.path.join(sc, "password")
         with open(pw, "w") as f:
             f.write("test-password\n")
@@ -148,13 +140,14 @@ password_file = "{q(pw)}"
 [whitelist]
 phone_public_keys = ["{b_pub}"]
 [rns]
+mode = "standalone"
 config_dir = "{q(sc)}/rns"
 identity_path = "{q(sc)}/identity"
 lxmf_storage = "{q(sc)}/lxmf"
-announce_interval = 10
+announce_interval = 3600
 log_level = {int(os.environ.get("IT_RNS_LOG", "2"))}
-[push]
-unknown_profile = "full"
+tcp_host = "127.0.0.1"
+tcp_port = {tcp_port}
 """)
         chk = subprocess.run([sys.executable, "-m", "kestrel_bridge", "--config", toml, "--print-address"],
                              cwd=BRIDGE_DIR, capture_output=True, text=True, timeout=60)
@@ -182,7 +175,8 @@ unknown_profile = "full"
     target_host = 127.0.0.1
     target_port = {tcp_port}
 """)
-            client = self.spawn("client_b", ["-m", "tests.it_client_b", bdir, b_file, s_pub, PEER])
+            go_file = os.path.join(d, "go2")
+            client = self.spawn("client_b", ["-m", "tests.it_client_b", bdir, b_file, s_pub, PEER, go_file])
             try:
                 client.wait_for("RESULT SUBSCRIBED", 120)
                 break
@@ -197,7 +191,17 @@ unknown_profile = "full"
                 "type": "lxmf.delivery", "remote_identity_name": "Peer",
                 "lxmf_message": {"hash": "ab" * 16, "source_hash": PEER, "state": "delivered",
                                  "content": "pushed hello", "timestamp": time.time(), "fields": {}}})
-            client.wait_for("RESULT DONE", 60)
+            client.wait_for("RESULT PHASE1", 60)
+
+            # part 2: the "MeshChatX" RNS goes away and comes back (container recreate)
+            transport.stop()
+            time.sleep(2)
+            transport = self.spawn("transport2", transport_args)
+            transport.wait_for("TRANSPORT_READY", 60)
+            # no periodic announce is due (3600 s): this one is the reconnect hook
+            sidecar.wait_for("announced kestrel.bridge (interface reconnected)", 120)
+            open(go_file, "w").close()
+            client.wait_for("RESULT DONE", 180)
         except AssertionError:
             self._dump_logs()
             raise
@@ -224,6 +228,9 @@ unknown_profile = "full"
         self.assertEqual(res["send_replay"]["error"]["code"], "replay")
         self.assertEqual(res["rrc_slash"]["error"]["code"], "rrc_command_rejected")
         self.assertTrue(res["subscribe"]["ok"])
+        self.assertEqual(res["subscribe"]["result"]["profile"], "full")   # fast TCP link: RTT/MTU thresholds met
+        self.assertTrue(res["hello2"]["ok"])                              # after the transport restart
+        self.assertEqual(res["hello2"]["result"]["protocol_version"], 1)
         self.assertEqual(res["push"]["data"]["text"], "pushed hello")
 
         calls = http("GET", base + "/_test/calls")
