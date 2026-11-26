@@ -60,6 +60,22 @@ void main() {
     expect(hello({}).upstreamIncompatible, isFalse);
   });
 
+  test('UI texts for the reject reasons', () {
+    final s = Strings('en');
+    const waiting = BridgeStatus(
+      BridgeState.awaitingApproval,
+      detail: 'unauthorized',
+    );
+    expect(bridgeStateText(s, waiting), 'Bridge: waiting for approval');
+    expect(bridgeStateHelp(s, waiting), contains('not approved yet'));
+    const rejected = BridgeStatus(BridgeState.rejected, detail: 'unauthorized');
+    expect(bridgeStateText(s, rejected), 'Bridge: device not accepted');
+    expect(
+      bridgeStateText(s, const BridgeStatus(BridgeState.revoked)),
+      isNot(bridgeStateText(s, rejected)),
+    );
+  });
+
   test('UI help distinguishes starting from incompatible', () {
     final s = Strings('en');
     final starting = BridgeStatus(

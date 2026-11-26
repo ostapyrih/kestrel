@@ -182,6 +182,36 @@ void main() {
       expect(PushEvent.tryParse('junk'), isNull);
     });
 
+    test('kestrel.reject packet (spec 2.4) parses, anything else does not', () {
+      final r = RejectPacket.tryParse(
+        unpackb(
+          packb({
+            't': 'kestrel.reject',
+            'code': 'unauthorized',
+            'server_time': 1700000000.5,
+          }),
+        ),
+      )!;
+      expect(
+        (r.code, r.serverTime, r.isRevoked),
+        ('unauthorized', 1700000000.5, false),
+      );
+      final v = RejectPacket.tryParse({
+        't': 'kestrel.reject',
+        'code': 'device_revoked',
+      })!;
+      expect(v.isRevoked, isTrue);
+      expect(v.serverTime, isNull);
+      expect(RejectPacket.tryParse({'t': 'push', 'code': 'x'}), isNull);
+      expect(RejectPacket.tryParse({'t': 'kestrel.reject'}), isNull);
+      expect(RejectPacket.tryParse('junk'), isNull);
+      // a reject packet is never mistaken for a push event
+      expect(
+        PushEvent.tryParse({'t': 'kestrel.reject', 'code': 'unauthorized'}),
+        isNull,
+      );
+    });
+
     test('request args are string-keyed msgpack maps (round trip)', () {
       final args = {
         'cmd_id': newCmdId(),

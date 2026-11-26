@@ -62,13 +62,42 @@ class BridgeError implements Exception {
   String toString() => 'BridgeError($code: $message)';
 }
 
+/// The `kestrel.reject` reason packet (spec 2.4): the bridge did not accept
+/// the key of this Link (`unauthorized`) or it was revoked (`device_revoked`).
+class RejectPacket {
+  const RejectPacket(this.code, this.serverTime);
+
+  static const type = 'kestrel.reject';
+  static const unauthorized = 'unauthorized';
+  static const deviceRevoked = 'device_revoked';
+
+  /// Parses a Link packet; null if it is not a reject packet.
+  static RejectPacket? tryParse(Object? o) {
+    if (o is! Map) return null;
+    final m = asMap(o);
+    if (m['t'] != type || m['code'] is! String) return null;
+    return RejectPacket(m['code']! as String, asDouble(m['server_time']));
+  }
+
+  final String code;
+
+  /// Bridge clock (Unix seconds), when sent.
+  final double? serverTime;
+
+  bool get isRevoked => code == deviceRevoked;
+
+  @override
+  String toString() => 'RejectPacket($code)';
+}
+
 /// No response at all (timeout, link closed, no route).
 class BridgeTransportError implements Exception {
   BridgeTransportError(this.message, {this.rejected = false});
   final String message;
 
-  /// The bridge closed the Link right after `identify()`: the key is unknown
-  /// or revoked (spec 2.1).
+  /// The bridge closed the Link right after `identify()` without a reason:
+  /// the key is unknown or revoked. Fallback for bridges that do not send
+  /// `kestrel.reject` (spec 2.1, 2.4).
   final bool rejected;
 
   @override

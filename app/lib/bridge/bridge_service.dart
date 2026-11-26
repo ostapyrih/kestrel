@@ -140,10 +140,21 @@ class BridgeService {
     _api = api;
     _emit(api.status);
     _subs
-      ..add(api.statusChanges.listen(_emit))
+      ..add(api.statusChanges.listen(_onApiStatus))
       ..add(api.pushes.listen((e) => _chain(() => _onPush(e))))
       ..add(api.connected.listen((h) => _chain(() => _onConnected(h))));
     await api.start();
+  }
+
+  /// A `device_revoked` reason from the bridge (spec 2.4) is handled like the
+  /// push: forget the credentials and stop for good.
+  void _onApiStatus(BridgeStatus s) {
+    _emit(s);
+    if (s.state == BridgeState.revoked) {
+      _chain(() async {
+        if (!await isRevoked()) await _handleRevoked();
+      });
+    }
   }
 
   Future<void> _detach() async {

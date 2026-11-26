@@ -487,6 +487,19 @@ void main() {
 
   group('devices', () {
     test(
+      'a device_revoked reject from the bridge wipes the credentials',
+      () async {
+        await up();
+        api.setState(BridgeState.revoked);
+        await svc.flushEvents();
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        expect(svc.status.state, BridgeState.revoked);
+        expect(await svc.isRevoked(), isTrue);
+        expect(await svc.configuredKey(), isNull);
+      },
+    );
+
+    test(
       'revoked push for this device stops the bridge and keeps data',
       () async {
         await up();
