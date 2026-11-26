@@ -99,11 +99,68 @@ class DispatchTest(ServiceBase):
         r = await self.call("/get_messages", {"peer": "xyz"})
         self.assertEqual(r["error"]["code"], errors.BAD_REQUEST)
 
+    async def test_pending_compat_is_unavailable_not_incompatible(self):
+        self.svc.compat_ok = False          # no check has completed yet
+        r = await self.call("/hello", {"protocol_version": 2})
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["result"]["compat"]["checked"], False)
+        self.assertIsNone(r["result"]["compat"]["error"])
+        r = await self.call("/sync_chats", {})
+        self.assertEqual(r["error"]["code"], errors.UPSTREAM_UNAVAILABLE)
+        self.assertEqual(r["error"]["details"]["retry_after"], 10.0)
+
     async def test_incompatible_upstream_blocks_commands_but_not_hello(self):
+        self.fake.version = "9.9.9"
         self.svc.compat_ok = False
-        self.assertTrue((await self.call("/hello", {"protocol_version": 2}))["ok"])
+        with self.assertLogs("kestrel.service", "WARNING") as lg:
+            self.assertFalse(await self.svc.recheck_compat())
+        self.assertIn("incompatible", lg.output[0])
+        r = await self.call("/hello", {"protocol_version": 2})
+        self.assertTrue(r["ok"])
+        compat = r["result"]["compat"]
+        self.assertEqual((compat["ok"], compat["checked"]), (False, True))
+        self.assertIn("9.9.9", compat["error"])
         r = await self.call("/sync_chats", {})
         self.assertEqual(r["error"]["code"], errors.UPSTREAM_INCOMPATIBLE)
+
+    async def test_unreachable_upstream_stays_unavailable(self):
+        self.svc.compat_ok = False
+        await self.server.close()
+        with self.assertLogs("kestrel.service", "WARNING"):
+            self.assertFalse(await self.svc.recheck_compat())
+        self.assertFalse(self.svc.compat_checked)
+        r = await self.call("/sync_chats", {})
+        self.assertEqual(r["error"]["code"], errors.UPSTREAM_UNAVAILABLE)
+        self.assertTrue((await self.call("/hello", {"protocol_version": 2}))["result"]["compat"]["error"])
+        self.server = type(self.server)(self.fake.app)   # so tearDown can close it
+        await self.server.start_server()
+
+    async def test_incompatible_then_unreachable_reports_unavailable(self):
+        self.fake.version = "9.9.9"
+        self.svc.compat_ok = False
+        with self.assertLogs("kestrel.service", "WARNING"):
+            await self.svc.recheck_compat()
+        self.assertEqual((await self.call("/sync_chats", {}))["error"]["code"], errors.UPSTREAM_INCOMPATIBLE)
+        await self.server.close()
+        with self.assertLogs("kestrel.service", "WARNING"):
+            await self.svc.recheck_compat()
+        self.assertEqual((await self.call("/sync_chats", {}))["error"]["code"], errors.UPSTREAM_UNAVAILABLE)
+        self.server = type(self.server)(self.fake.app)
+        await self.server.start_server()
+
+    async def test_compat_success_logs_once_and_on_change(self):
+        self.svc.compat_ok = False
+        with self.assertLogs("kestrel.service", "INFO") as lg:
+            self.assertTrue(await self.svc.recheck_compat())
+            self.assertTrue(await self.svc.recheck_compat())     # periodic re-check: no second line
+        self.assertEqual(len(lg.output), 1)
+        self.assertIn("MeshChatX compatible: version=4.12.1 api_version=2", lg.output[0])
+        compat = (await self.call("/hello", {"protocol_version": 2}))["result"]["compat"]
+        self.assertEqual((compat["ok"], compat["checked"], compat["error"]), (True, True, None))
+        self.fake.version = "4.12.3"
+        with self.assertLogs("kestrel.service", "INFO") as lg:
+            await self.svc.recheck_compat()
+        self.assertIn("version=4.12.3", lg.output[0])
 
     async def test_subscribe_needs_link(self):
         r = await self.call("/subscribe", {}, Ctx(device_id=PHONE_ID, transport="lxmf", journal_reserved=True))

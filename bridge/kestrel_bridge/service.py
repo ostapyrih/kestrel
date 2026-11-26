@@ -21,6 +21,7 @@ from .vault import Vault
 
 log = logging.getLogger("kestrel.service")
 
+COMPAT_RETRY_AFTER = 10.0   # seconds; hint for clients while the first MeshChatX compat check is pending
 MUTATING = frozenset({"/send_lxmf", "/send_rrc"})
 PATHS = ("/hello", "/sync_chats", "/get_messages", "/list_rooms", "/get_room_messages",
          "/send_lxmf", "/send_rrc", "/subscribe", "/mark_read",
@@ -145,6 +146,10 @@ class Service(DeviceMixin):
         self.registry.subscribe(self._on_device_event)
         self._last_state: OrderedDict[str, str] = OrderedDict()
         self.compat_ok = False
+        self.compat_checked = False              # a check has reached a verdict (compatible or not)
+        self.last_compat_error: str | None = None
+        self._compat_unavailable = False         # the last check failed because MeshChatX was not reachable/ready
+        self._compat_logged: tuple | None = None
 
     # ---- dispatch ---------------------------------------------------------------------
     async def dispatch(self, path: str, args, ctx: Ctx) -> dict:
@@ -180,6 +185,9 @@ class Service(DeviceMixin):
         if path.startswith("/devices/") or path.startswith("/vault/"):
             return codec.ok(self._device_or_vault(path, args, ctx))
         if not self.compat_ok:
+            if not self.compat_checked or self._compat_unavailable:
+                raise BridgeError(errors.UPSTREAM_UNAVAILABLE, "MeshChatX compatibility check is pending",
+                                  retry_after=COMPAT_RETRY_AFTER)
             raise BridgeError(errors.UPSTREAM_INCOMPATIBLE, "MeshChatX version/API is not supported by this bridge")
         if path in MUTATING:
             return await self._mutating(path, args, ctx)
@@ -263,7 +271,8 @@ class Service(DeviceMixin):
             "capabilities": ["lxmf", "rrc", "push", "lxmf_transport", "devices", "pairing", "read_state",
                              "origin_device", "vault"],
             "compat": {"ok": self.compat_ok, "meshchatx_version": self.client.version,
-                       "api_version": self.client.api_version},
+                       "api_version": self.client.api_version,
+                       "checked": self.compat_checked, "error": self.last_compat_error},
             "profile": ctx.profile,
             "vault": {"key_epoch": self.vault.epoch(), "in_use": self.vault.in_use(),
                       "used_bytes": self.vault.usage(ctx.device_id)},
@@ -608,12 +617,31 @@ class Service(DeviceMixin):
 
     async def recheck_compat(self) -> bool:
         try:
-            await self.client.check_compat()
-            self.compat_ok = True
+            info = await self.client.check_compat()
         except BridgeError as e:
-            self.compat_ok = False if e.code == errors.UPSTREAM_INCOMPATIBLE else self.compat_ok
-            log.error("MeshChatX compatibility check: %s: %s", e.code, e.message)
+            self.last_compat_error = e.message
+            if e.code == errors.UPSTREAM_INCOMPATIBLE:
+                self.compat_ok, self.compat_checked, self._compat_unavailable = False, True, False
+                self._log_compat(("incompatible", e.message), logging.WARNING,
+                                 "MeshChatX incompatible: %s", e.message)
+            else:
+                # unreachable / not ready: no verdict. An earlier verdict is kept for compat_ok, but while the
+                # last check failed this way dispatch reports upstream_unavailable instead of "incompatible".
+                self._compat_unavailable = True
+                self._log_compat(("unavailable", e.code), logging.WARNING,
+                                 "MeshChatX compatibility check failed: %s: %s", e.code, e.message)
+        else:
+            self.compat_ok, self.compat_checked, self._compat_unavailable = True, True, False
+            self.last_compat_error = None
+            self._log_compat(("ok", info["version"], info["api_version"]), logging.INFO,
+                             "MeshChatX compatible: version=%s api_version=%s", info["version"], info["api_version"])
         return self.compat_ok
+
+    def _log_compat(self, key: tuple, level: int, msg: str, *args) -> None:
+        """Log on the first verdict and on every change (not on each periodic re-check)."""
+        if key != self._compat_logged:
+            self._compat_logged = key
+            log.log(level, msg, *args)
 
 
 def _trunc(text: str, max_bytes: int):
