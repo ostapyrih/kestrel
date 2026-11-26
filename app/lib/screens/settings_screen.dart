@@ -10,6 +10,7 @@ import '../storage/database.dart';
 import 'add_device_screen.dart';
 import 'bridge_setup_screen.dart';
 import 'bridge_widgets.dart';
+import '../update/update_ui.dart';
 import 'devices_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -287,6 +288,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ],
           Text(s.t('bridge_note'), style: text.bodySmall),
+          const UpdateSettingsSection(),
         ],
       ),
     );

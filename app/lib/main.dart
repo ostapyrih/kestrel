@@ -17,6 +17,9 @@ import 'providers.dart';
 import 'screens/chats_screen.dart';
 import 'storage/database.dart';
 import 'storage/repo.dart';
+import 'update/update_bootstrap.dart';
+import 'update/update_service.dart';
+import 'update/update_ui.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -45,6 +48,8 @@ Future<void> main() async {
     ),
   );
   node.bridge = bridge;
+  final updates = await createUpdateService(repo)
+    ..start();
   // The UI comes up immediately; the node starts in the background and the
   // connection indicator reports progress.
   unawaited(
@@ -58,6 +63,7 @@ Future<void> main() async {
         repoProvider.overrideWithValue(repo),
         nodeProvider.overrideWithValue(node),
         bridgeProvider.overrideWithValue(bridge),
+        updateServiceProvider.overrideWithValue(updates),
       ],
       child: const KestrelApp(),
     ),
@@ -67,6 +73,8 @@ Future<void> main() async {
 class KestrelApp extends StatelessWidget {
   const KestrelApp({super.key, this.home});
 
+  static final _navigatorKey = GlobalKey<NavigatorState>();
+
   /// Overridable for tests and screenshots.
   final Widget? home;
 
@@ -75,6 +83,9 @@ class KestrelApp extends StatelessWidget {
     return MaterialApp(
       title: 'Kestrel',
       debugShowCheckedModeBanner: false,
+      navigatorKey: _navigatorKey,
+      builder: (context, child) =>
+          UpdateHost(navigatorKey: _navigatorKey, child: child),
       localizationsDelegates: Strings.delegates,
       supportedLocales: Strings.supportedLocales,
       localeResolutionCallback: Strings.resolve,
