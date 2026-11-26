@@ -1,6 +1,6 @@
 # Kestrel
 
-Kestrel is a [Reticulum](https://reticulum.network/) / LXMF messenger for Android and iOS,
+Kestrel is a [Reticulum](https://reticulum.network/) / LXMF messenger for Android, iOS, Windows, macOS and Linux,
 written in Flutter, plus a server-side sidecar (`kestrel-bridge`) that lets the phone
 act on behalf of a MeshChatX identity.
 
@@ -16,6 +16,21 @@ act on behalf of a MeshChatX identity.
 
 See [docs/PLAN.md](docs/PLAN.md) for the full plan and phase status, and
 [docs/bridge-protocol.md](docs/bridge-protocol.md) for the bridge protocol.
+
+## Platforms
+
+| Platform | Status | Notes |
+| --- | --- | --- |
+| Android | built | APK / AAB |
+| iOS | built | unsigned IPA (sideload) |
+| Windows | built | zip, unsigned (SmartScreen warning) |
+| macOS | built | unsigned DMG (Gatekeeper warning) |
+| Linux | built | AppImage and tar.gz; needs libsecret and a Secret Service (GNOME Keyring / KWallet) |
+
+Each install generates its own identity (a desktop install is its own identity B).
+RNode (LoRa) support is planned: BLE on mobile, USB serial on desktop.
+
+Linux build dependencies: `clang cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev liblzma-dev`.
 
 ## Repository layout
 
