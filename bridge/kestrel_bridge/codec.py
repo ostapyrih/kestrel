@@ -14,6 +14,9 @@ LXMF_TYPE_CMD = b"kestrel.cmd"
 LXMF_TYPE_RESP = b"kestrel.resp"
 LXMF_TYPE_PUSH = b"kestrel.push"
 
+# Link-level packet type (the "t" key) of the reason packet sent before a rejected/revoked Link is closed.
+REJECT_TYPE = "kestrel.reject"
+
 
 def pack(obj) -> bytes:
     return msgpack.packb(obj, use_bin_type=True)
@@ -36,6 +39,11 @@ def unpack(data, max_bytes: int = 1 << 20):
         )
     except Exception as e:  # msgpack raises several unrelated exception types
         raise errors.BridgeError(errors.BAD_REQUEST, f"invalid msgpack: {type(e).__name__}") from None
+
+
+def reject_packet(code: str, server_time: float) -> bytes:
+    """The one packet an unauthenticated (unknown/revoked key) or just revoked Link receives (spec 2.1)."""
+    return pack({"t": REJECT_TYPE, "code": code, "server_time": float(server_time)})
 
 
 def ok(result: dict) -> dict:

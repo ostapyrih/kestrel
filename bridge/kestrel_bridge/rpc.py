@@ -5,6 +5,8 @@ import asyncio
 import concurrent.futures
 import logging
 import threading
+import time
+from collections import deque
 
 import RNS
 
@@ -94,6 +96,8 @@ class _LinkState:
         self.link = link
         self.device_id: str | None = None
         self.sub: Subscriber | None = None
+        self.closing = False                 # a reason packet was sent / the Link is about to be closed
+        self.timer: threading.Timer | None = None
 
     def send(self, data: bytes) -> bool:
         link = self.link
@@ -120,6 +124,9 @@ class RpcServer:
         self._stop = threading.Event()
         self._announcer: AnnounceWatcher | None = None
         self._busy: dict[bytes, int] = {}       # link_id -> requests being handled right now
+        self._rej_clock = time.monotonic
+        self._rej_ident: dict[bytes, deque] = {}    # identity hash -> times of recent reason packets
+        self._rej_global: deque = deque()
         self.service.online = self.has_link
         self.registry.subscribe(self._on_device_event)
 
@@ -169,22 +176,73 @@ class RpcServer:
         return self.active_link(device_id) is not None
 
     def close_device(self, device_id: str) -> int:
-        """Tear down every Link of a device. A Link that is answering a request right now (a device that
-        revokes itself) is closed one second later so that it still receives the response."""
+        """Tell every Link of a device why (``kestrel.reject`` / ``device_revoked``), then tear it down after the
+        grace delay. A Link that is answering a request right now (a device that revokes itself) gets the reason
+        packet one second later, i.e. after its response."""
         with self._lock:
             states = [st for st in self._links.values() if st.device_id == device_id]
         for st in states:
             st.device_id = None          # no further command is accepted on this Link
-            if self._busy.get(st.link.link_id):
-                t = threading.Timer(1.0, st.link.teardown)
-                t.daemon = True
-                t.start()
-            else:
-                try:
-                    st.link.teardown()
-                except Exception:
-                    log.exception("could not close a link")
+            delay = 1.0 if self._busy.get(st.link.link_id) else 0.0
+            self._reject_and_close(st, errors.DEVICE_REVOKED, delay)
         return len(states)
+
+    def _reject_allowed(self, identity) -> bool:
+        """Sliding one-minute window of reason packets per remote identity and over all identities."""
+        now = self._rej_clock()
+        limit = self.cfg.limits.reject_rate_per_minute
+        try:
+            key = bytes(identity.hash)
+        except Exception:
+            key = b""
+        with self._lock:
+            for q in [self._rej_global, *self._rej_ident.values()]:
+                while q and now - q[0] > 60:
+                    q.popleft()
+            for k in [k for k, q in self._rej_ident.items() if not q]:
+                del self._rej_ident[k]
+            q = self._rej_ident.setdefault(key, deque())
+            if len(q) >= limit or len(self._rej_global) >= limit * 10:
+                return False
+            q.append(now)
+            self._rej_global.append(now)
+            return True
+
+    def _reject_and_close(self, st: _LinkState, code: str, send_delay: float = 0.0, send: bool = True) -> None:
+        """Send ONE reason packet over the Link, then tear it down after ``limits.reject_grace`` seconds (or
+        earlier when the client closes it: ``_link_closed`` cancels the timer)."""
+        if st.closing:
+            return
+        st.closing = True
+        link = st.link
+
+        def _teardown() -> None:
+            try:
+                if link.status != RNS.Link.CLOSED:
+                    link.teardown()
+            except Exception:
+                log.exception("could not close a link")
+
+        def _go() -> None:
+            if send and link.status == RNS.Link.ACTIVE:
+                try:
+                    st.send(codec.reject_packet(code, self.service._clock()))
+                except Exception:
+                    log.exception("could not send the reject reason")
+            grace = self.cfg.limits.reject_grace
+            if grace <= 0 or not send:
+                _teardown()
+                return
+            st.timer = threading.Timer(grace, _teardown)
+            st.timer.daemon = True
+            st.timer.start()
+
+        if send_delay > 0:
+            st.timer = threading.Timer(send_delay, _go)
+            st.timer.daemon = True
+            st.timer.start()
+        else:
+            _go()
 
     def _on_device_event(self, event: str, device) -> None:
         if event == "revoked":
@@ -222,12 +280,22 @@ class RpcServer:
 
     def _remote_identified(self, link, identity) -> None:
         dev = device_of(identity, self.registry)
-        if dev is None:
-            log.warning("link identified with an unknown or revoked key (identity %s), closing",
-                        RNS.prettyhexrep(identity.hash))
-            link.teardown()
-            return
         st = self._links.get(link.link_id)
+        if dev is None:
+            revoked = None
+            try:
+                revoked = self.registry.by_pubkey(identity.get_public_key().hex())
+            except Exception:
+                pass
+            code = errors.DEVICE_REVOKED if revoked is not None else errors.UNAUTHORIZED
+            log.warning("link identified with an unknown or revoked key (identity %s): %s",
+                        RNS.prettyhexrep(identity.hash), code)
+            if st is None:
+                link.teardown()
+                return
+            # no data other than the one reason packet ever goes to this Link; over the rate limit it is closed silently
+            self._reject_and_close(st, code, send=self._reject_allowed(identity))
+            return
         if st is not None:
             st.device_id = dev.device_id
         self.registry.touch_seen(dev.device_id)
@@ -236,6 +304,8 @@ class RpcServer:
     def _link_closed(self, link) -> None:
         with self._lock:
             st = self._links.pop(link.link_id, None)
+        if st is not None and st.timer is not None:
+            st.timer.cancel()
         if st is not None and st.sub is not None:
             self.push.unsubscribe(st.sub)
 
