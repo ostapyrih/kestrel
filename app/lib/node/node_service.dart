@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:kestrel_rns/kestrel_rns.dart';
 
+import '../bridge/bridge_service.dart';
 import '../storage/database.dart';
 import '../storage/repo.dart';
 import 'identity_store.dart';
@@ -43,6 +44,9 @@ class NodeService {
   final LxmRouterConfig routerConfig;
   final KestrelStorage _rnsStorage;
 
+  /// Account A: set by `main` (null in Standalone-only setups and tests).
+  BridgeService? bridge;
+
   Reticulum? _rns;
   LxmRouter? _router;
   RnsInterface? _iface;
@@ -62,6 +66,7 @@ class NodeService {
   NodeConnection get connection => _current;
   Stream<NodeConnection> get connectionChanges => _connection.stream;
 
+  Reticulum get rns => _rns!;
   Identity get identity => _identity!;
   LxmRouter get router => _router!;
   bool get isRunning => _router != null;
@@ -223,7 +228,9 @@ class NodeService {
       throw StateError('unknown chat');
     }
     if (chat.accountIdentity != 'B') {
-      throw StateError('bridge accounts are not available yet');
+      final b = bridge;
+      if (b == null) throw StateError('bridge is not available');
+      return b.sendMessage(chatId, text);
     }
     final ids = await repo.insertOutgoing(
       identity: 'B',
@@ -257,6 +264,8 @@ class NodeService {
 
   Future<void> _onIncoming(LxmReceived r) async {
     final m = r.message;
+    // Service messages from the bridge (LXMF fallback) are not chat messages.
+    if (bridge?.handleLxmf(m) ?? false) return;
     final peerHex = toHex(m.sourceHash);
     final peer = router.peer(m.sourceHash);
     final chatId = await repo.findOrCreateChat(

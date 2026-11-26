@@ -1,5 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'bridge/bridge_connection.dart';
+import 'bridge/bridge_service.dart';
+import 'bridge/bridge_store.dart';
+import 'bridge/codec.dart';
 import 'node/node_service.dart';
 import 'storage/database.dart';
 import 'storage/repo.dart';
@@ -88,3 +92,50 @@ final identityInfoProvider = FutureProvider<IdentityInfo>((ref) async {
 
 String serverLabel(String? host, String? port) =>
     '${host ?? defaultServerHost}:${port ?? defaultServerPort}';
+
+// ------------------------------------------------------------------- bridge
+
+final bridgeProvider = Provider<BridgeService>(
+  (ref) => throw UnimplementedError(),
+);
+
+final bridgeStatusProvider = StreamProvider<BridgeStatus>((ref) async* {
+  final b = ref.watch(bridgeProvider);
+  yield b.status;
+  yield* b.statusChanges;
+});
+
+/// Device registry cache (names for the origin-device label, devices screen).
+final bridgeDevicesProvider = StreamProvider<List<DeviceRecord>>((ref) {
+  final b = ref.watch(bridgeProvider);
+  return b.repo.watch(b.store.devices);
+});
+
+final bridgeConfiguredProvider = StreamProvider<bool>((ref) {
+  final repo = ref.watch(repoProvider);
+  return repo.watch(() async {
+    final k = await repo.getSetting(SettingKeys.bridgePubkey);
+    return k != null && k.length == 128;
+  });
+});
+
+final bridgeRevokedProvider = StreamProvider<bool>((ref) {
+  final repo = ref.watch(repoProvider);
+  return repo.watch(
+    () async => (await repo.getSetting(SettingKeys.bridgeRevoked)) == '1',
+  );
+});
+
+final rrcRoomsProvider = StreamProvider<List<RrcRoomRow>>((ref) {
+  final b = ref.watch(bridgeProvider);
+  return b.repo.watch(b.store.rooms);
+});
+
+typedef RoomKey = ({String hub, String room});
+
+final rrcMessagesProvider = StreamProvider.family<List<RrcMessageRow>, RoomKey>(
+  (ref, k) {
+    final b = ref.watch(bridgeProvider);
+    return b.repo.watch(() => b.store.rrcMessages(k.hub, k.room));
+  },
+);
