@@ -124,20 +124,21 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           cat > install-notes.md <<'NOTES'
-          ### Як встановити IPA
+          ### How to install the IPA
 
-          IPA непідписаний (`kestrel-*-unsigned.ipa`), тому встановлюється тільки через sideload зі своїм Apple ID:
+          The IPA is unsigned (`kestrel-*-unsigned.ipa`), so it can only be installed by sideloading with your own Apple ID:
 
-          1. Завантажте `kestrel-*-unsigned.ipa` з цього релізу.
-          2. Встановіть через AltStore, SideStore або Sideloadly: вони підписують IPA вашим Apple ID.
-          3. З безкоштовним Apple ID підпис діє 7 днів, після чого додаток потрібно переписати підписом (AltStore/SideStore можуть робити це автоматично).
+          1. Download `kestrel-*-unsigned.ipa` from this release.
+          2. Install it with Sideloadly, AltStore or SideStore; they sign the IPA with your Apple ID.
+          3. On iOS 16 and later, enable Developer Mode (Settings > Privacy & Security > Developer Mode).
+          4. Free Apple ID signatures expire after 7 days, after which the app must be re-signed (AltStore/SideStore can refresh it automatically).
           NOTES
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" --title "$TAG" --notes ""
           fi
           gh release upload "$TAG" dist/* --clobber
           body="$(gh release view "$TAG" --json body --jq .body)"
-          if ! printf '%s' "$body" | grep -q '### Як встановити IPA'; then
+          if ! printf '%s' "$body" | grep -q '### How to install the IPA'; then
             { printf '%s\n\n' "$body"; cat install-notes.md; } > full-notes.md
             gh release edit "$TAG" --notes-file full-notes.md
           fi
