@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/ostapyrih/kestrel/compare/app-v0.3.0...app-v0.4.0) (2026-11-26)
+
+
+### Features
+
+* **app:** app icon ([132d1d6](https://github.com/ostapyrih/kestrel/commit/132d1d6323dd6fb89f02b6bd17fbf9ad716735de))
+
 ## [0.3.0](https://github.com/ostapyrih/kestrel/compare/app-v0.2.0...app-v0.3.0) (2026-11-26)
 
 
