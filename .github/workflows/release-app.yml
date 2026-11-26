@@ -9,18 +9,30 @@ on:
         description: "Release tag (e.g. app-v0.1.0)"
         required: true
         type: string
+      dry_run:
+        description: "Build everything but skip release upload and notes (checks the jobs)"
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       tag:
         description: "Release tag (e.g. app-v0.1.0)"
         required: true
         type: string
+      dry_run:
+        description: "Build everything but skip release upload and notes (checks the jobs)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 env:
   TAG: ${{ inputs.tag || github.ref_name }}
+  # A dry run builds the dispatched ref (e.g. a feature branch), a real run the tag.
+  SRC_REF: ${{ inputs.dry_run && github.ref || inputs.tag || github.ref_name }}
 
 jobs:
   android:
@@ -31,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref_name }}
+          ref: ${{ env.SRC_REF }}
       - name: Compute version
         run: echo "VERSION=${TAG#app-v}" >> "$GITHUB_ENV"
       - uses: actions/setup-java@v4
@@ -88,7 +100,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref_name }}
+          ref: ${{ env.SRC_REF }}
       - name: Compute version
         run: echo "VERSION=${TAG#app-v}" >> "$GITHUB_ENV"
       - uses: subosito/flutter-action@v2
@@ -107,8 +119,146 @@ jobs:
           name: ios
           path: dist/*
 
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SRC_REF }}
+      - name: Compute version
+        shell: bash
+        run: echo "VERSION=${TAG#app-v}" >> "$GITHUB_ENV"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build windows --release
+      - name: Package zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force ../dist | Out-Null
+          $name = "kestrel-$env:VERSION-windows-x64"
+          Copy-Item build/windows/x64/runner/Release $name -Recurse
+          Compress-Archive -Path $name -DestinationPath "../dist/$name.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+
+  macos:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SRC_REF }}
+      - name: Compute version
+        run: echo "VERSION=${TAG#app-v}" >> "$GITHUB_ENV"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build macos --release
+      - name: Package unsigned DMG
+        run: |
+          mkdir -p ../dist dmg-root
+          app="$(ls -d build/macos/Build/Products/Release/*.app | head -n 1)"
+          cp -R "$app" dmg-root/
+          ln -s /Applications dmg-root/Applications
+          hdiutil create -volname "Kestrel" -srcfolder dmg-root -ov -format UDZO \
+            "../dist/kestrel-${VERSION}-macos.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*
+
+  linux:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SRC_REF }}
+      - name: Compute version
+        run: echo "VERSION=${TAG#app-v}" >> "$GITHUB_ENV"
+      - name: Install Linux desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev liblzma-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build linux --release
+      - name: Package tar.gz
+        run: |
+          mkdir -p ../dist
+          name="kestrel-${VERSION}-linux-x64"
+          rm -rf "$name"
+          cp -R build/linux/x64/release/bundle "$name"
+          tar -czf "../dist/${name}.tar.gz" "$name"
+      - name: Package AppImage
+        env:
+          # appimagetool 1.9.1; digest as published by GitHub for the release asset.
+          AIT_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/appimagetool" \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          echo "$AIT_SHA256  $RUNNER_TEMP/appimagetool" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          rm -rf AppDir
+          mkdir -p AppDir/usr/bin
+          cp -R build/linux/x64/release/bundle/. AppDir/usr/bin/
+          cat > AppDir/AppRun <<'APPRUN'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          exec "$HERE/usr/bin/kestrel" "$@"
+          APPRUN
+          chmod +x AppDir/AppRun
+          cat > AppDir/kestrel.desktop <<'DESKTOP'
+          [Desktop Entry]
+          Type=Application
+          Name=Kestrel
+          Comment=Reticulum / LXMF messenger
+          Exec=kestrel
+          Icon=kestrel
+          Categories=Network;InstantMessaging;
+          Terminal=false
+          DESKTOP
+          # Placeholder icon (solid teal) until the app has a real one.
+          python3 - <<'PY'
+          import struct, zlib
+          w = h = 256
+          row = b"\x00" + bytes([0, 150, 136]) * w
+          raw = row * h
+          def chunk(t, d):
+              c = struct.pack(">I", len(d)) + t + d
+              return c + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+          png = (b"\x89PNG\r\n\x1a\n"
+                 + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                 + chunk(b"IDAT", zlib.compress(raw))
+                 + chunk(b"IEND", b""))
+          open("AppDir/kestrel.png", "wb").write(png)
+          PY
+          ARCH=x86_64 "$RUNNER_TEMP/appimagetool" --appimage-extract-and-run AppDir \
+            "../dist/kestrel-${VERSION}-linux-x86_64.AppImage"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*
+
   publish:
-    needs: [android, ios]
+    needs: [android, ios, windows, macos, linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -118,7 +268,14 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: sha256sum kestrel-* > SHA256SUMS.txt
+      - name: Keep checksums of a dry run
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: dist/SHA256SUMS.txt
       - name: Upload assets and append install notes
+        if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -133,6 +290,15 @@ jobs:
           3. On iOS 16 and later, enable Developer Mode (Settings > Privacy & Security > Developer Mode).
           4. Free Apple ID signatures expire after 7 days, after which the app must be re-signed (AltStore/SideStore can refresh it automatically).
           NOTES
+          cat > desktop-notes.md <<'NOTES'
+          ### Desktop install
+
+          The desktop builds are unsigned, so each system shows a warning on first launch.
+
+          - **Windows** (`kestrel-*-windows-x64.zip`): unzip the archive and run `kestrel.exe`. SmartScreen warns about an unknown publisher: click *More info*, then *Run anyway*.
+          - **macOS** (`kestrel-*-macos.dmg`): open the DMG and drag Kestrel to Applications. On first launch use right-click, then *Open*, or run `xattr -dr com.apple.quarantine /Applications/Kestrel.app` in a terminal.
+          - **Linux** (`kestrel-*-linux-x86_64.AppImage` or `kestrel-*-linux-x64.tar.gz`): `chmod +x` the AppImage and run it. Kestrel keeps its identity key in the system keyring, so it needs libsecret and a running Secret Service (GNOME Keyring or KWallet).
+          NOTES
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" --title "$TAG" --notes ""
           fi
@@ -140,5 +306,10 @@ jobs:
           body="$(gh release view "$TAG" --json body --jq .body)"
           if ! printf '%s' "$body" | grep -q '### How to install the IPA'; then
             { printf '%s\n\n' "$body"; cat install-notes.md; } > full-notes.md
+            gh release edit "$TAG" --notes-file full-notes.md
+          fi
+          body="$(gh release view "$TAG" --json body --jq .body)"
+          if ! printf '%s' "$body" | grep -q '### Desktop install'; then
+            { printf '%s\n\n' "$body"; cat desktop-notes.md; } > full-notes.md
             gh release edit "$TAG" --notes-file full-notes.md
           fi
