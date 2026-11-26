@@ -167,6 +167,43 @@ def cmd_healthcheck(cfg: Config, strict: bool = False) -> int:
     return EXIT_OK
 
 
+class LogThrottle:
+    """Allow an action at most once per ``interval`` seconds."""
+
+    def __init__(self, interval: float = 60.0, clock=time.monotonic):
+        self.interval, self._clock, self._last = interval, clock, None
+
+    def ready(self) -> bool:
+        now = self._clock()
+        if self._last is None or now - self._last >= self.interval:
+            self._last = now
+            return True
+        return False
+
+
+async def upstream_step(service, client, throttle: LogThrottle, wait_timeout: float = 30) -> float:
+    """One iteration of the upstream loop; returns the delay before the next one."""
+    from .errors import BridgeError
+    if service.compat_ok:
+        await service.recheck_compat()
+        return 300
+    try:
+        await client.wait_ready(timeout=wait_timeout)
+    except BridgeError:
+        if throttle.ready():
+            log.info("MeshChatX is not ready yet (waited %ss); compatibility check pending", wait_timeout)
+        return 5
+    if await service.recheck_compat():
+        try:
+            await service.refresh(force=True)
+        except BridgeError as e:
+            log.warning("initial index refresh failed: %s", e.code)
+        return 300
+    if client.version is None or client._version_ok(client.version):
+        return 10   # not usable yet; an incompatible version is only re-checked slowly
+    return 300
+
+
 async def _run(cfg: Config) -> None:
     import RNS
     from .errors import BridgeError
@@ -244,24 +281,9 @@ async def _run(cfg: Config) -> None:
 
     async def upstream_loop():
         """Wait for MeshChatX, check compatibility, index; re-check every 5 minutes (10 s until first success)."""
+        throttle = LogThrottle()
         while True:
-            delay = 300
-            if not service.compat_ok:
-                try:
-                    await client.wait_ready(timeout=30)
-                except BridgeError:
-                    await asyncio.sleep(5)
-                    continue
-                if await service.recheck_compat():
-                    try:
-                        await service.refresh(force=True)
-                    except BridgeError as e:
-                        log.warning("initial index refresh failed: %s", e.code)
-                elif client.version is None or client._version_ok(client.version):
-                    delay = 10   # not usable yet; an incompatible version is only re-checked slowly
-            else:
-                await service.recheck_compat()
-            await asyncio.sleep(delay)
+            await asyncio.sleep(await upstream_step(service, client, throttle))
 
     started_at = time.time()
 
