@@ -104,9 +104,12 @@ void main() {
     final a = await _open(path);
     expect(
       Sqflite.firstIntValue(await a.db.rawQuery('PRAGMA user_version')),
-      2,
+      3,
     );
     expect(await _count(a, 'peers'), 0); // table from migration 2 exists
+    expect(await _count(a, 'bridge_devices'), 0); // migration 3 tables
+    expect(await _count(a, 'rrc_rooms'), 0);
+    expect((await Repo(a).chat(1))!.bridgeLastId, isNull);
     expect((await Repo(a).messages(1)).single.text, 'kept');
     expect((await Repo(a).chat(1))!.title, 'Old chat');
     expect(await _count(a, 'accounts'), 2); // A placeholder added on open

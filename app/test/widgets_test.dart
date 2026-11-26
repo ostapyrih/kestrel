@@ -1,14 +1,15 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:kestrel/bridge/bridge_connection.dart';
 import 'package:kestrel/main.dart';
 import 'package:kestrel/node/node_service.dart';
 import 'package:kestrel/platform.dart';
+import 'package:kestrel/screens/bridge_setup_screen.dart';
 import 'package:kestrel/screens/chat_screen.dart';
 import 'package:kestrel/screens/chats_screen.dart';
 import 'package:kestrel/screens/new_chat_screen.dart';
 import 'package:kestrel/screens/settings_screen.dart';
-import 'package:kestrel/storage/database.dart';
 import 'package:kestrel/storage/repo.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -25,6 +26,9 @@ void main() {
     NodeConnection conn = NodeConnection.online,
     FakeNode? node,
     Repo? repo,
+    FakeBridge? bridge,
+    BridgeStatus bridgeStatus = const BridgeStatus(BridgeState.off),
+    bool bridgeConfigured = false,
     Locale locale = const Locale('uk'),
     Size size = const Size(420, 860),
   }) async {
@@ -37,7 +41,14 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     await tester.pumpWidget(
       ProviderScope(
-        overrides: fixtureOverrides(conn: conn, node: node, repo: repo),
+        overrides: fixtureOverrides(
+          conn: conn,
+          node: node,
+          repo: repo,
+          bridge: bridge,
+          bridgeStatus: bridgeStatus,
+          bridgeConfigured: bridgeConfigured,
+        ),
         child: KestrelApp(home: home),
       ),
     );
@@ -155,7 +166,7 @@ void main() {
 
     testWidgets('composer for an A chat shows A', (tester) async {
       await show(tester, const ChatScreen(chatId: 2));
-      expect(find.text('Від: A (міст)'), findsOneWidget);
+      expect(find.text('Від: A (через міст)'), findsOneWidget);
     });
 
     testWidgets('sending goes through the node', (tester) async {
@@ -277,33 +288,52 @@ void main() {
       expect(node.servers, [('rns.example.org', 4343)]);
     });
 
-    testWidgets('bridge switch says "буде доступно" and persists the setting', (
+    testWidgets('bridge switch without a key opens the bridge setup', (
       tester,
     ) async {
-      late AppDatabase adb;
-      late Repo repo;
-      await tester.runAsync(() async {
-        adb = await AppDatabase.open(
-          inMemoryDatabasePath,
-          factory: databaseFactoryFfi,
-        );
-        repo = Repo(adb);
-      });
-      await show(tester, const SettingsScreen(), repo: repo);
+      final bridge = FakeBridge();
+      await show(tester, const SettingsScreen(), bridge: bridge);
       await tester.scrollUntilVisible(
         find.byKey(const ValueKey('bridge-switch')),
         200,
         scrollable: find.byType(Scrollable).first,
       );
-      expect(find.text('буде доступно'), findsOneWidget);
-      await tester.ensureVisible(find.byKey(const ValueKey('bridge-switch')));
+      expect(find.text('потрібен ключ моста'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('bridge-switch')));
+      await tester.pumpAndSettle();
+      expect(find.byType(BridgeSetupScreen), findsOneWidget);
+      // pasting the --print-address output connects
+      await tester.enterText(
+        find.byKey(const ValueKey('bridge-key')),
+        'bridge public key (hex):   ${'ab' * 64}',
+      );
+      await tester.tap(find.byKey(const ValueKey('bridge-connect')));
+      await tester.pumpAndSettle();
+      expect(bridge.configured, hasLength(1));
+      expect(find.byType(BridgeSetupScreen), findsNothing);
+    });
+
+    testWidgets('with a key the switch toggles the bridge service', (
+      tester,
+    ) async {
+      final bridge = FakeBridge();
+      await show(
+        tester,
+        const SettingsScreen(),
+        bridge: bridge,
+        bridgeConfigured: true,
+        bridgeStatus: const BridgeStatus(BridgeState.connected),
+      );
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('bridge-switch')),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('Міст: онлайн'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('bridge-switch')));
       await tester.pump();
-      await tester.runAsync(() async {
-        await tester.tap(find.byKey(const ValueKey('bridge-switch')));
-        await Future<void>.delayed(const Duration(milliseconds: 300));
-        expect(await repo.bridgeEnabled(), isTrue);
-        await adb.close();
-      });
+      expect(bridge.enabled, [true]);
+      expect(find.byKey(const ValueKey('my-devices')), findsOneWidget);
     });
   });
 
