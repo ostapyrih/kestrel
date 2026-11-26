@@ -104,10 +104,30 @@ def main() -> None:
     if go_file:
         out("PHASE1", True)
         wait(lambda: os.path.exists(go_file), 180, "go file")
-        # the transport node was restarted: its path table is empty; S must be (re)found again
-        RNS.Transport.expire_path(dest.hash)
-        find_path(dest, 90)
-        link2 = connect(dest)
+        # the transport node was restarted: its path table is empty; S must be (re)found again.
+        # Our own TCP interface may still be reconnecting, so retry with a fresh path lookup.
+        link2 = None
+        for attempt in range(6):
+            RNS.Transport.expire_path(dest.hash)
+            find_path(dest, 90)
+            box = {}
+            cand = RNS.Link(dest, established_callback=lambda l: box.update(up=True),
+                            closed_callback=lambda l: box.update(closed=True))
+            end = time.time() + 30
+            while not (box.get("up") or box.get("closed")) and time.time() < end:
+                time.sleep(0.1)
+            if box.get("up") and cand.status == RNS.Link.ACTIVE:
+                link2 = cand
+                break
+            out("link2_retry", attempt)
+            try:
+                cand.teardown()
+            except Exception:
+                pass
+            time.sleep(3)
+        if link2 is None:
+            out("TIMEOUT", "link after restart")
+            sys.exit(3)
         link2.identify(b)
         time.sleep(1.0)
         out("hello2", request(link2, "/hello", {"protocol_version": 1, "client": "it"}))

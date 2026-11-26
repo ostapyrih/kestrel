@@ -108,7 +108,7 @@ class AnnounceWatcherTest(unittest.TestCase):
         self.announced += 1
 
     def watcher(self, interval=1800):
-        return AnnounceWatcher(self.announce, lambda: [self.iface], interval, clock=self.clock)
+        return AnnounceWatcher(self.announce, lambda: [self.iface], interval, clock=self.clock, follow_ups=())
 
     def test_announces_once_the_interface_is_online_not_before(self):
         w = self.watcher()
@@ -151,6 +151,36 @@ class AnnounceWatcherTest(unittest.TestCase):
         self.assertTrue(w.tick())
         self.assertEqual(self.announced, 2)
 
+    def test_follow_up_announces_after_start_and_after_reconnect(self):
+        self.iface.reconnect()
+        w = AnnounceWatcher(self.announce, lambda: [self.iface], 1800, clock=self.clock)   # default follow-ups
+        self.assertTrue(w.tick())                       # startup
+        self.clock.advance(9)
+        self.assertFalse(w.tick())
+        self.clock.advance(1)
+        self.assertTrue(w.tick())                       # +10 s
+        self.clock.advance(50)
+        self.assertTrue(w.tick())                       # +60 s
+        self.clock.advance(500)
+        self.assertFalse(w.tick())
+        self.assertEqual(self.announced, 3)
+        self.iface.drop()
+        w.tick()
+        self.iface.reconnect()
+        self.assertTrue(w.tick())                       # reconnect
+        self.clock.advance(10)
+        self.assertTrue(w.tick())                       # and its follow-up
+        self.assertEqual(self.announced, 5)
+
+    def test_follow_ups_are_dropped_while_offline(self):
+        self.iface.reconnect()
+        w = AnnounceWatcher(self.announce, lambda: [self.iface], 1800, clock=self.clock)
+        w.tick()
+        self.iface.drop()
+        self.clock.advance(100)
+        self.assertFalse(w.tick())
+        self.assertEqual(self.announced, 1)
+
     def test_failed_announce_is_retried_next_tick(self):
         self.iface.reconnect()
         calls = []
@@ -160,13 +190,13 @@ class AnnounceWatcherTest(unittest.TestCase):
             if len(calls) == 1:
                 raise RuntimeError("boom")
 
-        w = AnnounceWatcher(flaky, lambda: [self.iface], 1800, clock=self.clock)
+        w = AnnounceWatcher(flaky, lambda: [self.iface], 1800, clock=self.clock, follow_ups=())
         self.assertFalse(w.tick())
         self.assertTrue(w.tick())
         self.assertEqual(len(calls), 2)
 
     def test_untracked_interfaces_means_periodic_only(self):
-        w = AnnounceWatcher(self.announce, None, 100, clock=self.clock)
+        w = AnnounceWatcher(self.announce, None, 100, clock=self.clock, follow_ups=())
         self.assertTrue(w.tick())
         self.assertFalse(w.tick())
         self.clock.advance(101)
