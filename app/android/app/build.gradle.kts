@@ -44,6 +44,8 @@ android {
                 keyPassword = keystoreProperties["keyPassword"] as String
                 storeFile = file(keystoreProperties["storeFile"] as String)
                 storePassword = keystoreProperties["storePassword"] as String
+                // The CI keystore is PKCS12 (.p12); key.properties may override.
+                storeType = (keystoreProperties["storeType"] as String?) ?: "pkcs12"
             }
         }
     }
