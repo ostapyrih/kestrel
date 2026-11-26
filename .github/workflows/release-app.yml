@@ -89,8 +89,11 @@ jobs:
           cp build/app/outputs/bundle/release/app-release.aab "../dist/kestrel-${VERSION}${SUFFIX}.aab"
       - uses: actions/upload-artifact@v4
         with:
-          name: android
-          path: dist/*
+          name: app-android
+          path: dist/kestrel-*
+          if-no-files-found: error
+          # Already-compressed packages: skip re-compression.
+          compression-level: 0
 
   ios:
     runs-on: macos-latest
@@ -116,8 +119,11 @@ jobs:
           zip -qry "../dist/kestrel-${VERSION}-unsigned.ipa" Payload
       - uses: actions/upload-artifact@v4
         with:
-          name: ios
-          path: dist/*
+          name: app-ios
+          path: dist/kestrel-*
+          if-no-files-found: error
+          # Already-compressed packages: skip re-compression.
+          compression-level: 0
 
   windows:
     runs-on: windows-latest
@@ -146,8 +152,11 @@ jobs:
           Compress-Archive -Path $name -DestinationPath "../dist/$name.zip"
       - uses: actions/upload-artifact@v4
         with:
-          name: windows
-          path: dist/*
+          name: app-windows
+          path: dist/kestrel-*
+          if-no-files-found: error
+          # Already-compressed packages: skip re-compression.
+          compression-level: 0
 
   macos:
     runs-on: macos-latest
@@ -176,8 +185,11 @@ jobs:
             "../dist/kestrel-${VERSION}-macos.dmg"
       - uses: actions/upload-artifact@v4
         with:
-          name: macos
-          path: dist/*
+          name: app-macos
+          path: dist/kestrel-*
+          if-no-files-found: error
+          # Already-compressed packages: skip re-compression.
+          compression-level: 0
 
   linux:
     runs-on: ubuntu-latest
@@ -254,17 +266,26 @@ jobs:
             "../dist/kestrel-${VERSION}-linux-x86_64.AppImage"
       - uses: actions/upload-artifact@v4
         with:
-          name: linux
-          path: dist/*
+          name: app-linux
+          path: dist/kestrel-*
+          if-no-files-found: error
+          # Already-compressed packages: skip re-compression.
+          compression-level: 0
 
   publish:
     needs: [android, ios, windows, macos, linux]
     runs-on: ubuntu-latest
     steps:
+      # Only the app-* artifacts: a workflow_call shares its run with the caller
+      # (release-please), whose unrelated artifacts (e.g. *.dockerbuild records)
+      # break an unfiltered download.
       - uses: actions/download-artifact@v4
         with:
+          pattern: app-*
           path: dist
           merge-multiple: true
+      - name: List dist
+        run: ls -la dist
       - name: Checksums
         working-directory: dist
         run: sha256sum kestrel-* > SHA256SUMS.txt
