@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kestrel/node/identity_store.dart';
 import 'package:kestrel/node/node_service.dart';
@@ -222,8 +220,8 @@ void main() {
     () async {
       await exchangeAnnounces();
       // Announce freshness has one second resolution.
-    await Future<void>.delayed(const Duration(milliseconds: 1200));
-    final updates = <LxmPeer>[];
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      final updates = <LxmPeer>[];
       final sub = peer.peerUpdates.listen(updates.add);
       await node.setDisplayName('New Name');
       await until(() async => updates.any((p) => p.displayName == 'New Name'));
