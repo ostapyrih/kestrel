@@ -1,9 +1,12 @@
 """Integration helper: a Python client in the role of the phone identity B.
 
-usage: python -m tests.it_client_b <config_dir> <identity_file> <bridge_pubkey_hex> <peer_hash_hex> [<go_file>]
-Prints "RESULT <name> <json>" lines; the test driver reads them. With <go_file> the client pauses after
-phase 1 (RESULT PHASE1) until that file exists, then forgets the path to S and calls /hello again
-(phase 2: used after the test driver restarted the transport node).
+usage: python -m tests.it_client_b <config_dir> <identity_file> <bridge_pubkey_hex> <peer_hash_hex> <go_file> <qr_file> <revoke_file>
+Prints "RESULT <name> <json>" lines; the test driver reads them.
+
+B1 is the bootstrap device. Phase 1: the usual calls, then (1) it waits for <qr_file> (the pairing QR text of
+device B2, written by the driver), approves it over its identified Link and waits for <revoke_file>, then (2)
+revokes B2. After that it pauses (RESULT PHASE1) until <go_file> exists, forgets the path to S and calls /hello
+again (phase 2: used after the test driver restarted the transport node).
 """
 import json
 import os
@@ -12,6 +15,8 @@ import time
 
 import msgpack
 import RNS
+
+from kestrel_bridge.devices import decode_pairing_qr, pairing_sign_message
 
 
 T0 = time.time()
@@ -59,8 +64,7 @@ def find_path(dest, timeout):
 
 
 def main() -> None:
-    cfgdir, idfile, s_pub, peer = sys.argv[1:5]
-    go_file = sys.argv[5] if len(sys.argv) > 5 else None
+    cfgdir, idfile, s_pub, peer, go_file, qr_file, revoke_file = sys.argv[1:8]
     RNS.Reticulum(configdir=cfgdir, loglevel=int(os.environ.get("IT_RNS_LOG", RNS.LOG_WARNING)))
     b = RNS.Identity.from_file(idfile)
     s_ident = RNS.Identity(create_keys=False)
@@ -71,7 +75,7 @@ def main() -> None:
     # 1. an impostor (key not in the whitelist) must not get any service
     bad = connect(dest)
     bad.identify(RNS.Identity())
-    resp = request(bad, "/hello", {"protocol_version": 1}, timeout=10)
+    resp = request(bad, "/hello", {"protocol_version": 2}, timeout=10)
     out("impostor", resp if resp is None else resp)
     try:
         bad.teardown()
@@ -85,10 +89,11 @@ def main() -> None:
     link.set_resource_strategy(RNS.Link.ACCEPT_ALL)
     link.set_resource_concluded_callback(lambda r: pushes.append(msgpack.unpackb(r.data.read(), raw=False)))
     # a request before identify() is refused
-    out("pre_identify", request(link, "/hello", {"protocol_version": 1}, timeout=10))
+    out("pre_identify", request(link, "/hello", {"protocol_version": 2}, timeout=10))
     link.identify(b)
     time.sleep(1.0)
-    out("hello", request(link, "/hello", {"protocol_version": 1, "client": "it"}))
+    out("hello_v1", request(link, "/hello", {"protocol_version": 1, "client": "old"}))
+    out("hello", request(link, "/hello", {"protocol_version": 2, "client": "it"}))
     out("sync", request(link, "/sync_chats", {"cursor": 0}))
     out("messages", request(link, "/get_messages", {"peer": peer, "limit": 10}))
     out("send", request(link, "/send_lxmf", {"cmd_id": "it-cmd-000001", "to": peer, "text": "from phone"}))
@@ -99,6 +104,24 @@ def main() -> None:
     out("SUBSCRIBED", True)
     wait(lambda: any(p.get("event") == "lxmf.message" for p in pushes), 60, "push")
     out("push", [p for p in pushes if p.get("event") == "lxmf.message"][0])
+
+    # pairing: approve device B2 from its QR text, over this identified Link
+    wait(lambda: os.path.exists(qr_file) and os.path.getsize(qr_file) > 0, 60, "qr file")
+    with open(qr_file) as f:
+        payload = decode_pairing_qr(f.read().strip())
+    my_id = b.hash.hex()
+    out("approve", request(link, "/devices/approve", {"payload": payload,
+                                                     "signature": b.sign(pairing_sign_message(payload, my_id)),
+                                                     "roles": ["field"]}))
+    wait(lambda: any(p.get("event") == "device_added" for p in pushes), 30, "device_added push")
+    out("device_added_push", [p for p in pushes if p.get("event") == "device_added"][0])
+    out("PAIRED", True)
+    wait(lambda: os.path.exists(revoke_file), 120, "revoke file")
+    b2_id = next(p for p in pushes if p.get("event") == "device_added")["data"]["device"]["device_id"]
+    out("revoke", request(link, "/devices/revoke", {"device_id": b2_id, "reason": "integration test"}))
+    out("devices_after", request(link, "/devices/list", {}))
+    wait(lambda: any(p.get("event") == "device_revoked" for p in pushes), 15, "device_revoked push")
+    out("revoked_push", [p for p in pushes if p.get("event") == "device_revoked"])
     link.teardown()
     time.sleep(0.5)
     if go_file:
@@ -130,7 +153,7 @@ def main() -> None:
             sys.exit(3)
         link2.identify(b)
         time.sleep(1.0)
-        out("hello2", request(link2, "/hello", {"protocol_version": 1, "client": "it"}))
+        out("hello2", request(link2, "/hello", {"protocol_version": 2, "client": "it"}))
         link2.teardown()
         time.sleep(0.5)
     out("DONE", True)

@@ -31,6 +31,12 @@ def _parser() -> argparse.ArgumentParser:
                         "heartbeat is missing or stale")
     p.add_argument("--strict", action="store_true",
                    help="with --healthcheck: exit 3 instead of 0 when degraded (RNS interface or MeshChatX down)")
+    p.add_argument("--list-devices", action="store_true",
+                   help="print the device registry of the state database (device_id, name, platform, roles, "
+                        "bootstrap, revoked) and exit")
+    p.add_argument("--reinstate", metavar="DEVICE_ID",
+                   help="operator recovery: clear 'revoked' of a device (also of a bootstrap device that is "
+                        "listed in the config), then exit. Run it while the bridge is stopped")
     p.add_argument("--version", action="store_true")
     return p
 
@@ -65,7 +71,48 @@ def cmd_check_config(cfg: Config) -> int:
         where = f"RNS standalone via TCP {cfg.rns.tcp_host}:{cfg.rns.tcp_port}"
     else:
         where = "RNS shared instance"
-    print(f"config OK: {len(cfg.whitelist)} whitelisted phone key(s), MeshChatX at {cfg.meshchatx.base_url}, {where}")
+    for w in cfg.warnings:
+        print(f"warning: {w}", file=sys.stderr)
+    print(f"config OK: {len(cfg.devices)} bootstrap device(s), MeshChatX at {cfg.meshchatx.base_url}, {where}")
+    return 0
+
+
+def _open_registry(cfg: Config):
+    from .devices import DeviceRegistry
+    from .state import SchemaTooNew, State
+    os.makedirs(cfg.state_dir, exist_ok=True)
+    try:
+        state = State(cfg.db_path)
+    except SchemaTooNew as e:
+        raise ConfigError(str(e)) from None
+    return state, DeviceRegistry(state, cfg.limits.max_devices)
+
+
+def cmd_list_devices(cfg: Config) -> int:
+    state, registry = _open_registry(cfg)
+    try:
+        registry.sync_bootstrap(cfg.devices)
+        for d in registry.all():
+            flags = ",".join(x for x in ("bootstrap" if d.bootstrap else "", "revoked" if d.revoked else "",
+                                         *d.roles) if x)
+            print(f"{d.device_id}  {d.name!r:24} {d.platform:10} {flags}")
+    finally:
+        state.close()
+    return 0
+
+
+def cmd_reinstate(cfg: Config, device_id: str) -> int:
+    state, registry = _open_registry(cfg)
+    try:
+        registry.sync_bootstrap(cfg.devices)
+        dev = registry.get(device_id.lower())
+        if dev is None:
+            print(f"unknown device {device_id}", file=sys.stderr)
+            return 2
+        registry.reinstate(dev.device_id)
+        print(f"device {dev.device_id} ({dev.name}) reinstated")
+    finally:
+        state.close()
     return 0
 
 
@@ -129,7 +176,8 @@ async def _run(cfg: Config) -> None:
     from .rns_setup import interfaces_online, start_reticulum, tcp_client_interfaces
     from .rpc import LinkProfile, PathProfile, RpcServer
     from .service import Service
-    from .state import State
+    from .devices import DeviceRegistry
+    from .state import SchemaTooNew, State
     from .ws_events import WsEvents
 
     loop = asyncio.get_running_loop()
@@ -139,9 +187,25 @@ async def _run(cfg: Config) -> None:
         loop.call_soon_threadsafe(stop.set)
 
     os.makedirs(cfg.state_dir, exist_ok=True)
-    state = State(cfg.db_path)
+    try:
+        state = State(cfg.db_path)
+    except SchemaTooNew as e:
+        raise SystemExit(f"error: {e}") from None
+    if state.migrated_from is not None:
+        log.info("state database migrated from schema version %d (backup kept next to it)", state.migrated_from)
+    for w in cfg.warnings:
+        log.warning("config: %s", w)
+    registry = DeviceRegistry(state, cfg.limits.max_devices)
+    seeded = registry.sync_bootstrap(cfg.devices)
+    for did in seeded["added"]:
+        log.info("bootstrap device %s added", did[:8])
+    for did in seeded["removed"]:
+        log.warning("device %s is no longer in the config: revoked", did[:8])
+    if not registry.trusted_devices():
+        log.warning("no trusted device: every bootstrap device is revoked (use --reinstate or add a new "
+                    "[[devices]] entry)")
     client = MeshChatXClient(cfg.meshchatx)
-    service = Service(cfg, client, state)
+    service = Service(cfg, client, state, registry=registry)
 
     log.info("kestrel-bridge %s starting (rns mode: %s)", __version__, cfg.rns.mode)
 
@@ -162,11 +226,12 @@ async def _run(cfg: Config) -> None:
 
     identity = load_or_create_identity(cfg.rns.identity_path)
     os.makedirs(cfg.rns.lxmf_storage, exist_ok=True)
-    push = PushHub(cfg, profile_of=PathProfile(cfg))
+    push = PushHub(cfg, profile_of=PathProfile(cfg, registry), registry=registry)
     service.push = push
     lxmf = LxmfCommands(cfg, identity, service, state, loop)
     push.offline_send = lxmf.push
     rpc = RpcServer(cfg, identity, service, push, loop)
+    push.link_online = rpc.has_link
     if cfg.rns.mode == "standalone":
         push.profile_of = LinkProfile(cfg, rpc.active_link)   # no path table access: use the Link's own RTT/MTU
     rpc.start()
@@ -219,6 +284,12 @@ async def _run(cfg: Config) -> None:
             if n % 240 == 0:  # hourly
                 state.journal_prune(cfg.limits.journal_ttl)
                 state.pending_prune(cfg.limits.journal_ttl)
+                state.execute("DELETE FROM pair_nonces WHERE used_at < ?", (time.time() - 2 * cfg.limits.pairing_window,))
+            if n % 2 == 0 and push.subscribers() and service.compat_ok:
+                try:     # notice reads done in the MeshChatX web UI and push read_state to the devices
+                    await service.refresh()
+                except BridgeError:
+                    pass
             n += 1
             await asyncio.sleep(15)
 
@@ -254,6 +325,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_check_config(cfg)
         if args.print_address:
             return cmd_print_address(cfg)
+        if args.list_devices:
+            return cmd_list_devices(cfg)
+        if args.reinstate:
+            return cmd_reinstate(cfg, args.reinstate)
         if args.healthcheck:
             return cmd_healthcheck(cfg, args.strict)
         _setup_logging(cfg.log_level)

@@ -4,7 +4,7 @@ Sidecar that lets the Kestrel phone app (identity **B**) read and send as the Me
 **A** without running A on the phone. It has its own identity **S**, talks to MeshChatX over its
 authenticated HTTP + WebSocket API, and serves B over an RNS Link (online) or LXMF (offline / LoRa).
 
-Protocol: [`docs/bridge-protocol.md`](../docs/bridge-protocol.md) (`protocol_version` 1).
+Protocol: [`docs/bridge-protocol.md`](../docs/bridge-protocol.md) (`protocol_version` 2, multi-device).
 
 ```
 phone B --(RNS Link / LXMF)--> S (this sidecar) --(HTTP + WS)--> MeshChatX (A)
@@ -50,10 +50,17 @@ through it, and the phone finds a path via the same node.
    address data the phone needs:
    `docker compose run --rm kestrel-bridge python -m kestrel_bridge --print-address`
    (destination hash of `kestrel.bridge`, the `lxmf.delivery` hash and the public key of S).
-6. **Authorize a phone (add B's public key):** in the app, copy B's **full public key** (128 hex
-   characters, not the 32-character address) and add it to `[whitelist] phone_public_keys` in
-   `bridge.toml`, then `docker compose restart kestrel-bridge`. Only identities in this list can
-   use the bridge, on both transports.
+6. **Authorize the first device (bootstrap device):** in the app, copy the device's **full public
+   key** (128 hex characters, not the 32-character address) and add a `[[devices]]` entry
+   (`public_key`, `name`, `platform`, optional `roles = ["field"]`) to `bridge.toml`, then
+   `docker compose restart kestrel-bridge`. Every device has its own identity. Further devices are
+   added in the app by scanning a pairing QR code from an already trusted device and live in the
+   bridge state database (**My devices**: rename, revoke). A device revoked in the app stays revoked
+   after restarts even if it is listed in the config; `python -m kestrel_bridge --reinstate <device_id>`
+   (bridge stopped) undoes that, `--list-devices` prints the registry. A device removed from the
+   config is revoked at the next start. The old `[whitelist] phone_public_keys` key is still read
+   (as bootstrap devices, with a deprecation warning). The state database is migrated automatically
+   (a `.v1.bak` copy is kept); upgrading needs v2 clients.
 7. **Start:** `docker compose up -d kestrel-bridge`. Watch `docker compose logs -f kestrel-bridge`.
    INFO logs never contain message text or secrets.
 
@@ -171,7 +178,7 @@ and resyncs (`resync` push event) when MeshChatX is back.
 - **Start order:** the bridge does not wait for MeshChatX before starting Reticulum; commands fail
   with `upstream_unavailable` until MeshChatX is reachable and compatible.
 - **Trust:** the bridge holds the full MeshChatX session power. It exposes only the commands in
-  the protocol, and only to whitelisted public keys.
+  the protocol, and only to trusted (registered, not revoked) devices.
 
 ## Development
 

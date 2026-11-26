@@ -5,15 +5,14 @@ from kestrel_bridge import errors
 from kestrel_bridge.meshchatx_client import MeshChatXClient
 from kestrel_bridge.push import PushHub
 from kestrel_bridge.service import Ctx, Service, fetch_after
-from kestrel_bridge.state import State
 from tests.fake_meshchatx import PASSWORD, FakeMeshChatX, conversation
-from tests.helpers import PEER, PHONE_KEY, FakeClock, start_fake
+from tests.helpers import PEER, PHONE_ID, FakeClock, make_registry, start_fake
 
 HUB = "ee" * 16
 
 
 def link_ctx(**kw):
-    return Ctx(phone=PHONE_KEY, transport="link", **kw)
+    return Ctx(device_id=PHONE_ID, transport="link", **kw)
 
 
 class FetchAfterTest(unittest.IsolatedAsyncioTestCase):
@@ -65,11 +64,11 @@ class ServiceBase(unittest.IsolatedAsyncioTestCase):
         self.server, self.cfg = await start_fake(self.fake)
         self.clock = FakeClock(5000.0)
         self.client = MeshChatXClient(self.cfg.meshchatx)
-        self.state = State()
+        self.state, self.registry = make_registry(self.cfg, clock=self.clock)
         self.published = []
-        self.push = PushHub(self.cfg)
-        self.push.publish = lambda ev: self.published.append(ev) or 0
-        self.svc = Service(self.cfg, self.client, self.state, self.push, clock=self.clock)
+        self.push = PushHub(self.cfg, registry=self.registry)
+        self.push.publish = lambda ev, skip_device=None: self.published.append(ev) or 0
+        self.svc = Service(self.cfg, self.client, self.state, self.push, clock=self.clock, registry=self.registry)
         self.svc.compat_ok = True
 
     async def asyncTearDown(self):
@@ -83,11 +82,16 @@ class ServiceBase(unittest.IsolatedAsyncioTestCase):
 
 class DispatchTest(ServiceBase):
     async def test_hello_and_protocol_mismatch(self):
-        r = await self.call("/hello", {"protocol_version": 1})
-        self.assertTrue(r["ok"])
-        self.assertEqual(r["result"]["protocol_version"], 1)
         r = await self.call("/hello", {"protocol_version": 2})
-        self.assertEqual(r["error"]["code"], errors.PROTOCOL_MISMATCH)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["result"]["protocol_version"], 2)
+        self.assertEqual(r["result"]["device"]["device_id"], PHONE_ID)
+        for v in (1, 3, "2", None):      # v1 clients learn what the bridge supports
+            r = await self.call("/hello", {"protocol_version": v})
+            self.assertEqual(r["error"]["code"], errors.PROTOCOL_MISMATCH)
+            d = r["error"]["details"]
+            self.assertEqual((d["min_version"], d["max_version"], d["server_version"]), (2, 2, 2))
+            self.assertEqual(d["client_version"], v)
 
     async def test_unknown_path_and_bad_args(self):
         self.assertEqual((await self.call("/nope"))["error"]["code"], errors.UNKNOWN_PATH)
@@ -97,12 +101,12 @@ class DispatchTest(ServiceBase):
 
     async def test_incompatible_upstream_blocks_commands_but_not_hello(self):
         self.svc.compat_ok = False
-        self.assertTrue((await self.call("/hello", {"protocol_version": 1}))["ok"])
+        self.assertTrue((await self.call("/hello", {"protocol_version": 2}))["ok"])
         r = await self.call("/sync_chats", {})
         self.assertEqual(r["error"]["code"], errors.UPSTREAM_INCOMPATIBLE)
 
     async def test_subscribe_needs_link(self):
-        r = await self.call("/subscribe", {}, Ctx(phone=PHONE_KEY, transport="lxmf", journal_reserved=True))
+        r = await self.call("/subscribe", {}, Ctx(device_id=PHONE_ID, transport="lxmf", journal_reserved=True))
         self.assertEqual(r["error"]["code"], errors.UNSUPPORTED_TRANSPORT)
         got = {}
         r = await self.call("/subscribe", {"topics": ["lxmf"], "profile": "constrained"},
@@ -160,7 +164,7 @@ class SendLxmfTest(ServiceBase):
         args = {"cmd_id": "cmd-msg-0004", "to": PEER, "text": "x"}
         r = await self.call("/send_lxmf", args)
         self.assertEqual(r["error"]["code"], errors.UPSTREAM_UNAVAILABLE)
-        self.assertTrue(self.state.journal_reserve(PHONE_KEY, "cmd-msg-0004", 1.0))
+        self.assertTrue(self.state.journal_reserve(PHONE_ID, "cmd-msg-0004", 1.0))
         self.server = type(self.server)(self.fake.app)
         await self.server.start_server()
 
@@ -269,7 +273,7 @@ class EventsTest(ServiceBase):
         # conversation index changed -> cursor advanced
         self.assertGreaterEqual(self.state.cursor(), 1)
 
-        self.state.pending_put("cmd-x-0001", PHONE_KEY, "h2", PEER, "outbound")
+        self.state.pending_put("cmd-x-0001", PHONE_ID, "h2", PEER, "outbound")
         upd = {"type": "lxmf_message_state_updated", "lxmf_message": {"hash": "h2", "state": "delivered"}}
         await self.svc.on_event(upd)
         await self.svc.on_event(upd)      # duplicate (server rebroadcasts every second) is collapsed
@@ -285,7 +289,7 @@ class EventsTest(ServiceBase):
 
     async def test_resync_publishes_and_repolls_pending(self):
         m = self.fake.add_message(PEER, "out", incoming=False, state="delivered")
-        self.state.pending_put("cmd-x-0002", PHONE_KEY, m["hash"], PEER, "outbound")
+        self.state.pending_put("cmd-x-0002", PHONE_ID, m["hash"], PEER, "outbound")
         self.fake.conversations.append(conversation(PEER))
         await self.svc.on_resync()
         names = [e["event"] for e in self.published]

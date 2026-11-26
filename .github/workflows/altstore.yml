@@ -1,0 +1,44 @@
+name: altstore
+
+# Publishes the AltStore / SideStore source (altstore.json) to GitHub Pages.
+# Chained from release-please after a release (a `release: published` trigger does not
+# fire for releases created with GITHUB_TOKEN), and runnable by hand.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run generator tests
+        run: python3 -m unittest discover -s tools/altstore
+      - name: Generate the source
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p site/screenshots
+          python3 tools/altstore/generate.py --out site/altstore.json
+          cp tools/altstore/index.html site/index.html
+          cp assets/icon/kestrel-512.png site/icon.png
+          cp docs/screenshots/*.png site/screenshots/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

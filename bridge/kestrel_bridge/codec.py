@@ -5,7 +5,9 @@ import msgpack
 
 from . import errors
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
+MIN_PROTOCOL_VERSION = 2   # oldest version this bridge still serves (v1 had no devices)
+MAX_PROTOCOL_VERSION = 2
 
 # Wire-level markers inside LXMF custom fields (FIELD_CUSTOM_TYPE value).
 LXMF_TYPE_CMD = b"kestrel.cmd"

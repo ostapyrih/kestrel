@@ -19,6 +19,23 @@ UPSTREAM_ERROR = "upstream_error"
 SEND_FAILED = "send_failed"
 NOT_FOUND = "not_found"
 INTERNAL = "internal"
+# protocol v2: devices, pairing, vault
+DEVICE_REVOKED = "device_revoked"
+DEVICE_NOT_FOUND = "device_not_found"
+DEVICE_EXISTS = "device_exists"
+LAST_DEVICE = "last_trusted_device"
+TOO_MANY_DEVICES = "too_many_devices"
+PAIRING_INVALID = "pairing_invalid"
+PAIRING_EXPIRED = "pairing_expired"
+PAIRING_REPLAY = "pairing_replay"
+BAD_SIGNATURE = "bad_signature"
+FORBIDDEN = "forbidden"
+KEY_EPOCH_STALE = "key_epoch_stale"
+KEYS_ALREADY_SET = "keys_already_set"
+BLOB_TOO_LARGE = "blob_too_large"
+BLOB_CONFLICT = "blob_conflict"
+SEQ_CONFLICT = "seq_conflict"
+QUOTA_EXCEEDED = "quota_exceeded"
 
 # Errors after which nothing was executed upstream: the phone may retry with the same cmd_id.
 RETRYABLE = frozenset({UPSTREAM_UNAVAILABLE, UPSTREAM_AUTH, RATE_LIMITED})

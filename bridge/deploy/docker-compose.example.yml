@@ -19,7 +19,7 @@ services:
     networks:
       - meshchatx-net
     volumes:
-      # bridge.toml (whitelist of phone public keys, MeshChatX URL, [rns] settings, limits): read-only
+      # bridge.toml (bootstrap devices, MeshChatX URL, [rns] settings, limits): read-only
       - ./kestrel/config/bridge.toml:/sidecar/config/bridge.toml:ro
       # the MeshChatX web password (file, mode 600, owner uid 10001): read-only
       - ./kestrel/secrets/meshchatx_password:/run/secrets/meshchatx_password:ro

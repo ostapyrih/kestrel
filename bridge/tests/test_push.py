@@ -3,7 +3,7 @@ import unittest
 from kestrel_bridge import codec
 from kestrel_bridge.push import (CONSTRAINED, FULL, PushHub, Subscriber, classify_interface, classify_link,
                                  filter_event, more_restrictive, truncate_utf8)
-from tests.helpers import PEER, PHONE_KEY, FakeClock, raw_config
+from tests.helpers import OTHER_ID, OTHER_KEY, PEER, PHONE_ID, PHONE_KEY, FakeClock, make_registry, raw_config
 
 DM = {"event": "lxmf.message", "data": {"peer": PEER, "hash": "h", "incoming": True, "ts": 1.0,
                                          "text": "x" * 500, "title": "t", "attachments": True, "name": "N" * 80}}
@@ -58,15 +58,21 @@ class FilterTest(unittest.TestCase):
 
 class HubTest(unittest.TestCase):
     def setUp(self):
-        self.cfg = raw_config()
+        self.cfg = raw_config(devices=[{"public_key": PHONE_KEY, "name": "field-phone", "platform": "android",
+                                        "roles": ["field"]},
+                                       {"public_key": OTHER_KEY, "name": "desk", "platform": "linux"}])
+        self.state, self.registry = make_registry(self.cfg)
+        self.addCleanup(self.state.close)
         self.clock = FakeClock()
         self.got = []
+        self.online = set()
 
     def hub(self, path_profile=None, offline=None):
-        return PushHub(self.cfg, profile_of=lambda p: path_profile, offline_send=offline, clock=self.clock)
+        return PushHub(self.cfg, profile_of=lambda p: path_profile, offline_send=offline, clock=self.clock,
+                       registry=self.registry, link_online=lambda d: d in self.online)
 
-    def sub(self, hub, hint=FULL, topics=("lxmf", "rrc")):
-        s = Subscriber(PHONE_KEY, lambda b: self.got.append(codec.unpack(b)) or True, topics, hint)
+    def sub(self, hub, hint=FULL, topics=("lxmf", "rrc"), device_id=PHONE_ID):
+        s = Subscriber(device_id, lambda b: self.got.append(codec.unpack(b)) or True, topics, hint)
         hub.subscribe(s)
         return s
 
@@ -122,11 +128,12 @@ class HubTest(unittest.TestCase):
 
     def test_offline_push_only_for_dm_and_mentions_with_budget(self):
         sent = []
-        h = self.hub(FULL, offline=lambda phone, wire: sent.append((phone, codec.unpack(wire))))
-        h.publish(DM)               # no live link -> LXMF fallback, truncated
+        h = self.hub(FULL, offline=lambda dev, wire: sent.append((dev, codec.unpack(wire))))
+        h.publish(DM)               # no live link -> LXMF fallback (field device only), truncated
         h.publish(RRC)              # room chatter is never pushed offline
         h.publish(MENTION)
         self.assertEqual([s[1]["event"] for s in sent], ["lxmf.message", "rrc.message"])
+        self.assertEqual({s[0] for s in sent}, {PHONE_ID})      # the non-field device gets nothing
         self.assertTrue(sent[0][1]["data"]["truncated"])
         self.cfg.push.offline_push_max_per_hour = 3
         for _ in range(10):
@@ -142,6 +149,55 @@ class HubTest(unittest.TestCase):
         self.sub(h)
         h.publish(DM)
         self.assertEqual(sent, [])
+
+    def test_no_offline_push_when_device_has_a_link_without_subscription(self):
+        sent = []
+        h = self.hub(FULL, offline=lambda p, w: sent.append(1))
+        self.online.add(PHONE_ID)
+        h.publish(DM)
+        self.assertEqual(sent, [])
+
+    def test_revoked_field_device_gets_no_offline_push(self):
+        sent = []
+        h = self.hub(FULL, offline=lambda p, w: sent.append(p))
+        self.registry.revoke(PHONE_ID, OTHER_ID)
+        h.publish(DM)
+        self.assertEqual(sent, [])
+
+    def test_fan_out_to_every_device_link_with_shared_event_id(self):
+        h = self.hub(FULL)
+        self.sub(h)
+        self.sub(h, device_id=OTHER_ID)
+        self.sub(h, device_id=OTHER_ID, topics=("rrc",))      # a second link of one device, other topics
+        h.publish(DM)
+        self.assertEqual(len(self.got), 2)                      # the rrc-only link does not get lxmf events
+        self.assertEqual(len({g["id"] for g in self.got}), 1)   # one event id for dedupe
+        self.assertEqual(len({g["seq"] for g in self.got}), 2)
+
+    def test_skip_device_and_drop_device(self):
+        h = self.hub(FULL)
+        self.sub(h, topics=("lxmf", "vault"))
+        self.sub(h, device_id=OTHER_ID, topics=("lxmf", "vault"))
+        h.publish({"event": "vault.blob", "data": {"blob_id": "x"}}, skip_device=PHONE_ID)
+        self.assertEqual(len(self.got), 1)
+        h.drop_device(OTHER_ID)
+        self.got.clear()
+        h.publish({"event": "device_added", "data": {}})       # always delivered, but only to remaining links
+        self.assertEqual(len(self.got), 1)
+
+    def test_device_events_topics_and_constrained_filter(self):
+        h = self.hub(CONSTRAINED)
+        self.sub(h, topics=("lxmf",))
+        for name in ("device_added", "device_updated", "device_revoked", "resync"):
+            h.publish({"event": name, "data": {"device_id": "x"}})      # topic-independent
+        h.publish({"event": "read_state", "data": {"peer": PEER}})       # constrained: dropped
+        h.publish({"event": "vault.blob", "data": {}})                    # topic vault not subscribed
+        self.assertEqual([g["event"] for g in self.got], ["device_revoked", "resync"])
+        self.got.clear()
+        h2 = self.hub(FULL)
+        self.sub(h2, topics=("lxmf",))
+        h2.publish({"event": "read_state", "data": {"peer": PEER, "unread": False}})
+        self.assertEqual([g["event"] for g in self.got], ["read_state"])
 
 
 class ClassifyLinkTest(unittest.TestCase):
@@ -168,7 +224,7 @@ class LinkProfileTest(unittest.TestCase):
         self.cfg = raw_config()
         self.link = None
 
-    def profile(self, phone=PHONE_KEY):
+    def profile(self, phone=PHONE_ID):
         from kestrel_bridge.rpc import LinkProfile
         return LinkProfile(self.cfg, lambda p: self.link)(phone)
 
@@ -185,21 +241,21 @@ class LinkProfileTest(unittest.TestCase):
         from kestrel_bridge.rpc import LinkProfile
         got = []
         h = PushHub(self.cfg, profile_of=LinkProfile(self.cfg, lambda p: self.link), clock=FakeClock())
-        sub = Subscriber(PHONE_KEY, lambda b: got.append(b) or True)
+        sub = Subscriber(PHONE_ID, lambda b: got.append(b) or True)
         self.link = FakeLink(3.0, 500)
         self.assertEqual(h.effective_profile(sub), CONSTRAINED)
-        sub = Subscriber(PHONE_KEY, lambda b: True)
+        sub = Subscriber(PHONE_ID, lambda b: True)
         self.link = FakeLink(0.1, 262144)
         self.assertEqual(h.effective_profile(sub), FULL)
         # config override beats the measurement, the phone hint can still downgrade
         self.cfg.push.profile = "constrained"
-        sub = Subscriber(PHONE_KEY, lambda b: True)
+        sub = Subscriber(PHONE_ID, lambda b: True)
         self.assertEqual(h.effective_profile(sub), CONSTRAINED)
         self.cfg.push.profile = "full"
-        sub = Subscriber(PHONE_KEY, lambda b: True)
+        sub = Subscriber(PHONE_ID, lambda b: True)
         self.link = FakeLink(9.0, 500)
         self.assertEqual(h.effective_profile(sub), FULL)
-        sub = Subscriber(PHONE_KEY, lambda b: True, hint=CONSTRAINED)
+        sub = Subscriber(PHONE_ID, lambda b: True, hint=CONSTRAINED)
         self.assertEqual(h.effective_profile(sub), CONSTRAINED)
 
 

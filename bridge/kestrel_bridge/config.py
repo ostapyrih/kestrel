@@ -105,6 +105,17 @@ class Limits:
     send_rate_per_minute: int = 30
     identify_timeout: int = 30
     rpc_timeout: float = 90.0
+    # protocol v2: devices, pairing, read state
+    max_devices: int = 16                  # trusted (non-revoked) devices
+    pairing_window: int = 600              # seconds: accepted |now - ts| of a pairing QR payload
+    device_admin_rate_per_minute: int = 20   # /devices/approve|rename|set_role|revoke per device
+    mark_read_rate_per_minute: int = 60
+    # protocol v2: vault (opaque ciphertext storage)
+    vault_max_blob_bytes: int = 131072
+    vault_device_quota_bytes: int = 64 * 1024 * 1024
+    vault_total_quota_bytes: int = 512 * 1024 * 1024
+    vault_put_rate_per_minute: int = 120
+    vault_get_max_ids: int = 32
 
 
 @dataclass
@@ -120,14 +131,24 @@ class PushConfig:
 
 
 @dataclass
+class DeviceSeed:
+    """A bootstrap device from ``[[devices]]`` (or the deprecated ``[whitelist]``)."""
+    public_key: str          # 128 hex chars
+    name: str
+    platform: str = "unknown"
+    roles: tuple[str, ...] = ()
+
+
+@dataclass
 class Config:
     meshchatx: MeshChatXConfig
-    whitelist: tuple[str, ...]
+    devices: tuple[DeviceSeed, ...]
     state_dir: str = "/sidecar/state"
     rns: RnsConfig = field(default_factory=RnsConfig)
     limits: Limits = field(default_factory=Limits)
     push: PushConfig = field(default_factory=PushConfig)
     log_level: str = "INFO"
+    warnings: tuple[str, ...] = ()   # config deprecations, logged by the entry point
 
     @property
     def db_path(self) -> str:
@@ -201,8 +222,62 @@ def rns_config_value(what: str, value: str) -> str:
     raise ConfigError(f"{what} must not contain both ' and \"")
 
 
+def _norm_pubkey(what: str, k) -> str:
+    if not isinstance(k, str):
+        raise ConfigError(f"{what} must be a hex string")
+    k = k.strip().lower()
+    if len(k) != PUBKEY_HEX_LEN or any(c not in "0123456789abcdef" for c in k):
+        raise ConfigError(f"{what} must be {PUBKEY_HEX_LEN} hex chars (full 64-byte public key)")
+    return k
+
+
+def _parse_devices(raw: dict) -> tuple[list[DeviceSeed], list[str]]:
+    """``[[devices]]`` (protocol v2) plus the deprecated ``[whitelist] phone_public_keys`` (bootstrap devices)."""
+    from .devices import device_id_of, validate_name, validate_platform, validate_roles
+    from .errors import BridgeError
+    seeds: list[DeviceSeed] = []
+    seen: set[str] = set()
+    warnings: list[str] = []
+    entries = raw.get("devices")
+    if entries is not None:
+        if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
+            raise ConfigError("devices must be an array of tables ([[devices]])")
+        for i, e in enumerate(entries):
+            _check_unknown(f"devices[{i}]", e, {"public_key", "name", "platform", "roles"})
+            key = _norm_pubkey(f"devices[{i}].public_key", e.get("public_key"))
+            if key in seen:
+                raise ConfigError(f"devices[{i}].public_key is listed twice")
+            seen.add(key)
+            try:
+                name = validate_name(e.get("name", f"device-{device_id_of(key)[:6]}"))
+                platform = validate_platform(e.get("platform", "unknown"))
+                roles = validate_roles(e.get("roles", []))
+            except BridgeError as ex:
+                raise ConfigError(f"devices[{i}]: {ex.message}") from None
+            seeds.append(DeviceSeed(key, name, platform, roles))
+    w = raw.get("whitelist")
+    if w is not None:
+        if not isinstance(w, dict):
+            raise ConfigError("[whitelist] must be a table")
+        _check_unknown("whitelist", w, {"phone_public_keys"})
+        keys = w.get("phone_public_keys")
+        if not isinstance(keys, list):
+            raise ConfigError("whitelist.phone_public_keys must be a list")
+        warnings.append("[whitelist] phone_public_keys is deprecated: use [[devices]] (public_key, name, platform, "
+                        "roles); its keys are loaded as bootstrap devices")
+        for k in keys:
+            k = _norm_pubkey("whitelist key", k)
+            if k not in seen:
+                seen.add(k)
+                seeds.append(DeviceSeed(k, f"device-{device_id_of(k)[:6]}"))
+    if not seeds:
+        raise ConfigError("configure at least one bootstrap device: [[devices]] (or the deprecated "
+                          "[whitelist] phone_public_keys)")
+    return seeds, warnings
+
+
 def parse_config(raw: dict) -> Config:
-    _check_unknown("root", raw, {"state_dir", "log_level", "meshchatx", "whitelist", "rns", "limits", "push"})
+    _check_unknown("root", raw, {"state_dir", "log_level", "meshchatx", "whitelist", "devices", "rns", "limits", "push"})
 
     m = _table(raw, "meshchatx", required=True)
     _check_unknown(
@@ -240,20 +315,7 @@ def parse_config(raw: dict) -> Config:
         login_backoff_max=_num("meshchatx", m, "login_backoff_max", 300.0),
     )
 
-    w = _table(raw, "whitelist", required=True)
-    _check_unknown("whitelist", w, {"phone_public_keys"})
-    keys = w.get("phone_public_keys")
-    if not isinstance(keys, list) or not keys:
-        raise ConfigError("whitelist.phone_public_keys must be a non-empty list")
-    norm = []
-    for k in keys:
-        if not isinstance(k, str):
-            raise ConfigError("whitelist.phone_public_keys entries must be hex strings")
-        k = k.strip().lower()
-        if len(k) != PUBKEY_HEX_LEN or any(c not in "0123456789abcdef" for c in k):
-            raise ConfigError(f"whitelist key must be {PUBKEY_HEX_LEN} hex chars (full 64-byte public key)")
-        if k not in norm:
-            norm.append(k)
+    seeds, warnings = _parse_devices(raw)
 
     r = _table(raw, "rns")
     _check_unknown("rns", r, {"mode", "config_dir", "identity_path", "lxmf_storage", "announce_interval",
@@ -321,7 +383,21 @@ def parse_config(raw: dict) -> Config:
         send_rate_per_minute=_int("limits", li, "send_rate_per_minute", dl.send_rate_per_minute),
         identify_timeout=_int("limits", li, "identify_timeout", dl.identify_timeout),
         rpc_timeout=_num("limits", li, "rpc_timeout", dl.rpc_timeout),
+        max_devices=_int("limits", li, "max_devices", dl.max_devices),
+        pairing_window=_int("limits", li, "pairing_window", dl.pairing_window, 30),
+        device_admin_rate_per_minute=_int("limits", li, "device_admin_rate_per_minute",
+                                          dl.device_admin_rate_per_minute),
+        mark_read_rate_per_minute=_int("limits", li, "mark_read_rate_per_minute", dl.mark_read_rate_per_minute),
+        vault_max_blob_bytes=_int("limits", li, "vault_max_blob_bytes", dl.vault_max_blob_bytes, 1024),
+        vault_device_quota_bytes=_int("limits", li, "vault_device_quota_bytes", dl.vault_device_quota_bytes, 1024),
+        vault_total_quota_bytes=_int("limits", li, "vault_total_quota_bytes", dl.vault_total_quota_bytes, 1024),
+        vault_put_rate_per_minute=_int("limits", li, "vault_put_rate_per_minute", dl.vault_put_rate_per_minute),
+        vault_get_max_ids=_int("limits", li, "vault_get_max_ids", dl.vault_get_max_ids),
     )
+    if limits.pairing_window > 600:
+        raise ConfigError("limits.pairing_window must be at most 600 seconds")
+    if len(seeds) > limits.max_devices:
+        raise ConfigError("more bootstrap devices than limits.max_devices")
     if limits.journal_ttl <= limits.lxmf_ts_window:
         raise ConfigError("limits.journal_ttl must exceed limits.lxmf_ts_window (otherwise replays slip through)")
 
@@ -352,8 +428,8 @@ def parse_config(raw: dict) -> Config:
     if level not in ("DEBUG", "INFO", "WARNING", "ERROR"):
         raise ConfigError("log_level must be DEBUG, INFO, WARNING or ERROR")
     state_dir = _str("root", raw, "state_dir", "/sidecar/state")
-    return Config(meshchatx=mc, whitelist=tuple(norm), state_dir=state_dir, rns=rns, limits=limits, push=push,
-                  log_level=level)
+    return Config(meshchatx=mc, devices=tuple(seeds), state_dir=state_dir, rns=rns, limits=limits, push=push,
+                  log_level=level, warnings=tuple(warnings))
 
 
 def load_config(path: str) -> Config:
