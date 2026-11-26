@@ -48,6 +48,9 @@ dependencies:
     sdk: flutter
   intl: ^0.20.3
   mobile_scanner: ^7.5.0
+  package_info_plus: ^10.2.2
+  crypto: ^3.0.3
+  cryptography: ^2.7.0
 
 dev_dependencies:
   flutter_test:

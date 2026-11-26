@@ -37,6 +37,8 @@ The transport is the same in both modes: **TCP** → `rns.ostapyrih.com:4242` wh
 
 ---
 
+7. **Bridge off = a normal messenger** (decided 2026-11-26). With the bridge disabled the app is a plain single-identity LXMF client: there is no account switcher and no A/B badges or labels, and the message line shows only route · transport · status. Account A's local data is only a cache of MeshChatX, so turning the bridge off **deletes it from the device** (chats, messages, rooms, cursors) after a confirmation, and turning the bridge back on resyncs it from scratch (decision updated 2026-11-26). The device keeps its pairing, so no re-pairing is needed. Unsent A messages exist only on the device: the confirmation names them and offers Cancel / send them from B instead / discard. The device's own data (B) is never deleted by a mode switch. With the bridge off its connection is fully stopped.
+
 ## 3. Architecture
 
 > **Decision (2026-11-25, after Phase 0):** the bridge is the **`kestrel-bridge` sidecar container**, not a MeshChatX plugin.
@@ -135,6 +137,8 @@ Switching modes changes only `settings.bridge_enabled`; no DELETEs on data.
 | 3b | LXMF + Standalone mode + UI | PR #5 merged: `LxmRouter` (opportunistic/direct/resource, receipts, retries, stamps) — interop with Python LXMF; app: identity B in secure storage, SQLite per §4 (triggers fix the outbox, a test that the switch deletes nothing), chats with "from · route · transport · status" badges, settings + QR; debug APK in CI. Deferred: tickets, QR scanner, background service | ✅ |
 | 4 | Bridge mode in the app + multi-device (protocol v2: devices, per-device cursors, origin device, QR pairing) | switch, A/B accounts, sync, sending via the bridge, route/transport/status badges, queue | ✅ app 0.5.0 + bridge 0.4.1: bridge client, account A sync, send as A, devices/QR pairing, RRC, LXMF fallback (PR #12, #17, #19); deployed on amd1, first real device connected 2026-11-26. Follow-up: explicit reject reason for unapproved/revoked devices (in progress) |
 | 4b | Standalone history vault (E2E-encrypted sync of B-x chats via the bridge) | devices share a group key; encrypted append-only blobs in the bridge vault; read-only device-badged history on other devices | ⬜ |
+| U | Updates (decided 2026-11-26) | Desktop: built-in updater (GitHub Releases check, changelog, one-click install, SHA256 + Ed25519 release-signature verification with the public key embedded in the app; Windows Inno Setup installer, macOS app replace from dmg, Linux AppImage in-place). Android: Obtainium (stable release keystore in CI secrets, `obtainium://` link in README). iOS: AltStore source (done). Signing keys in GitHub Secrets; owner keeps offline backups | ⏳ |
+| N | NomadNet browser (decided 2026-11-26) | Browse NomadNet node pages directly from the device identity (B), without the bridge, so it also works over LoRa: Link + `/page/*.mu` requests, Micron markup renderer (colors, links, form fields), address bar/history/bookmarks, node list from announces, file downloads, form submission. Scheduled after 4b, before 6. No server changes, no new protocol | ⬜ |
 | 5 | Propagation sync + offline queue | `B` fetches messages from a propagation node | ⬜ |
 | 6 | RNode: BLE on mobile, USB serial on desktop | KISS + radio config (parameters = those of the LoRa gateway), `LoRa` transport badge | ⬜ |
 | 7 | iOS build on Mac + background notifications | `flutter build ios`, push without content | ⬜ |
