@@ -31,17 +31,18 @@ See [docs/PLAN.md](docs/PLAN.md) for the full plan and phase status, and
 
 Releases carry release-signed APKs (`kestrel-<version>-arm64-v8a.apk`, `armeabi-v7a`, `x86_64`) and an AAB.
 [Obtainium](https://obtainium.imranr.dev/) installs and updates them straight from GitHub Releases.
-Open this link on the phone with Obtainium installed (it preselects the `arm64-v8a` APK, ignores
-pre-releases and only follows `app-v*` releases, not the `bridge-v*` ones):
+On the phone with Obtainium installed, tap **[Add Kestrel to Obtainium](https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22com.ostapyrih.kestrel%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2Fostapyrih%2Fkestrel%22%2C%22author%22%3A%22ostapyrih%22%2C%22name%22%3A%22Kestrel%22%2C%22additionalSettings%22%3A%22%7B%5C%22includePrereleases%5C%22%3Afalse%2C%5C%22apkFilterRegEx%5C%22%3A%5C%22arm64-v8a%5C%22%2C%5C%22filterReleaseTitlesByRegEx%5C%22%3A%5C%22%5Ebridge%5C%22%2C%5C%22invertReleaseTitlesFilter%5C%22%3Atrue%7D%22%7D)**
+(it preselects the `arm64-v8a` APK, ignores pre-releases and skips the `bridge-v*` releases).
+If the link does not open, copy this into the phone's browser:
 
 ```
-obtainium://app/%7B%22id%22%3A%22com.ostapyrih.kestrel%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2Fostapyrih%2Fkestrel%22%2C%22author%22%3A%22ostapyrih%22%2C%22name%22%3A%22Kestrel%22%2C%22preferredApkIndex%22%3A0%2C%22additionalSettings%22%3A%22%7B%5C%22includePrereleases%5C%22%3Afalse%2C%5C%22apkFilterRegEx%5C%22%3A%5C%22arm64-v8a%5C%22%2C%5C%22filterReleaseTitlesByRegEx%5C%22%3A%5C%22%5Eapp%3A%20v%5C%22%2C%5C%22versionExtractionRegEx%5C%22%3A%5C%22%28%5C%5C%5C%5Cd%2B%5C%5C%5C%5C.%5C%5C%5C%5Cd%2B%5C%5C%5C%5C.%5C%5C%5C%5Cd%2B%29%5C%22%2C%5C%22matchGroupToUse%5C%22%3A%5C%22%241%5C%22%2C%5C%22autoApkFilterByArch%5C%22%3Afalse%2C%5C%22appName%5C%22%3A%5C%22Kestrel%5C%22%7D%22%7D
+obtainium://app/%7B%22id%22%3A%22com.ostapyrih.kestrel%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2Fostapyrih%2Fkestrel%22%2C%22author%22%3A%22ostapyrih%22%2C%22name%22%3A%22Kestrel%22%2C%22additionalSettings%22%3A%22%7B%5C%22includePrereleases%5C%22%3Afalse%2C%5C%22apkFilterRegEx%5C%22%3A%5C%22arm64-v8a%5C%22%2C%5C%22filterReleaseTitlesByRegEx%5C%22%3A%5C%22%5Ebridge%5C%22%2C%5C%22invertReleaseTitlesFilter%5C%22%3Atrue%7D%22%7D
 ```
 
-Or add the app by hand: *Add app*, source URL `https://github.com/ostapyrih/kestrel`, then under
-the app's additional options set *Filter APKs by regular expression* to `arm64-v8a`, *Filter release
-titles by regular expression* to `^app: v`, and leave *Include prereleases* off.
-The release title filter is what keeps the `bridge-v*` releases out of the update checks.
+Or add the app by hand: *Add app*, source URL `https://github.com/ostapyrih/kestrel`, then in the
+app's additional options set *Filter APKs by regular expression* to `arm64-v8a`, *Filter release
+titles by regular expression* to `^bridge` with *Invert* on, and leave *Include prereleases* off.
+The inverted title filter keeps the `bridge-v*` releases out of the update checks.
 
 Verify the signature before the first install with
 [AppVerifier](https://github.com/soupslurpr/AppVerifier) (package `com.ostapyrih.kestrel`) or
