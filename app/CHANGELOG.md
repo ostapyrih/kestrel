@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/ostapyrih/kestrel/compare/app-v0.4.0...app-v0.5.0) (2026-11-26)
+
+
+### Features
+
+* **app:** bridge mode UI, devices, pairing and RRC rooms ([2764d6e](https://github.com/ostapyrih/kestrel/commit/2764d6e5fda8453ebf9c657a31027259ee3afef5))
+* **app:** bridge protocol v2 client and account A sync ([79b8e91](https://github.com/ostapyrih/kestrel/commit/79b8e91d1c122c227bfd7463cb30e900268395e3))
+
 ## [0.4.0](https://github.com/ostapyrih/kestrel/compare/app-v0.3.0...app-v0.4.0) (2026-11-26)
 
 

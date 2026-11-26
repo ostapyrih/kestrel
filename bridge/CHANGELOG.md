@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/ostapyrih/kestrel/compare/bridge-v0.4.0...bridge-v0.4.1) (2026-11-26)
+
+
+### Bug Fixes
+
+* **bridge:** report pending MeshChatX compat as unavailable, not incompatible ([b30a2b8](https://github.com/ostapyrih/kestrel/commit/b30a2b8f65f59a3ea005d005e370b535f1e3c0a4))
+
 ## [0.4.0](https://github.com/ostapyrih/kestrel/compare/bridge-v0.3.0...bridge-v0.4.0) (2026-11-26)
 
 
