@@ -15,11 +15,16 @@ enum BridgeState {
   /// No Link (no path, bridge down, MeshChatX down...). Retrying.
   unreachable,
 
-  /// The bridge closes the Link right after `identify()`: this key is not
-  /// paired (yet) or was revoked. Retrying slowly.
+  /// The bridge does not accept this key (`kestrel.reject unauthorized`, or
+  /// an older bridge closing the Link right after `identify()`): not paired
+  /// or revoked. Retrying slowly.
   rejected,
 
-  /// The bridge said `device_revoked`: stopped.
+  /// `kestrel.reject unauthorized` while pairing: this device is waiting for
+  /// a trusted device to approve it. Retrying every few seconds.
+  awaitingApproval,
+
+  /// The bridge said `device_revoked` (`kestrel.reject` or an error): stopped.
   revoked,
 
   /// `protocol_mismatch`: stopped; the user has to update the app or bridge.
@@ -94,6 +99,15 @@ abstract class BridgeApi {
 
   /// The bridge said this device was revoked: stop for good.
   void markRevoked();
+}
+
+/// A `kestrel.reject` packet arrived on the Link (internal control flow).
+class BridgeRejected implements Exception {
+  BridgeRejected(this.packet);
+  final RejectPacket packet;
+
+  @override
+  String toString() => 'BridgeRejected(${packet.code})';
 }
 
 typedef AllowFallback = bool Function();
@@ -268,6 +282,17 @@ class BridgeConnection implements BridgeApi {
         _set(BridgeState.unreachable, detail: e.code);
         backoff = _grow(backoff);
         wait = fastRetry ? retryMin : backoff;
+      } on BridgeRejected catch (e) {
+        if (e.packet.isRevoked) {
+          _terminal = true;
+          _set(BridgeState.revoked, detail: e.packet.code);
+          return;
+        }
+        _set(
+          fastRetry ? BridgeState.awaitingApproval : BridgeState.rejected,
+          detail: e.packet.code,
+        );
+        wait = fastRetry ? retryMin : rejectedRetry;
       } on BridgeTransportError catch (e) {
         if (e.rejected) {
           _rejectedStreak++;
@@ -319,9 +344,15 @@ class BridgeConnection implements BridgeApi {
       unawaited(link.teardown());
       throw BridgeTransportError('link not established');
     }
+    final reject = Completer<RejectPacket>();
     link
       ..resourceStrategy = ResourceStrategy.all
       ..onPacket = (data, _) {
+        final r = RejectPacket.tryParse(_tryUnpack(data));
+        if (r != null) {
+          if (!reject.isCompleted) reject.complete(r);
+          return;
+        }
         _onPushBytes(data);
       }
       ..onResourceConcluded = (r) {
@@ -332,13 +363,35 @@ class BridgeConnection implements BridgeApi {
     _link = link;
     try {
       await link.identify(identity);
-      final hello = await _request(
+      final helloReq = _request(
         link,
         '/hello',
         {'protocol_version': bridgeProtocolVersion, 'client': clientName},
         null,
         expectIdentify: true,
       );
+      // the reason packet (sent right after identify) wins over the
+      // `unauthorized` response or the closed Link that follow it
+      final first = await Future.any<Object>([
+        helloReq.then<Object>((v) => v, onError: (Object e) => e),
+        reject.future,
+      ]);
+      if (first is RejectPacket) {
+        unawaited(helloReq.then<void>((_) {}, onError: (Object _) {}));
+        _clockOffset = (first.serverTime ?? _clock()) - _clock();
+        throw BridgeRejected(first);
+      }
+      if (first is BridgeTransportError || first is BridgeError) {
+        // an older bridge, or the packet is still on its way: give it a moment
+        final r = await reject.future.timeout(
+          const Duration(milliseconds: 500),
+          onTimeout: () => const RejectPacket('', null),
+        );
+        if (r.code.isNotEmpty) throw BridgeRejected(r);
+        if (first is BridgeError) throw first;
+        throw first as BridgeTransportError;
+      }
+      final hello = first as Map<String, Object?>;
       final h = HelloResult.fromMap(hello);
       _clockOffset = h.time - _clock();
       await _request(link, '/subscribe', {

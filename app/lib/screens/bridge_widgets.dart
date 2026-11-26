@@ -20,6 +20,7 @@ String bridgeStateText(Strings s, BridgeStatus st) => switch (st.state) {
         ? s.t('bridge_status_unreachable_lxmf')
         : s.t('bridge_status_unreachable'),
   BridgeState.rejected => s.t('bridge_status_rejected'),
+  BridgeState.awaitingApproval => s.t('bridge_status_awaiting_approval'),
   BridgeState.revoked => s.t('bridge_status_revoked'),
   BridgeState.mismatch => s.t('bridge_status_mismatch'),
 };
@@ -29,6 +30,8 @@ String? bridgeStateHelp(Strings s, BridgeStatus st) {
   switch (st.state) {
     case BridgeState.rejected:
       return s.t('bridge_rejected_detail');
+    case BridgeState.awaitingApproval:
+      return s.t('bridge_awaiting_approval_detail');
     case BridgeState.revoked:
       return s.t('bridge_revoked_banner');
     case BridgeState.mismatch:

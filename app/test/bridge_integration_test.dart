@@ -199,11 +199,12 @@ void main() {
       addTearDown(d2.stop);
       await d2.bridge.configure(env.bridgePub);
       await d2.bridge.beginPairing();
+      // the bridge tells the unknown key why: waiting for approval
       await waitFor(
         () async =>
-            d2.bridge.status.state == BridgeState.rejected ||
-            d2.bridge.status.state == BridgeState.unreachable,
-        what: 'device 2 refused before approval',
+            d2.bridge.status.state == BridgeState.awaitingApproval &&
+            d2.bridge.status.detail == 'unauthorized',
+        what: 'device 2 waiting for approval (kestrel.reject)',
       );
       final qr = encodePairingQr(await d2.bridge.newPairingPayload());
       final decoded = decodePairingQr(qr);
@@ -243,9 +244,10 @@ void main() {
 
       // revoke device 2 from device 1: its Link closes, it stays out
       await d1.bridge.revokeDevice(d2.id, reason: 'integration test');
+      // ... and is told why: kestrel.reject device_revoked -> revoked state
       await waitFor(
-        () async => d2.bridge.status.state != BridgeState.connected,
-        what: 'device 2 disconnected',
+        () async => d2.bridge.status.state == BridgeState.revoked,
+        what: 'device 2 sees the revoked state',
         timeout: const Duration(seconds: 30),
       );
       final list = await d1.bridge.refreshDevices();
