@@ -71,15 +71,60 @@ def prepare_rns_config(rns: RnsConfig) -> str:
     return path
 
 
+_stamping_applied = False
+
+
+def apply_stamping(rns: RnsConfig, RNS=None) -> dict:
+    """Set the RNS >= 1.6 stamping switches (class attributes on ``RNS.Transport``) from the config.
+
+    RNS defaults all three to True and its own ``[stamps]`` config can only turn them on, so the
+    bridge overrides them here. Must run right after ``RNS.Reticulum(...)`` and before any
+    ``RNS.Destination`` exists (a destination loads/needs its stamp when it is created and announced).
+    Attributes missing in the installed RNS (older versions) are skipped. Returns the effective values.
+    """
+    global _stamping_applied
+    if RNS is None:
+        import RNS
+    wanted = {
+        "STAMP_DESTINATIONS": rns.stamp_destinations,
+        "STAMP_PRS": rns.stamp_path_requests,
+        "STAMP_LRS": rns.stamp_link_requests,
+    }
+    effective = {}
+    for attr, value in wanted.items():
+        if hasattr(RNS.Transport, attr):
+            setattr(RNS.Transport, attr, bool(value))
+            effective[attr] = bool(value)
+    _stamping_applied = True
+    if effective and any(effective.values()):
+        log.info("RNS stamping active: %s (announces may be delayed by proof-of-work on slow CPUs)",
+                 ", ".join(k for k, v in effective.items() if v))
+    else:
+        log.info("RNS stamping disabled (announces, path requests and link requests are sent unstamped)")
+    return effective
+
+
+def stamping_applied() -> bool:
+    return _stamping_applied
+
+
+def require_stamping_applied() -> None:
+    """Guard for code that creates ``RNS.Destination`` objects: Reticulum must be started via ``start_reticulum``."""
+    if not _stamping_applied:
+        raise RuntimeError("RNS stamping policy not applied yet: call start_reticulum() before creating destinations")
+
+
 def start_reticulum(rns: RnsConfig):
     """Start Reticulum for the configured mode and return the RNS.Reticulum instance."""
     import RNS
     prepare_rns_config(rns)
     if rns.mode == "standalone":
-        return RNS.Reticulum(configdir=rns.config_dir, loglevel=rns.log_level, require_shared_instance=False)
-    ret = RNS.Reticulum(configdir=rns.config_dir, loglevel=rns.log_level, require_shared_instance=True)
-    if not ret.is_connected_to_shared_instance:
-        raise SystemError("not connected to a shared instance")
+        ret = RNS.Reticulum(configdir=rns.config_dir, loglevel=rns.log_level, require_shared_instance=False)
+    else:
+        ret = RNS.Reticulum(configdir=rns.config_dir, loglevel=rns.log_level, require_shared_instance=True)
+        if not ret.is_connected_to_shared_instance:
+            raise SystemError("not connected to a shared instance")
+    apply_stamping(rns, RNS)
     return ret
 
 
@@ -105,11 +150,29 @@ class AnnounceWatcher:
     (shared mode: periodic announces only). An interface counts as connected while its ``online``
     flag is set. A new connection is recognised by an offline period or by a new socket object
     (a reconnect that is faster than the poll interval).
+
+    ``Destination.announce()`` only *queues* the announce while RNS stamping is on and the
+    proof-of-work is not done; the packet is emitted later by RNS's stamper thread (maybe never on a
+    slow CPU). So "announce requested" and "announce emitted" are tracked separately:
+
+    * ``emitted_at()`` returns the wall-clock time of the last announce RNS really created, or None
+      when unknown. ``stamping()`` says whether announces can be deferred. Without ``emitted_at`` an
+      announce counts as emitted when ``announce()`` returns.
+    * While a queued announce is pending (not emitted yet, younger than ``pending_timeout``) no new
+      announce is requested, so the stamper queue does not fill with duplicates.
+    * ``last_emitted_at`` (wall clock) feeds the heartbeat.
     """
 
     def __init__(self, announce, interfaces=None, interval: float = 1800.0, poll: float = 1.0,
-                 clock=time.monotonic, follow_ups=FOLLOW_UPS):
+                 clock=time.monotonic, follow_ups=FOLLOW_UPS, emitted_at=None, stamping=None,
+                 wall=time.time, pending_timeout: float = 900.0):
         self.announce = announce
+        self.emitted_at = emitted_at
+        self.stamping = stamping or (lambda: False)
+        self._wall = wall
+        self.pending_timeout = pending_timeout
+        self.last_emitted_at: float | None = None
+        self._queued: tuple[float, float] | None = None   # (monotonic, wall) time the pending announce was queued
         self.interfaces = interfaces or (lambda: None)
         self.interval = interval
         self.poll = poll
@@ -127,8 +190,27 @@ class AnnounceWatcher:
             return ("untracked",)
         return tuple(sorted(id(getattr(i, "socket", None)) for i in ifaces if getattr(i, "online", False)))
 
+    @property
+    def pending(self) -> bool:
+        """True while an announce is queued (awaiting its stamp) and has not been emitted yet."""
+        return self._queued is not None
+
+    def _check_emitted(self, reason: str | None = None) -> None:
+        if self._queued is None or self.emitted_at is None:
+            return
+        try:
+            at = self.emitted_at()
+        except Exception:
+            return
+        if at is not None and at >= self._queued[1]:
+            log.info("announce emitted for kestrel.bridge (%s, %.0f s after it was requested)",
+                     reason or "after waiting for its stamp", max(0.0, at - self._queued[1]))
+            self.last_emitted_at = at
+            self._queued = None
+
     def tick(self) -> bool:
-        """One poll step; returns True when an announce was sent."""
+        """One poll step; returns True when an announce was requested."""
+        self._check_emitted()
         ifaces = self.interfaces()
         sig = self._signature(ifaces)
         online = ifaces is None or interfaces_online(ifaces)
@@ -149,13 +231,30 @@ class AnnounceWatcher:
         self._sig = sig
         if reason is None:
             return False
+        if self._queued is not None:
+            if now - self._queued[0] < self.pending_timeout:
+                self._last = now
+                log.debug("announce (%s) skipped: previous announce still awaiting its stamp", reason)
+                return False
+            log.warning("queued announce was not emitted within %.0f s (stamp generation too slow?); queueing again",
+                        self.pending_timeout)
+            self._queued = None
+        wall = self._wall()
         try:
             self.announce()
         except Exception:
             log.exception("announce failed")
             return False
         self._last = now
-        log.info("announced kestrel.bridge (%s)", reason)
+        self._queued = (now, wall)
+        if self.emitted_at is None and not self.stamping():
+            self.last_emitted_at = self._wall()   # no way to tell: announce() is synchronous without stamping
+            self._queued = None
+            log.info("announced kestrel.bridge (%s)", reason)
+            return True
+        self._check_emitted(reason)
+        if self._queued is not None:
+            log.info("announce queued for kestrel.bridge (%s), awaiting stamp; not emitted yet", reason)
         return True
 
     def start(self) -> None:

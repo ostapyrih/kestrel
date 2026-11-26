@@ -16,6 +16,7 @@ from .config import Config, ConfigError, load_config
 log = logging.getLogger("kestrel")
 DEFAULT_CONFIG = os.environ.get("KESTREL_CONFIG", "/sidecar/config/bridge.toml")
 HEALTH_MAX_AGE = 90.0
+ANNOUNCE_GRACE = 300.0   # seconds beyond announce_interval (or after start) before "announce not emitted"
 EXIT_OK, EXIT_UNHEALTHY, EXIT_DEGRADED = 0, 1, 3
 
 
@@ -147,6 +148,16 @@ def cmd_healthcheck(cfg: Config, strict: bool = False) -> int:
     problems = []
     if h.get("rns_online") is False:
         problems.append("RNS interface offline")
+    elif "started_at" in h:
+        # online but our announce never reached the wire (typically: RNS stamping starved of CPU)
+        last = h.get("last_announce_emitted_at")
+        now = time.time()
+        if isinstance(last, (int, float)):
+            limit, since, what = cfg.rns.announce_interval + ANNOUNCE_GRACE, last, "announce not emitted"
+        else:
+            limit, since, what = ANNOUNCE_GRACE, h.get("started_at"), "announce never emitted"
+        if isinstance(since, (int, float)) and now - since > limit:
+            problems.append(f"{what} for > {int(limit // 60)} min" + (" (stamp pending)" if h.get("announce_pending") else ""))
     if h.get("meshchatx_reachable") is False:
         problems.append("MeshChatX unreachable")
     if problems:
@@ -252,9 +263,14 @@ async def _run(cfg: Config) -> None:
                 await service.recheck_compat()
             await asyncio.sleep(delay)
 
+    started_at = time.time()
+
     def write_health() -> None:
         h = {"ts": time.time(), "mode": cfg.rns.mode, "rns_online": rns_online(),
-             "meshchatx_reachable": ws.connected, "compat_ok": service.compat_ok}
+             "meshchatx_reachable": ws.connected, "compat_ok": service.compat_ok,
+             "started_at": started_at, "stamping": bool(RNS.Transport.STAMP_DESTINATIONS),
+             "announce_pending": rpc.announce_pending,
+             "last_announce_emitted_at": rpc.last_announce_emitted_at}
         try:
             with open(cfg.health_path, "w", encoding="utf-8") as f:
                 json.dump(h, f)

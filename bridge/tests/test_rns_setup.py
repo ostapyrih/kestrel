@@ -1,6 +1,9 @@
 import os
+import sys
 import tempfile
+import types
 import unittest
+from unittest import mock
 
 from kestrel_bridge.config import ConfigError, RnsConfig, parse_config
 from kestrel_bridge.rns_setup import AnnounceWatcher, prepare_rns_config, render_standalone_config
@@ -249,3 +252,166 @@ class ModeConfigTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeTransport:
+    """Mimics the RNS 1.6.1 defaults: everything stamped."""
+    STAMP_DESTINATIONS = True
+    STAMP_PRS = True
+    STAMP_LRS = True
+
+
+class FakeRNS:
+    def __init__(self):
+        self.Transport = FakeTransport()
+        self.events = []
+
+
+class ApplyStampingTest(unittest.TestCase):
+    def setUp(self):
+        import kestrel_bridge.rns_setup as m
+        self.m = m
+        self.addCleanup(setattr, m, "_stamping_applied", m._stamping_applied)
+        m._stamping_applied = False
+
+    def test_default_config_turns_all_stamping_off(self):
+        rns = FakeRNS()
+        eff = self.m.apply_stamping(raw_config().rns, rns)
+        self.assertEqual(eff, {"STAMP_DESTINATIONS": False, "STAMP_PRS": False, "STAMP_LRS": False})
+        self.assertEqual((rns.Transport.STAMP_DESTINATIONS, rns.Transport.STAMP_PRS, rns.Transport.STAMP_LRS),
+                         (False, False, False))
+
+    def test_enabled_by_config(self):
+        rns = FakeRNS()
+        rns.Transport.STAMP_PRS = False
+        self.m.apply_stamping(raw_config(rns={"stamps": True, "stamp_link_requests": False}).rns, rns)
+        self.assertEqual((rns.Transport.STAMP_DESTINATIONS, rns.Transport.STAMP_PRS, rns.Transport.STAMP_LRS),
+                         (True, True, False))
+
+    def test_missing_attributes_are_skipped(self):
+        class Old:
+            STAMP_DESTINATIONS = True
+        rns = types.SimpleNamespace(Transport=Old())
+        eff = self.m.apply_stamping(raw_config().rns, rns)
+        self.assertEqual(eff, {"STAMP_DESTINATIONS": False})
+        self.assertFalse(hasattr(rns.Transport, "STAMP_PRS"))
+
+    def test_require_applied_guard(self):
+        with self.assertRaises(RuntimeError):
+            self.m.require_stamping_applied()
+        self.m.apply_stamping(raw_config().rns, FakeRNS())
+        self.m.require_stamping_applied()
+
+    def test_flags_are_set_before_any_destination_is_created(self):
+        """start_reticulum sets the flags right after RNS.Reticulum() and a destination created afterwards sees them."""
+        seen = []
+
+        class Destination:
+            def __init__(self, *a):
+                seen.append(fake.Transport.STAMP_DESTINATIONS)
+
+        class Reticulum:
+            def __init__(self, **kw):
+                seen.append(("reticulum", fake.Transport.STAMP_DESTINATIONS))   # still the RNS default here
+                self.is_connected_to_shared_instance = True
+
+        fake = types.SimpleNamespace(Transport=FakeTransport(), Reticulum=Reticulum, Destination=Destination)
+        cfg = raw_config(rns={"config_dir": tempfile.mkdtemp()}).rns
+        with mock.patch.dict(sys.modules, {"RNS": fake}):
+            self.m.start_reticulum(cfg)
+            self.m.require_stamping_applied()
+            fake.Destination(None, 0, 0, "kestrel", "bridge")
+        self.assertEqual(seen, [("reticulum", True), False])
+        self.assertFalse(fake.Transport.STAMP_PRS)
+        self.assertFalse(fake.Transport.STAMP_LRS)
+
+
+class StampedAnnounceTest(unittest.TestCase):
+    """With stamping on, announce() only queues; the packet is emitted later (or never)."""
+
+    def setUp(self):
+        self.clock = FakeClock(1000.0)
+        self.requested = 0
+        self.emitted = None       # wall time RNS "built" the announce
+        self.iface = FakeInterface(online=True)
+
+    def announce(self):
+        self.requested += 1       # queued only
+
+    def watcher(self, follow_ups=(10.0, 60.0), **kw):
+        return AnnounceWatcher(self.announce, lambda: [self.iface], 1800, clock=self.clock, follow_ups=follow_ups,
+                               emitted_at=lambda: self.emitted, stamping=lambda: True, wall=self.clock, **kw)
+
+    def test_queued_is_not_reported_as_emitted(self):
+        w = self.watcher()
+        with self.assertLogs("kestrel.rns", "INFO") as logs:
+            self.assertTrue(w.tick())
+        self.assertTrue(w.pending)
+        self.assertIsNone(w.last_emitted_at)
+        self.assertIn("queued", logs.output[0])
+        self.assertNotIn("emitted for", logs.output[0])
+
+    def test_no_duplicate_while_pending(self):
+        w = self.watcher()
+        w.tick()
+        for _ in range(2):               # follow-ups, periodic and reconnects all come due while still pending
+            self.clock.advance(400)
+            self.iface.drop()
+            w.tick()
+            self.iface.reconnect()
+            w.tick()
+        self.assertEqual(self.requested, 1)
+
+    def test_emission_detected_then_new_announce_allowed(self):
+        w = self.watcher(follow_ups=())
+        w.tick()
+        self.clock.advance(120)
+        self.emitted = self.clock()
+        with self.assertLogs("kestrel.rns", "INFO") as logs:
+            w.tick()
+        self.assertIn("announce emitted", logs.output[0])
+        self.assertFalse(w.pending)
+        self.assertEqual(w.last_emitted_at, self.emitted)
+        self.clock.advance(1800)
+        self.assertTrue(w.tick())        # periodic announce is queued again
+        self.assertEqual(self.requested, 2)
+
+    def test_stale_emission_does_not_count(self):
+        self.emitted = 500.0             # an older announce from before this request
+        w = self.watcher()
+        w.tick()
+        self.assertTrue(w.pending)
+
+    def test_pending_expires_and_is_requeued(self):
+        w = self.watcher(pending_timeout=900.0)
+        w.tick()
+        self.clock.advance(901)
+        self.assertTrue(w.tick())
+        self.assertEqual(self.requested, 2)
+
+    def test_synchronous_announce_counts_as_emitted_without_stamping(self):
+        w = AnnounceWatcher(self.announce, lambda: [self.iface], 1800, clock=self.clock, follow_ups=(), wall=self.clock)
+        w.tick()
+        self.assertFalse(w.pending)
+        self.assertEqual(w.last_emitted_at, 1000.0)
+
+    def test_announce_that_emits_immediately(self):
+        def sync():
+            self.requested += 1
+            self.emitted = self.clock()
+        w = AnnounceWatcher(sync, lambda: [self.iface], 1800, clock=self.clock, follow_ups=(),
+                            emitted_at=lambda: self.emitted, stamping=lambda: False, wall=self.clock)
+        w.tick()
+        self.assertFalse(w.pending)
+        self.assertEqual(w.last_emitted_at, 1000.0)
+
+    def test_poll_loop_sleeps(self):
+        w = AnnounceWatcher(self.announce, lambda: [self.iface], poll=0.5)
+        waits = []
+
+        def wait(t):
+            waits.append(t)
+            w._stop.set()
+        w._stop.wait = wait
+        w._run()
+        self.assertEqual(waits, [0.5])
