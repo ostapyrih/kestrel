@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/ostapyrih/kestrel/compare/bridge-v0.4.1...bridge-v0.5.0) (2026-11-26)
+
+
+### Features
+
+* invite-QR pairing, app-owned device name, plain messenger when the bridge is off ([#22](https://github.com/ostapyrih/kestrel/issues/22)) ([c316067](https://github.com/ostapyrih/kestrel/commit/c316067f2c5a110ccc5b587d77f97f817a6c22ff))
+
+
+### Bug Fixes
+
+* **bridge:** tell rejected and revoked devices why their link is closed ([733b77f](https://github.com/ostapyrih/kestrel/commit/733b77f0e94bef5c3ab4a17bf99859ed79de0a9c))
+
 ## [0.4.1](https://github.com/ostapyrih/kestrel/compare/bridge-v0.4.0...bridge-v0.4.1) (2026-11-26)
 
 
