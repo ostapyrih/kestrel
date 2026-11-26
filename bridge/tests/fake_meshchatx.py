@@ -36,6 +36,7 @@ class FakeMeshChatX:
         self.room_messages: dict[tuple[str, str], list[dict]] = {}
         self.sent: list[dict] = []
         self.rrc_sent: list[dict] = []
+        self.marked_read: list[str] = []
         self.active_cleared = 0
         self.ws_clients: list[web.WebSocketResponse] = []
         self.ws_inbound: list[dict] = []
@@ -170,6 +171,11 @@ class FakeMeshChatX:
         return web.json_response({"lxmf_message": {k: v for k, v in m.items() if k != "id"}})
 
     async def mark_read(self, request):
+        peer = request.match_info["peer"]
+        self.marked_read.append(peer)
+        for c in self.conversations:
+            if c["destination_hash"] == peer:
+                c["is_unread"] = False
         return web.json_response({"message": "ok"})
 
     async def rrc_hubs(self, request):
