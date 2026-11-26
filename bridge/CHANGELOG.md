@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/ostapyrih/kestrel/compare/bridge-v0.3.0...bridge-v0.4.0) (2026-11-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* **bridge:** the wire protocol is now version 2 and v1 clients get protocol_mismatch. The config key [whitelist] is deprecated in favour of [[devices]] (still read as bootstrap devices). Clients and bridge must be upgraded together; the app has no bridge client yet, so there is no impact.
+
+### Features
+
+* **bridge:** protocol v2 with multi-device support ([dc577b5](https://github.com/ostapyrih/kestrel/commit/dc577b51c14c3edded37351bfba25bd0f6fee3be))
+
+
+### Bug Fixes
+
+* **bridge:** disable RNS announce/path-request stamping by default ([b63b383](https://github.com/ostapyrih/kestrel/commit/b63b3831941417b4c1e09ca98ef83769a3a412b2))
+
 ## [0.3.0](https://github.com/ostapyrih/kestrel/compare/bridge-v0.2.0...bridge-v0.3.0) (2026-11-26)
 
 
