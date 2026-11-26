@@ -88,11 +88,10 @@ void main() {
       () async => (await repo.message(mid))!.status == MsgStatus.delivered,
     );
     final m = (await repo.message(mid))!;
-    expect((m.route, m.transport, m.senderIdentity), (
-      'opportunistic',
-      'tcp',
-      'B',
-    ));
+    expect(
+      (m.route, m.transport, m.senderIdentity),
+      ('opportunistic', 'tcp', 'B'),
+    );
     expect(
       (await repo.log(mid)).map((l) => l.stage),
       containsAllInOrder(['queued', 'sent', 'delivered']),
