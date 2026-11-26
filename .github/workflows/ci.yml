@@ -24,9 +24,24 @@ jobs:
         with:
           channel: stable
           cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python reference (RNS/LXMF) for the integration test
+        working-directory: .
+        run: |
+          python -m venv tools/.venv
+          tools/.venv/bin/pip install -r tools/requirements.txt
       - run: flutter pub get
       - run: flutter analyze
-      - run: flutter test
+      - name: Unit, widget and integration tests (NodeService vs Python LXMF)
+        run: flutter test
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Build debug APK
+        run: flutter build apk --debug
 
   bridge:
     runs-on: ubuntu-latest
