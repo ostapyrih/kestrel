@@ -7,7 +7,9 @@ import '../platform.dart';
 import '../providers.dart';
 import '../storage/repo.dart';
 import 'chat_screen.dart';
+import 'bridge_widgets.dart';
 import 'new_chat_screen.dart';
+import 'rooms_screen.dart';
 import 'settings_screen.dart';
 import 'widgets.dart';
 
@@ -26,6 +28,15 @@ class ChatsScreen extends ConsumerWidget {
         title: Text(s.t('app_title')),
         actions: [
           Center(child: ConnectionIndicator(conn)),
+          if (ref.watch(bridgeConfiguredProvider).value ?? false)
+            IconButton(
+              key: const ValueKey('open-rooms'),
+              tooltip: s.t('rooms'),
+              icon: const Icon(Icons.forum_outlined),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const RoomsScreen()),
+              ),
+            ),
           IconButton(
             tooltip: s.t('settings'),
             icon: const Icon(Icons.settings_outlined),
@@ -94,6 +105,11 @@ class AccountSwitcher extends ConsumerWidget {
     final s = Strings.of(context);
     final sel = ref.watch(accountFilterProvider);
     final notifier = ref.read(accountFilterProvider.notifier);
+    final configured = ref.watch(bridgeConfiguredProvider).value ?? false;
+    final bridgeStatus = ref.watch(bridgeStatusProvider).value;
+    final help = (configured && bridgeStatus != null)
+        ? bridgeStateHelp(s, bridgeStatus)
+        : null;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
       child: Column(
@@ -114,8 +130,8 @@ class AccountSwitcher extends ConsumerWidget {
                   key: const ValueKey('chip-A'),
                   label: Text(s.account('A')),
                   selected: sel == 'A',
-                  // The bridge arrives in Phase 4.
-                  onSelected: null,
+                  // Enabled once the bridge is configured.
+                  onSelected: configured ? (_) => notifier.select('A') : null,
                 ),
               ),
               ChoiceChip(
@@ -127,11 +143,24 @@ class AccountSwitcher extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: 4),
-          Text(
-            '${s.account('A')}: ${s.t('bridge_hint')}',
-            style: Theme.of(context).textTheme.labelSmall
-                ?.copyWith(color: Theme.of(context).colorScheme.outline),
-          ),
+          if (configured && bridgeStatus != null) ...[
+            BridgeIndicator(bridgeStatus),
+            if (help != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  help,
+                  key: const ValueKey('bridge-help'),
+                  style: Theme.of(context).textTheme.labelSmall
+                      ?.copyWith(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+          ] else
+            Text(
+              '${s.account('A')}: ${s.t('bridge_hint')}',
+              style: Theme.of(context).textTheme.labelSmall
+                  ?.copyWith(color: Theme.of(context).colorScheme.outline),
+            ),
         ],
       ),
     );
@@ -193,7 +222,9 @@ class ChatTile extends StatelessWidget {
       onTap:
           onTap ??
           () => Navigator.of(context).push(
-            MaterialPageRoute<void>(builder: (_) => ChatScreen(chatId: chat.id)),
+            MaterialPageRoute<void>(
+              builder: (_) => ChatScreen(chatId: chat.id),
+            ),
           ),
     );
   }

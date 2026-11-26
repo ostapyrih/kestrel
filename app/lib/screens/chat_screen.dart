@@ -4,9 +4,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../bridge/codec.dart';
 import '../l10n/strings.dart';
 import '../providers.dart';
 import '../storage/repo.dart';
+import 'bridge_widgets.dart';
 import 'widgets.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
@@ -25,11 +27,36 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       try {
-        unawaited(ref.read(repoProvider).markRead(widget.chatId));
+        final repo = ref.read(repoProvider);
+        // A chats: tell the bridge (it also clears the local flag first)
+        unawaited(
+          ref
+              .read(bridgeProvider)
+              .markRead(widget.chatId)
+              .catchError((Object _) {})
+              .then((_) => repo.markRead(widget.chatId)),
+        );
       } on Object {
         // no repo (widget tests)
       }
     });
+  }
+
+  bool _loadingOlder = false;
+
+  Future<void> _loadOlder() async {
+    setState(() => _loadingOlder = true);
+    try {
+      await ref.read(bridgeProvider).loadOlder(widget.chatId);
+    } on Object catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(bridgeErrorText(Strings.of(context), e))),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loadingOlder = false);
+    }
   }
 
   @override
@@ -51,6 +78,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final chat = ref.watch(chatProvider(widget.chatId)).value;
     final msgs = ref.watch(messagesProvider(widget.chatId));
     final identity = chat?.accountIdentity ?? 'B';
+    final isA = identity == 'A';
+    final deviceNames = isA
+        ? {
+            for (final d
+                in ref.watch(bridgeDevicesProvider).value ??
+                    const <DeviceRecord>[])
+              d.deviceId: d.name,
+          }
+        : const <String, String>{};
+    final olderItem = isA && !(chat?.olderDone ?? true);
     return Scaffold(
       appBar: AppBar(
         title: Row(
@@ -74,9 +111,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               data: (list) => ListView.builder(
                 reverse: true,
                 padding: const EdgeInsets.all(12),
-                itemCount: list.length,
-                itemBuilder: (_, i) =>
-                    MessageBubble(message: list[list.length - 1 - i]),
+                itemCount: list.length + (olderItem ? 1 : 0),
+                itemBuilder: (_, i) {
+                  if (i == list.length) {
+                    return Center(
+                      child: TextButton(
+                        key: const ValueKey('load-older'),
+                        onPressed: _loadingOlder ? null : _loadOlder,
+                        child: Text(s.t('load_older')),
+                      ),
+                    );
+                  }
+                  final m = list[list.length - 1 - i];
+                  return MessageBubble(
+                    message: m,
+                    originLabel: originLabel(s, m, deviceNames),
+                  );
+                },
               ),
               loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => Center(child: Text('$e')),
@@ -90,7 +141,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    s.t('from', {'account': s.account(identity)}),
+                    isA
+                        ? s.t('from_a_bridge')
+                        : s.t('from', {'account': s.account(identity)}),
                     key: const ValueKey('composer-from'),
                     style: Theme.of(context).textTheme.labelMedium?.copyWith(
                       color: Theme.of(context).colorScheme.primary,
@@ -136,12 +189,25 @@ IconData statusIcon(String status) => switch (status) {
   MsgStatus.sent => Icons.done,
   MsgStatus.delivered => Icons.done_all,
   MsgStatus.failed => Icons.error_outline,
+  MsgStatus.cancelled => Icons.block,
   _ => Icons.south_west,
 };
 
+/// "from iPhone" / "from MeshChatX" for outgoing messages of account A
+/// (spec 6.4); null for everything else.
+String? originLabel(Strings s, MessageRow m, Map<String, String> names) {
+  if (m.senderIdentity != 'A' || !m.outgoing) return null;
+  final o = m.originDevice;
+  if (o == null) return s.t('from_meshchatx');
+  return s.t('from_device', {'device': names[o] ?? shortHash(o)});
+}
+
 class MessageBubble extends StatelessWidget {
-  const MessageBubble({super.key, required this.message});
+  const MessageBubble({super.key, required this.message, this.originLabel});
   final MessageRow message;
+
+  /// Label of the sending device (account A), see [originLabel].
+  final String? originLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -152,9 +218,16 @@ class MessageBubble extends StatelessWidget {
     final failed = m.status == MsgStatus.failed;
     final meta = [
       s.account(m.senderIdentity),
-      if (m.route != null) m.route!,
+      ?originLabel,
+      if (m.route != null)
+        m.route == 'via_bridge' ? s.t('route_via_bridge') : m.route!,
       s.t('transport_${m.transport}'),
     ].join(' · ');
+    final waitingForBridge =
+        out &&
+        m.senderIdentity == 'A' &&
+        m.status == MsgStatus.queued &&
+        m.lxmfHash == null;
     return Align(
       alignment: out ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
@@ -199,6 +272,7 @@ class MessageBubble extends StatelessWidget {
                       ),
                     ],
                   ),
+                  if (waitingForBridge) QueuedBridgeActions(message: m),
                 ],
               ),
             ),
@@ -256,6 +330,20 @@ class MessageDetails extends ConsumerWidget {
               key: const ValueKey('detail-hash'),
             ),
             row(s.t('sender'), s.account(m.senderIdentity)),
+            if (m.senderIdentity == 'A' && m.outgoing)
+              row(
+                s.t('origin_device'),
+                m.originDevice == null
+                    ? s.t('from_meshchatx')
+                    : (ref
+                              .watch(bridgeDevicesProvider)
+                              .value
+                              ?.where((d) => d.deviceId == m.originDevice)
+                              .firstOrNull
+                              ?.name ??
+                          shortHash(m.originDevice!)),
+                key: const ValueKey('detail-origin'),
+              ),
             row(s.t('route'), m.route ?? '-'),
             row(s.t('transport'), s.t('transport_${m.transport}')),
             row(s.t('status'), s.t('status_${m.status}')),
