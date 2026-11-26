@@ -1,7 +1,9 @@
 """Push fan-out: WS-derived events -> subscribed Links, LXMF fallback for offline phones.
 
 Transport awareness: the *effective profile* of a phone is the most restrictive of
-  - what the path table says (next hop interface is TCP/backbone -> "full", otherwise "constrained"),
+  - ``push.profile`` = ``full``/``constrained`` (override), or with ``auto``:
+      * shared mode: the path table of the shared instance (next hop interface TCP/backbone -> "full"),
+      * standalone mode: the phone's live Link (RTT < push.full_max_rtt and MTU >= push.full_min_link_mtu),
   - what the phone asked for in /subscribe ("profile" hint can only downgrade),
   - ``push.unknown_profile`` when no path is known.
 "constrained" (LoRa) receives only incoming direct LXMF messages, RRC mentions and terminal
@@ -30,6 +32,18 @@ def classify_interface(name: str | None, fast_prefixes) -> bool:
         return False
     cls = name.split("[", 1)[0].strip()
     return cls in fast_prefixes
+
+
+def classify_link(rtt, mtu, max_rtt: float, min_mtu: int) -> str | None:
+    """Profile from the measured state of the phone's Link (standalone mode).
+
+    ``full`` needs a measured RTT below ``max_rtt`` seconds AND a link MTU of at least ``min_mtu``
+    bytes (LoRa/serial paths negotiate the 500-byte base MTU and have RTTs of seconds). Missing
+    measurements -> None (unknown).
+    """
+    if not isinstance(rtt, (int, float)) or not isinstance(mtu, int) or rtt <= 0 or mtu <= 0:
+        return None
+    return FULL if rtt < max_rtt and mtu >= min_mtu else CONSTRAINED
 
 
 def more_restrictive(*profiles: str) -> str:
@@ -116,9 +130,12 @@ class PushHub:
         now = self._clock()
         if sub.profile_cache and now - sub.profile_cache[0] < 30:
             return sub.profile_cache[1]
-        path = self.profile_of(sub.phone)
-        if path is None:
-            path = self.cfg.push.unknown_profile
+        if self.cfg.push.profile in (FULL, CONSTRAINED):
+            path = self.cfg.push.profile
+        else:
+            path = self.profile_of(sub.phone)
+            if path is None:
+                path = self.cfg.push.unknown_profile
         prof = more_restrictive(path, sub.hint)
         sub.profile_cache = (now, prof)
         return prof

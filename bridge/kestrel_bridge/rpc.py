@@ -10,7 +10,8 @@ import RNS
 
 from . import codec, errors
 from .config import Config
-from .push import FULL, CONSTRAINED, PushHub, Subscriber, classify_interface
+from .push import FULL, CONSTRAINED, PushHub, Subscriber, classify_interface, classify_link
+from .rns_setup import AnnounceWatcher, tcp_client_interfaces
 from .service import PATHS, Ctx, Service
 
 log = logging.getLogger("kestrel.rpc")
@@ -62,6 +63,24 @@ class PathProfile:
         return FULL if classify_interface(name, self.cfg.push.fast_interfaces) else CONSTRAINED
 
 
+class LinkProfile:
+    """Standalone mode: profile of a phone from the measured RTT/MTU of its current Link.
+
+    ``link_of(phone)`` returns the phone's active Link (or None). No access to any path table needed.
+    """
+
+    def __init__(self, cfg: Config, link_of):
+        self.cfg = cfg
+        self.link_of = link_of
+
+    def __call__(self, phone: str) -> str | None:
+        link = self.link_of(phone)
+        if link is None:
+            return None
+        return classify_link(getattr(link, "rtt", None), getattr(link, "mtu", None),
+                             self.cfg.push.full_max_rtt, self.cfg.push.full_min_link_mtu)
+
+
 class _LinkState:
     def __init__(self, link):
         self.link = link
@@ -91,7 +110,7 @@ class RpcServer:
         self._links: dict[bytes, _LinkState] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
-        self._announcer: threading.Thread | None = None
+        self._announcer: AnnounceWatcher | None = None
 
     # ---- lifecycle ---------------------------------------------------------------------------
     def start(self) -> None:
@@ -101,12 +120,26 @@ class RpcServer:
             d.register_request_handler(path, self._make_handler(path), allow=RNS.Destination.ALLOW_ALL)
         d.set_link_established_callback(self._link_established)
         self.destination = d
-        self._announcer = threading.Thread(target=self._announce_loop, name="kestrel-announce", daemon=True)
+        # standalone: announce on start, every announce_interval and after every TCP reconnect;
+        # shared: periodic only (the shared instance owns the interface)
+        watch = tcp_client_interfaces if self.cfg.rns.mode == "standalone" else None
+        self._announcer = AnnounceWatcher(lambda: d.announce(), watch, self.cfg.rns.announce_interval)
         self._announcer.start()
         log.info("RPC destination %s ready", RNS.prettyhexrep(d.hash))
 
+    def active_link(self, phone: str):
+        """The most recent active Link of an identified phone, or None."""
+        with self._lock:
+            states = list(self._links.values())
+        for st in reversed(states):
+            if st.phone == phone and st.link.status == RNS.Link.ACTIVE:
+                return st.link
+        return None
+
     def stop(self) -> None:
         self._stop.set()
+        if self._announcer is not None:
+            self._announcer.stop()
         with self._lock:
             states = list(self._links.values())
         for st in states:
@@ -114,14 +147,6 @@ class RpcServer:
                 st.link.teardown()
             except Exception:
                 pass
-
-    def _announce_loop(self) -> None:
-        while not self._stop.is_set():
-            try:
-                self.destination.announce()
-            except Exception:
-                log.exception("announce failed")
-            self._stop.wait(self.cfg.rns.announce_interval)
 
     # ---- links -----------------------------------------------------------------------------------
     def _link_established(self, link) -> None:
@@ -182,8 +207,9 @@ class RpcServer:
 
         if data is not None and not isinstance(data, dict):
             return codec.err(errors.BAD_REQUEST, "request must be a map")
+        forced = self.cfg.push.profile if self.cfg.push.profile != "auto" else None
         ctx = Ctx(phone=phone, transport="link", subscribe=subscribe,
-                  profile=self.push.profile_of(phone))
+                  profile=forced or self.push.profile_of(phone))
         fut = asyncio.run_coroutine_threadsafe(self.service.dispatch(path, data, ctx), self.loop)
         try:
             resp = fut.result(timeout=self.cfg.limits.rpc_timeout)

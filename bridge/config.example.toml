@@ -5,8 +5,9 @@ state_dir = "/sidecar/state"   # sqlite (cursors, cmd_id journal, pending acks) 
 log_level = "INFO"             # INFO never logs message text or secrets
 
 [meshchatx]
-# The sidecar shares the network namespace of the MeshChatX container (network_mode: service:meshchatx).
-base_url = "http://127.0.0.1:8000"
+# MeshChatX HTTP/WS API. Standalone mode (recommended): the Docker DNS name of the MeshChatX container on the
+# shared Docker network. Shared mode (network_mode: service:meshchatx): "http://127.0.0.1:8000".
+base_url = "http://meshchatx:8000"
 # Exactly one of password_file / password_env. Prefer a read-only mounted file (mode 600).
 password_file = "/run/secrets/meshchatx_password"
 # password_env = "KESTREL_MESHCHATX_PASSWORD"
@@ -21,10 +22,19 @@ phone_public_keys = [
 ]
 
 [rns]
-config_dir = "/sidecar/.reticulum"         # minimal config, share_instance = Yes, no interfaces
+# "standalone" (default, recommended): the bridge runs its own Reticulum instance with one TCPClientInterface
+# to MeshChatX's TCP server interface and writes the RNS config itself (into config_dir, at every start).
+# "shared": attach to MeshChatX's RNS shared instance (needs the network namespace of its container).
+mode = "standalone"
+tcp_host = "meshchatx"                     # standalone: host of the MeshChatX TCPServerInterface
+tcp_port = 4242                            # standalone: its port
+# ifac_name = "example-network"            # standalone, optional: IFAC network name of that interface
+# ifac_passphrase_file = "/run/secrets/ifac_passphrase"   # standalone, optional: file with the IFAC passphrase
+# require_shared_instance = true           # shared mode only (must stay true)
+config_dir = "/sidecar/.reticulum"         # standalone: generated config; shared: minimal config, no interfaces
 identity_path = "/sidecar/storage/identity"  # identity S (created on first start)
 lxmf_storage = "/sidecar/storage/lxmf"
-announce_interval = 1800
+announce_interval = 1800                    # kestrel.bridge announce period (s); also announced at start and after reconnects
 announce_lxmf = false                       # keep S out of MeshChatX's announce list
 
 [limits]
@@ -34,7 +44,11 @@ lxmf_ts_window = 86400                     # +/- seconds accepted for LXMF comma
 send_rate_per_minute = 30
 
 [push]
-unknown_profile = "constrained"            # when the path to the phone is unknown
+profile = "auto"                           # auto | full | constrained (override)
+# auto, standalone mode: "full" when the phone's Link has RTT < full_max_rtt AND link MTU >= full_min_link_mtu
+full_max_rtt = 1.5                         # seconds
+full_min_link_mtu = 1000                   # bytes
+unknown_profile = "constrained"            # auto: when the transport to the phone is unknown
 lxmf_offline_push = true
 offline_push_max_per_hour = 30
 # propagation_node = "00000000000000000000000000000000"   # optional LXMF propagation node
