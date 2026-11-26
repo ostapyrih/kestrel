@@ -21,11 +21,64 @@ See [docs/PLAN.md](docs/PLAN.md) for the full plan and phase status, and
 
 | Platform | Status | Notes |
 | --- | --- | --- |
-| Android | built | APK / AAB |
+| Android | built | signed APK / AAB; updates via Obtainium |
 | iOS | built | unsigned IPA (sideload) |
-| Windows | built | zip, unsigned (SmartScreen warning) |
-| macOS | built | unsigned DMG (Gatekeeper warning) |
-| Linux | built | AppImage and tar.gz; needs libsecret and a Secret Service (GNOME Keyring / KWallet) |
+| Windows | built | per-user installer and zip, not code-signed (SmartScreen warning); updates in-app |
+| macOS | built | unsigned DMG (Gatekeeper warning); updates in-app |
+| Linux | built | AppImage (updates in-app) and tar.gz; needs libsecret and a Secret Service (GNOME Keyring / KWallet) |
+
+### Install on Android
+
+Releases carry release-signed APKs (`kestrel-<version>-arm64-v8a.apk`, `armeabi-v7a`, `x86_64`) and an AAB.
+[Obtainium](https://obtainium.imranr.dev/) installs and updates them straight from GitHub Releases.
+Open this link on the phone with Obtainium installed (it preselects the `arm64-v8a` APK, ignores
+pre-releases and only follows `app-v*` releases, not the `bridge-v*` ones):
+
+```
+obtainium://app/%7B%22id%22%3A%22com.ostapyrih.kestrel%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2Fostapyrih%2Fkestrel%22%2C%22author%22%3A%22ostapyrih%22%2C%22name%22%3A%22Kestrel%22%2C%22preferredApkIndex%22%3A0%2C%22additionalSettings%22%3A%22%7B%5C%22includePrereleases%5C%22%3Afalse%2C%5C%22apkFilterRegEx%5C%22%3A%5C%22arm64-v8a%5C%22%2C%5C%22filterReleaseTitlesByRegEx%5C%22%3A%5C%22%5Eapp%3A%20v%5C%22%2C%5C%22versionExtractionRegEx%5C%22%3A%5C%22%28%5C%5C%5C%5Cd%2B%5C%5C%5C%5C.%5C%5C%5C%5Cd%2B%5C%5C%5C%5C.%5C%5C%5C%5Cd%2B%29%5C%22%2C%5C%22matchGroupToUse%5C%22%3A%5C%22%241%5C%22%2C%5C%22autoApkFilterByArch%5C%22%3Afalse%2C%5C%22appName%5C%22%3A%5C%22Kestrel%5C%22%7D%22%7D
+```
+
+Or add the app by hand: *Add app*, source URL `https://github.com/ostapyrih/kestrel`, then under
+the app's additional options set *Filter APKs by regular expression* to `arm64-v8a`, *Filter release
+titles by regular expression* to `^app: v`, and leave *Include prereleases* off.
+The release title filter is what keeps the `bridge-v*` releases out of the update checks.
+
+Verify the signature before the first install with
+[AppVerifier](https://github.com/soupslurpr/AppVerifier) (package `com.ostapyrih.kestrel`) or
+`apksigner verify --print-certs <apk>`. The release certificate SHA-256 is:
+
+```
+99:74:09:CA:9C:93:87:F6:7E:29:24:19:14:21:60:31:2B:AA:0F:63:CA:76:56:94:AF:85:50:D9:8E:40:04:C2
+```
+
+### Desktop updates
+
+The Windows, macOS and AppImage builds check GitHub Releases at start-up and every 6 hours
+(Settings, *Check for updates automatically*, on by default; *Check now* is manual), show the
+release notes and install the update on request. Before installing, the app verifies the Ed25519
+signature of `SHA256SUMS.txt` against the public key embedded in the app and then the SHA-256 of
+the downloaded file; on any mismatch it refuses. Windows runs the per-user installer silently
+(`kestrel-<version>-windows-x64-setup.exe`, installs to `%LOCALAPPDATA%\Programs\Kestrel`),
+macOS replaces the app bundle from the DMG, an AppImage replaces itself. The `tar.gz` build and
+mobile platforms have no in-app updater.
+
+### Verify a release
+
+Every release has `SHA256SUMS.txt` and `SHA256SUMS.txt.sig`, a base64 Ed25519 signature over the exact
+bytes of the checksum file. The public key (raw 32 bytes, base64) is:
+
+```
+GeeSuwmBoGEsCARLxFniM3qIlf2w2htnnGT7wYeH7as=
+```
+
+Download the files of a release into one directory and run (needs Python and `pip install cryptography`):
+
+```
+python tools/release/verify.py SHA256SUMS.txt SHA256SUMS.txt.sig --check-files .
+```
+
+The script checks the signature and then the SHA-256 of every listed file that is present.
+The Android certificate fingerprint above is independent of this key.
 
 ### Install on iOS
 
