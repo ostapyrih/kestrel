@@ -247,11 +247,16 @@ Outgoing messages sent from the MeshChatX desktop UI appear as `lxmf.message` wi
 ## 7. Transport-aware push (LoRa profile)
 
 The bridge assigns each subscribed phone a **profile**, the most restrictive of:
-1. **path**: the next-hop interface towards B's `lxmf.delivery` destination in the shared
+1. **path**: how the bridge sees the transport to B. In `rns.mode = "standalone"` (no access to
+   MeshChatX's path table) this is B's live Link: RTT < `push.full_max_rtt` (default 1.5 s) and link
+   MTU >= `push.full_min_link_mtu` (default 1000) -> `full`, otherwise `constrained`. In shared mode it
+   is the next-hop interface towards B's `lxmf.delivery` destination in the shared
    instance's path table. Interface class `TCPInterface`, `TCPClientInterface`,
    `TCPServerInterface`, `BackboneInterface`, `BackboneClientInterface` (configurable,
    `push.fast_interfaces`) -> `full`; anything else (RNode, serial, AutoInterface, ...) ->
    `constrained`; unknown path -> `push.unknown_profile` (default `constrained`).
+   `push.profile = full|constrained` overrides this step in both modes. This is a bridge-side policy:
+   the wire protocol is unchanged.
 2. **hint**: the `profile` B sent in `/subscribe`. B knows its own transport and SHOULD send
    `constrained` when connected over LoRa/BLE-RNode. A hint can never upgrade.
 
