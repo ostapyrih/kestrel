@@ -184,10 +184,7 @@ class Repo {
   }) async {
     await _db.update(
       'accounts',
-      {
-        'address_hash': ?addressHash,
-        'display_name': ?displayName,
-      },
+      {'address_hash': ?addressHash, 'display_name': ?displayName},
       where: 'identity = ?',
       whereArgs: [identity],
     );

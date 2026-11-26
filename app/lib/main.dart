@@ -55,6 +55,7 @@ class KestrelApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Kestrel',
+      debugShowCheckedModeBanner: false,
       localizationsDelegates: Strings.delegates,
       supportedLocales: Strings.supportedLocales,
       localeResolutionCallback: Strings.resolve,
