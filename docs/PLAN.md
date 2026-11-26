@@ -1,140 +1,140 @@
-# План: Kestrel — LXMF-міст + власна identity телефону
+# Plan: Kestrel — LXMF bridge + the phone's own identity
 
-> Живий документ. Оновлюється після кожної фази. Статус фаз — внизу.
-> Роль розподілу: **оркестратор** (Opus) — специфікації, брифи, перевірка; **код пише Sonnet** (субагенти).
+> Living document. Updated after every phase. Phase status is at the bottom.
+> Division of roles: the **orchestrator** (Opus) — specs, briefs, review; **Sonnet writes the code** (subagents).
 
 ---
 
-## 1. Мета
+## 1. Goal
 
-Один Flutter-додаток (Android зараз, iOS пізніше), який працює у **двох режимах**:
+One Flutter app (Android now, iOS later) that works in **two modes**:
 
-| Режим | Від чийого імені я пишу | Хто про мене знає |
+| Mode | Whose name I write under | Who knows about me |
 |---|---|---|
-| **Standalone** (міст вимкнено) | від identity телефону `B` | ті, кому я дав адресу `B` |
-| **Bridge** (міст увімкнено) | від `A` (MeshChatX на `amd1`) **через** `B`; і далі можна писати від `B` | друзі знають `A` |
+| **Standalone** (bridge off) | the phone's identity `B` | those I gave the `B` address to |
+| **Bridge** (bridge on) | `A` (MeshChatX on `amd1`) **via** `B`; and I can still write as `B` | friends know `A` |
 
-Транспорт однаковий у обох режимах: **TCP** → `rns.ostapyrih.com:4242` коли є інтернет, **BLE → RNode (LoRa)** без інтернету.
+The transport is the same in both modes: **TCP** → `rns.ostapyrih.com:4242` when online, **BLE → RNode (LoRa)** without internet.
 
-`A` ніколи не дублюється на телефоні → нуль конфліктів маршрутизації.
-
----
-
-## 2. Ключова вимога: режими не стирають дані, все прозоро
-
-1. **Перемикання Bridge ON/OFF нічого не видаляє.** Чати `B` і чати `A` (з мосту) живуть у локальній БД паралельно, кожен запис позначений, до якої identity належить.
-2. **`B` не перестає бути `B`, коли міст увімкнений.** Прямі повідомлення на `B` далі приходять і показуються (як окремий акаунт).
-3. **Кожне повідомлення показує, як воно пішло/прийшло:**
-   - **Від імені:** `A (через міст)` або `B (телефон)`
-   - **Маршрут:** `direct` (Link) / `opportunistic` / `propagated` (через propagation node) / `via bridge` (команда на `amd1`, далі `A` відправив сам)
-   - **Транспорт телефону:** `TCP` / `LoRa (RNode)` / `в черзі (офлайн)`
-   - **Статус:** `в черзі → відправлено на міст → міст підтвердив → доставлено адресату` (або `помилка` з причиною)
-4. **UI:** перемикач акаунта у шапці списку чатів (`A`, `B`, `Усі`), бейдж identity на кожному чаті, і на кожному повідомленні маленький рядок-іконки «від кого · маршрут · транспорт · статус». Тап по повідомленню → деталі (хеш повідомлення, час кожного етапу).
-5. **Композер завжди показує, від кого піде повідомлення.** У Bridge-режимі за замовчуванням: у чаті `A` → від `A`, у чаті `B` → від `B`. Ніякої мовчазної підміни відправника.
-6. **Офлайн-черга зберігає вибраний шлях.** Якщо повідомлення поставлене в чергу «від `A` через міст», воно не перетвориться на «від `B`», коли міст вимкнуть: залишиться в черзі з позначкою «міст вимкнено» і кнопками *Відправити, коли міст увімкнеться / Скасувати*.
-
-> **Рішення (рекомендоване, можна переглянути):** одна identity телефону `B` виконує обидві ролі: власна LXMF-адреса і ключ керування мостом. Безпеки це не послаблює, бо міст перевіряє повний публічний ключ `B` і підпис. Альтернатива — окрема прихована control-identity `C` лише для мосту, щоб адреса `B` взагалі ніде не світилась у зв'язці з `A`. Додає складності; вирішимо до Фази 3.
+`A` is never duplicated on the phone → zero routing conflicts.
 
 ---
 
-## 3. Архітектура
+## 2. Key requirement: modes never erase data, everything is transparent
 
-> **Рішення (2026-11-25, після Фази 0):** міст — це **sidecar-контейнер `kestrel-bridge`**, а не плагін MeshChatX.
-> Причина: офіційний Plugin API не передає Python-бекенду події LXMF/RRC, не дає приховати службові повідомлення
-> і не відкриває RNS-об'єкти; обхід через внутрішні структури крихкий. Деталі — `docs/private/` (не в git).
+1. **Switching Bridge ON/OFF deletes nothing.** The chats of `B` and the chats of `A` (from the bridge) live side by side in the local DB, each record marked with the identity it belongs to.
+2. **`B` does not stop being `B` when the bridge is on.** Direct messages to `B` keep arriving and are shown (as a separate account).
+3. **Every message shows how it was sent/received:**
+   - **From:** `A (via bridge)` or `B (phone)`
+   - **Route:** `direct` (Link) / `opportunistic` / `propagated` (via a propagation node) / `via bridge` (a command to `amd1`, then `A` sent it itself)
+   - **Phone transport:** `TCP` / `LoRa (RNode)` / `queued (offline)`
+   - **Status:** `queued → sent to bridge → bridge confirmed → delivered to recipient` (or `error` with a reason)
+4. **UI:** an account switcher in the chat list header (`A`, `B`, `All`), an identity badge on every chat, and on every message a small icon row "from · route · transport · status". Tapping a message → details (message hash, time of each stage).
+5. **The composer always shows who the message will be sent from.** In Bridge mode by default: in an `A` chat → from `A`, in a `B` chat → from `B`. No silent sender substitution.
+6. **The offline queue preserves the chosen path.** If a message is queued "from `A` via bridge", it will not turn into "from `B`" when the bridge is turned off: it stays in the queue marked "bridge off" with the buttons *Send when the bridge is on / Cancel*.
+
+> **Decision (recommended, may be revisited):** a single phone identity `B` plays both roles: its own LXMF address and the bridge control key. This does not weaken security, because the bridge verifies the full public key of `B` and the signature. The alternative is a separate hidden control identity `C` used only for the bridge, so that the `B` address is never exposed in connection with `A`. It adds complexity; to be decided before Phase 3.
+
+---
+
+## 3. Architecture
+
+> **Decision (2026-11-25, after Phase 0):** the bridge is the **`kestrel-bridge` sidecar container**, not a MeshChatX plugin.
+> Reason: the official Plugin API does not pass LXMF/RRC events to the Python backend, cannot hide service messages
+> and does not expose RNS objects; working around it through internals is fragile. Details — `docs/private/` (not in git).
 
 ```
 Flutter UI ── SQLite (accounts, chats, messages, outbox, delivery_log)
    │
-Мобільний RNS + LXMF (pure Dart), identity B
+Mobile RNS + LXMF (pure Dart), identity B
    ├── TCPClient → rns.ostapyrih.com:4242   (HDLC)
-   └── BLE → RNode → LoRa                    (KISS + конфіг радіо)
+   └── BLE → RNode → LoRa                    (KISS + radio config)
                  │
-Reticulum на amd1 (transport + propagation node, shared instance)
+Reticulum on amd1 (transport + propagation node, shared instance)
    ├── MeshChatX (identity A)  ←── HTTP API + WebSocket ──┐
-   └── kestrel-bridge sidecar (identity S, клієнт shared instance) ┘
+   └── kestrel-bridge sidecar (identity S, shared instance client) ┘
 ```
 
-- `S` — серверна службова identity мосту. Це **не** адреса для друзів; друзі знають лише `A`. Конфлікту немає, бо `A` існує лише в MeshChatX.
-- Службовий трафік `B ↔ S` **ніколи не потрапляє в інбокс `A`**, тож нічого не треба приховувати.
-- `S` керує `A` лише через автентифікований HTTP/WebSocket API MeshChatX. Облікові дані — тільки на сервері.
-- Образ MeshChatX лишається на `latest-extra` (рішення користувача) → міст при старті перевіряє версію MeshChatX і має тести-контракти на потрібні ендпоінти.
+- `S` is the bridge's server-side service identity. It is **not** an address for friends; friends know only `A`. There is no conflict, because `A` exists only in MeshChatX.
+- Service traffic `B ↔ S` **never reaches `A`'s inbox**, so nothing needs to be hidden.
+- `S` controls `A` only through MeshChatX's authenticated HTTP/WebSocket API. Credentials live only on the server.
+- The MeshChatX image stays `latest-extra` (user's decision) → at startup the bridge checks the MeshChatX version and has contract tests for the endpoints it needs.
 
-### Протокол мосту (B ↔ S)
-- **Online (TCP):** RNS **Link** до destination `S` → `link.identify()` ключем `B` → request/response:
+### Bridge protocol (B ↔ S)
+- **Online (TCP):** an RNS **Link** to the `S` destination → `link.identify()` with the `B` key → request/response:
   `sync_chats(since_ts)`, `get_messages(chat, before, limit)`, `list_rooms`, `get_room_messages`, `send_lxmf`, `send_rrc`.
-  Великі відповіді — RNS Resource (зі стисненням). Push-події йдуть по відкритому Link.
-- **Офлайн / LoRa:** ті самі команди як LXMF-повідомлення `B → S` (custom fields, msgpack), відповіді та push як LXMF `S → B` (з fallback через propagation node).
-- **Кожна команда:** `cmd_id` (UUID) + `ts`. `S` відповідає `ack(cmd_id, result, lxmf_hash_від_A)`, тож телефон знає, яке саме повідомлення `A` відправив, і далі показує його статус доставки.
-- `protocol_version` у кожному handshake; несумісність показується в UI.
+  Large responses use an RNS Resource (compressed). Push events go over the open Link.
+- **Offline / LoRa:** the same commands as LXMF messages `B → S` (custom fields, msgpack); responses and push as LXMF `S → B` (with fallback via a propagation node).
+- **Every command:** `cmd_id` (UUID) + `ts`. `S` replies with `ack(cmd_id, result, lxmf_hash_from_A)`, so the phone knows exactly which message `A` sent and then shows its delivery status.
+- `protocol_version` in every handshake; incompatibility is shown in the UI.
 
-### Безпека мосту
-- Whitelist = **повний публічний ключ `B`** у конфігу `S` (на сервері, не в репо).
-- Link: прийом команд лише після `identify()` з ключем із whitelist. LXMF: лише якщо `signature_validated == True` і ключ збігається.
-- Anti-replay для LXMF-команд: вікно за `ts` (напр. ±24 год для propagated) + журнал виконаних `cmd_id`.
-- Push **залежить від транспорту**: якщо `B` досяжна через LoRa-інтерфейс (`Transport.next_hop_interface`), шле лише особисті LXMF і згадки, з лімітом розміру; решта підтягнеться при TCP-sync.
+### Bridge security
+- Whitelist = the **full public key of `B`** in `S`'s config (on the server, not in the repo).
+- Link: commands are accepted only after `identify()` with a key from the whitelist. LXMF: only if `signature_validated == True` and the key matches.
+- Anti-replay for LXMF commands: a window on `ts` (e.g. ±24 h for propagated) + a log of executed `cmd_id`s.
+- Push **depends on the transport**: if `B` is reachable over a LoRa interface (`Transport.next_hop_interface`), only personal LXMF messages and mentions are sent, with a size limit; the rest is picked up on the next TCP sync.
 
-### Факти з Фази 1a (впливають на реалізацію мосту)
-- **Auth:** лише один пароль веб-інтерфейсу MeshChatX, без API-токенів і сервісних юзерів → sidecar тримає цей пароль (тільки в серверному конфігу, права 600). На 401 логіниться заново; **ніколи не викликає logout**, бо той інвалідує всі сесії. Логін має rate-limit, тож потрібен backoff.
-- **WS** не повторює пропущені події → після кожного reconnect sidecar робить resync по HTTP. Ping кожні 30 с; підписка лише на `lxmf` і `rrc`.
-- **Список розмов** не має `since` і лічильника непрочитаних → sidecar сам тримає курсори (останній `id` по кожній розмові) у своїй SQLite.
-- **RRC:** текст, що починається з `/`, виконується як команда хаба від імені `A` → у `send_rrc` такі повідомлення **відхиляються** (або екрануються). Читання історії скидає активну кімнату в десктоп-UI → після нього викликати `POST /rrc/active/clear`.
-- **Shared instance:** `network_mode: service:meshchatx`, `share_instance=Yes`, `require_shared_instance=True`, без інтерфейсів. Для path table (transport-aware push) потрібен `rpc_key`. Якщо контейнер MeshChatX пересоздали, sidecar треба перезапустити (healthcheck + `restart: unless-stopped` + watchdog).
-- **Сумісність:** `/status` → `version`; `/app/info` → `api_version`. Sidecar має allowlist версій, перевіряє ключі у відповідях API, а в CI є контракт-тести.
+### Facts from Phase 1a (affect the bridge implementation)
+- **Auth:** only a single MeshChatX web UI password, no API tokens and no service users → the sidecar holds that password (only in the server config, permissions 600). On a 401 it logs in again; it **never calls logout**, because that invalidates all sessions. Login is rate-limited, so backoff is needed.
+- **WS** does not replay missed events → after every reconnect the sidecar resyncs over HTTP. Ping every 30 s; subscribe only to `lxmf` and `rrc`.
+- **The conversation list** has no `since` and no unread counter → the sidecar keeps its own cursors (last `id` per conversation) in its own SQLite.
+- **RRC:** text starting with `/` is executed as a hub command on behalf of `A` → in `send_rrc` such messages are **rejected** (or escaped). Reading history resets the active room in the desktop UI → call `POST /rrc/active/clear` afterwards.
+- **Shared instance:** `network_mode: service:meshchatx`, `share_instance=Yes`, `require_shared_instance=True`, no interfaces. The path table (for transport-aware push) needs the `rpc_key`. If the MeshChatX container is recreated, the sidecar must be restarted (healthcheck + `restart: unless-stopped` + watchdog).
+- **Compatibility:** `/status` → `version`; `/app/info` → `api_version`. The sidecar has a version allowlist, checks keys in API responses, and CI has contract tests.
 
-### Мобільні обмеження
-- iOS не тримає TCP у фоні → міст шле «порожній» пуш (ntfy/APNs/FCM, без вмісту), додаток синхронізується при відкритті. BLE до RNode в iOS може працювати у фоні.
-- Android: foreground service для постійного з'єднання.
+### Mobile constraints
+- iOS does not keep TCP alive in the background → the bridge sends an "empty" push (ntfy/APNs/FCM, no content) and the app syncs when opened. BLE to an RNode may work in the background on iOS.
+- Android: a foreground service for a persistent connection.
 
 ---
 
-## 4. Модель даних на телефоні (SQLite)
+## 4. Data model on the phone (SQLite)
 
-- `accounts` — `A` (bridge, remote) і `B` (local): хеш, назва, тип.
-- `chats` — `account_id`, `peer_hash` або `room_id`, `kind` (lxmf/rrc), `last_ts`.
+- `accounts` — `A` (bridge, remote) and `B` (local): hash, name, type.
+- `chats` — `account_id`, `peer_hash` or `room_id`, `kind` (lxmf/rrc), `last_ts`.
 - `messages` — `account_id`, `chat_id`, `direction`, `lxmf_hash`, `text`, `ts`,
   `sender_identity` (A/B), `route` (direct/opportunistic/propagated/via_bridge),
   `transport` (tcp/lora/none), `status`, `error`.
-- `outbox` — черга, з **зафіксованими** `sender_identity` + `route` на момент створення.
-- `delivery_log` — етапи доставки з часом (для екрана деталей).
+- `outbox` — the queue, with `sender_identity` + `route` **fixed** at creation time.
+- `delivery_log` — delivery stages with timestamps (for the details screen).
 
-Перемикання режимів міняє лише `settings.bridge_enabled`; жодних DELETE по даних.
+Switching modes changes only `settings.bridge_enabled`; no DELETEs on data.
 
 ---
 
-## 5. Фази
+## 5. Phases
 
-| # | Фаза | Результат / критерій готовності | Статус |
+| # | Phase | Result / done criterion | Status |
 |---|---|---|---|
-| R | Репо + CI/CD | публічний `ostapyrih/kestrel`, монорепо `app/` + `bridge/`, `ci.yml`, релізи (APK/AAB/IPA, Docker-образ мосту), release-please з changelog. Деталі — `CLAUDE.md` | ✅ |
-| 0 | Розвідка Plugin API MeshChatX на `amd1` (read-only) | звіт у `docs/private/`. Висновок: офіційного Plugin API замало → sidecar | ✅ |
-| 1a | Розвідка HTTP/WebSocket API MeshChatX + підключення до shared instance (read-only) | звіт у `docs/private/`: API покриває LXMF/RRC/WS; обмеження — нижче (§3, «Факти з 1a») | ✅ |
-| 1 | Sidecar `kestrel-bridge` + тести | PR #2 злитий: протокол v1 (`docs/bridge-protocol.md`), Link-RPC з `identify()`, LXMF-команди з anti-replay, push, LoRa-профіль; 82 unit + інтеграційний тест у CI. **Залишилось:** smoke-тест проти справжнього MeshChatX і деплой на `amd1` — лише з «так» користувача | 🟡 код готовий |
-| 2 | Dart RNS core + golden-тести (`packages/kestrel_rns`) | PR #1 злитий: identity, token, packet, announce, HDLC/KISS, msgpack, LXMF — збіг з Python RNS 1.6.1 / LXMF 1.3.1 в обидва боки (271 тест + 80 крос-перевірок у Python) | ✅ |
-| 3a | Мережевий шар у `kestrel_rns` | PR #3 злитий: TCP, Transport (endpoint), Link + identify + request/response, Resource (≤1 MiB), ratchets, announce-штампи; 345 тестів, 36 інтеграційних проти Python RNS 1.6.1, включно з Dart↔Dart через Python-транспорт. Відкладено: Resource >1 MiB, Channel/Buffer, IFAC | ✅ |
-| 3b | LXMF + Standalone-режим + UI | PR #5 злитий: `LxmRouter` (opportunistic/direct/resource, receipts, retries, stamps) — інтероп з Python LXMF; застосунок: identity B у secure storage, SQLite за §4 (тригери фіксують outbox, тест що перемикач нічого не видаляє), чати з бейджами «від кого · маршрут · транспорт · статус», налаштування + QR; debug APK у CI. Відкладено: tickets, QR-сканер, фоновий сервіс | ✅ |
-| 4 | Bridge-режим у додатку | перемикач, акаунти A/B, sync, відправка через міст, бейджі маршруту/транспорту/статусу, черга | ⬜ |
-| 5 | Propagation sync + офлайн-черга | `B` забирає повідомлення з propagation node | ⬜ |
-| 6 | BLE RNode | KISS + конфіг радіо (параметри = параметрам LoRa-шлюзу), транспорт-бейдж `LoRa` | ⬜ |
-| 7 | iOS-збірка на Mac + фонові сповіщення | `flutter build ios`, пуш без вмісту | ⬜ |
+| R | Repo + CI/CD | public `ostapyrih/kestrel`, monorepo `app/` + `bridge/`, `ci.yml`, releases (APK/AAB/IPA, bridge Docker image), release-please with changelog. Details — `CLAUDE.md` | ✅ |
+| 0 | Reconnaissance of the MeshChatX Plugin API on `amd1` (read-only) | report in `docs/private/`. Conclusion: the official Plugin API is not enough → sidecar | ✅ |
+| 1a | Reconnaissance of the MeshChatX HTTP/WebSocket API + connecting to the shared instance (read-only) | report in `docs/private/`: the API covers LXMF/RRC/WS; limitations — below (§3, "Facts from Phase 1a") | ✅ |
+| 1 | `kestrel-bridge` sidecar + tests | PR #2 merged: protocol v1 (`docs/bridge-protocol.md`), Link RPC with `identify()`, LXMF commands with anti-replay, push, LoRa profile; 82 unit tests + an integration test in CI. **Remaining:** smoke test against a real MeshChatX and deploy to `amd1` — only with the user's "yes" | 🟡 code ready |
+| 2 | Dart RNS core + golden tests (`packages/kestrel_rns`) | PR #1 merged: identity, token, packet, announce, HDLC/KISS, msgpack, LXMF — matches Python RNS 1.6.1 / LXMF 1.3.1 in both directions (271 tests + 80 cross-checks in Python) | ✅ |
+| 3a | Network layer in `kestrel_rns` | PR #3 merged: TCP, Transport (endpoint), Link + identify + request/response, Resource (≤1 MiB), ratchets, announce stamps; 345 tests, 36 integration tests against Python RNS 1.6.1, including Dart↔Dart through a Python transport. Deferred: Resource >1 MiB, Channel/Buffer, IFAC | ✅ |
+| 3b | LXMF + Standalone mode + UI | PR #5 merged: `LxmRouter` (opportunistic/direct/resource, receipts, retries, stamps) — interop with Python LXMF; app: identity B in secure storage, SQLite per §4 (triggers fix the outbox, a test that the switch deletes nothing), chats with "from · route · transport · status" badges, settings + QR; debug APK in CI. Deferred: tickets, QR scanner, background service | ✅ |
+| 4 | Bridge mode in the app | switch, A/B accounts, sync, sending via the bridge, route/transport/status badges, queue | ⬜ |
+| 5 | Propagation sync + offline queue | `B` fetches messages from a propagation node | ⬜ |
+| 6 | BLE RNode | KISS + radio config (parameters = those of the LoRa gateway), `LoRa` transport badge | ⬜ |
+| 7 | iOS build on Mac + background notifications | `flutter build ios`, push without content | ⬜ |
 
-**Середовище:** розробка на Windows (`C:\Users\ostap\Projects\meshchatx-mobile`), Flutter ставимо тут. iOS-збірка — на Mac (x86_64) з git.
-
----
-
-## 6. Відкриті питання
-
-1. Чи є фізичний LoRa-шлюз (RNode, підключений до транспорту з виходом на `amd1`) і які в нього параметри радіо?
-2. Одна identity `B` на обидві ролі чи окрема прихована control-identity (див. §2)?
-3. Канал фонових сповіщень: ntfy (свій сервер) чи APNs/FCM?
-4. ~~Plugin API~~ — вирішено: sidecar (§3).
-6. **Announce stamps:** RNS 1.6 за замовчуванням додає PoW-штамп до announce; Dart його поки не генерує. На `amd1` штампи не вимагаються, але інші вузли мережі можуть — генерацію зроблено у 3a (cost 25, окремий isolate, кешується per destination). У 3b заміряти час на реальному телефоні.
-5. На сервері зараз **немає RNode-інтерфейсу**: для LoRa потрібен шлюз (RNode на `amd1` або інший транспорт-вузол із LoRa і виходом у мережу).
+**Environment:** development on Windows (`C:\Users\ostap\Projects\meshchatx-mobile`), Flutter is installed here. The iOS build is done on a Mac (x86_64) with git.
 
 ---
 
-## 7. Перевірка
+## 6. Open questions
 
-- Міст: `python -m unittest` (identify з чужим ключем → відмова, LXMF без валідного підпису → відмова, replay → відмова, контракт-тести HTTP API MeshChatX на моках).
-- Dart: `flutter analyze && flutter test` (golden-вектори, БД: перемикання режимів не видаляє рядків).
-- Ручні тести: TCP online у Standalone і Bridge; LoRa через RNode; перевірити, що кожне повідомлення має правильні бейджі «від кого / маршрут / транспорт / статус».
+1. Is there a physical LoRa gateway (an RNode attached to a transport with a path to `amd1`) and what are its radio parameters?
+2. One identity `B` for both roles, or a separate hidden control identity (see §2)?
+3. Background notification channel: ntfy (self-hosted) or APNs/FCM?
+4. ~~Plugin API~~ — resolved: sidecar (§3).
+6. **Announce stamps:** RNS 1.6 adds a PoW stamp to announces by default; Dart does not generate it yet. Stamps are not required on `amd1`, but other nodes of the network may require them — generation was implemented in 3a (cost 25, separate isolate, cached per destination). In 3b, measure the time on a real phone.
+5. There is currently **no RNode interface** on the server: LoRa needs a gateway (an RNode on `amd1` or another transport node with LoRa and a network uplink).
+
+---
+
+## 7. Verification
+
+- Bridge: `python -m unittest` (identify with a foreign key → rejected, LXMF without a valid signature → rejected, replay → rejected, MeshChatX HTTP API contract tests on mocks).
+- Dart: `flutter analyze && flutter test` (golden vectors, DB: switching modes does not delete rows).
+- Manual tests: TCP online in Standalone and Bridge; LoRa via an RNode; verify that every message has the correct "from / route / transport / status" badges.

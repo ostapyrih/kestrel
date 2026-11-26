@@ -1,69 +1,70 @@
 # CLAUDE.md — Kestrel
 
-**Kestrel** — Flutter-клієнт Reticulum/LXMF (Android + iOS) + sidecar-міст `kestrel-bridge` для MeshChatX (окремий Docker-контейнер, не плагін — див. PLAN §3).
-Повний план і статус фаз: [docs/PLAN.md](docs/PLAN.md). **Читай його на початку кожної сесії.**
+**Kestrel** — a Flutter Reticulum/LXMF client (Android + iOS) plus the `kestrel-bridge` sidecar for MeshChatX (a separate Docker container, not a plugin — see PLAN §3).
+Full plan and phase status: [docs/PLAN.md](docs/PLAN.md). **Read it at the start of every session.**
 
-## Ролі (обов'язково)
-- **Claude (Opus) — оркестратор і мейнтейнер:** пише специфікації та брифи, ревʼюїть результат,
-  оновлює `docs/PLAN.md`, веде версії, changelog і релізи.
-- **Код пише Sonnet** (субагенти `model: sonnet`). Оркестратор сам код не пише, хіба що це
-  тривіальна правка в один рядок. Кожен бриф: які файли, що вважається готовим, які тести мають пройти.
-- Після кожного кроку агента оркестратор перевіряє diff і тести, а потім оновлює статус у `docs/PLAN.md`.
+## Roles (mandatory)
+- **Claude (Opus) — orchestrator and maintainer:** writes specs and briefs, reviews results,
+  updates `docs/PLAN.md`, manages versions, changelogs and releases.
+- **Sonnet writes the code** (subagents with `model: sonnet`). The orchestrator does not write code itself,
+  except for a trivial one-line fix. Every brief states: which files, what counts as done, which tests must pass.
+- After each agent step the orchestrator checks the diff and the tests, then updates the status in `docs/PLAN.md`.
 
-## Репозиторій — PUBLIC
-`github.com/ostapyrih/kestrel` (публічний). Тому:
-- **Ніколи не комітити:** приватні ключі identity, keystore, `.p12`/provisioning profiles, токени,
-  SSH-користувачів і шляхи на сервері, IFAC-паролі, хеші/публічні ключі з whitelist реальної
-  мережі, вміст конфігів Reticulum з сервера, дампи БД, особисті повідомлення.
-- Звіти розвідки з внутрішніми деталями сервера лежать у `docs/private/` (у `.gitignore`).
-- Секрети CI тільки в GitHub Actions Secrets. Конфіг мосту з реальним whitelist і логіном до MeshChatX — тільки на сервері;
-  у репо лежить `config.example.toml` з фейковими значеннями.
-- Публічні адреси, які можна згадувати: `rns.ostapyrih.com:4242` (TCP-вхід Reticulum).
-- Перед кожним push: `git diff --cached` переглянути на предмет секретів.
+## Repository — PUBLIC
+`github.com/ostapyrih/kestrel` (public). Therefore:
+- **Never commit:** identity private keys, keystores, `.p12`/provisioning profiles, tokens,
+  SSH users and server paths, IFAC passwords, hashes/public keys from the real network's whitelist,
+  contents of the server's Reticulum configs, DB dumps, personal messages.
+- Reconnaissance reports with internal server details live in `docs/private/` (in `.gitignore`).
+- CI secrets only in GitHub Actions Secrets. The bridge config with the real whitelist and the MeshChatX login lives only on the server;
+  the repo contains `config.example.toml` with fake values.
+- Public addresses that may be mentioned: `rns.ostapyrih.com:4242` (Reticulum TCP entry point).
+- Before every push: review `git diff --cached` for secrets.
 
-## Структура (монорепо)
+## Structure (monorepo)
 ```
-app/       Flutter-додаток (lib/rns, lib/lxmf, lib/bridge, lib/storage, lib/screens)
-bridge/    sidecar kestrel-bridge (Python): Dockerfile, kestrel_bridge/, tests/, config.example.toml
-packages/kestrel_rns/  pure-Dart RNS + LXMF (без Flutter, `dart test`), використовується app/
-tools/     генератори golden-векторів (Python RNS/LXMF → JSON для Dart-тестів)
-docs/      PLAN.md, протокол мосту, ADR; docs/private/ — не в git
+app/       Flutter app (lib/rns, lib/lxmf, lib/bridge, lib/storage, lib/screens)
+bridge/    kestrel-bridge sidecar (Python): Dockerfile, kestrel_bridge/, tests/, config.example.toml
+packages/kestrel_rns/  pure-Dart RNS + LXMF (no Flutter, `dart test`), used by app/
+tools/     golden-vector generators (Python RNS/LXMF → JSON for Dart tests)
+docs/      PLAN.md, bridge protocol, ADRs; docs/private/ is not in git
 .github/   workflows, release-please config
 ```
 
-## Конвенції
-- **Conventional Commits** обов'язково (`feat(app):`, `fix(bridge):`, `docs:`, `ci:`, `chore:`;
-  `!` або `BREAKING CHANGE:` для ламаючих змін). На них працює автоматичний changelog.
-- Scope: `app`, `bridge`, `rns`, `lxmf`, `bridge`, `ci`, `docs`.
-- Зміни в протоколі мосту → оновити `docs/bridge-protocol.md` і підняти `protocol_version`,
-  бо застосунок і міст мають перевіряти сумісність.
-- Гілки: `main` завжди зелена; робота у `feat/...`, `fix/...`; PR з описом.
-- Коміти закінчуються рядком `Co-Authored-By` з атрибуцією Claude.
+## Conventions
+- **Conventional Commits** are mandatory (`feat(app):`, `fix(bridge):`, `docs:`, `ci:`, `chore:`;
+  `!` or `BREAKING CHANGE:` for breaking changes). The automatic changelog is built from them.
+- Scopes: `app`, `bridge`, `rns`, `lxmf`, `bridge`, `ci`, `docs`.
+- Changes to the bridge protocol → update `docs/bridge-protocol.md` and bump `protocol_version`,
+  because the app and the bridge must check compatibility.
+- Branches: `main` is always green; work happens in `feat/...`, `fix/...`; PRs come with a description.
+- Commits end with a `Co-Authored-By` line attributing Claude.
+- All repo-facing text (docs, README, changelogs, release notes, PR/issue text, commit messages) is written in English. App UI strings are localized (Ukrainian default, English fallback).
 
-## Версії, changelog, релізи
-- **release-please** (manifest, монорепо): два компоненти з незалежними версіями та тегами:
-  - `app` → тег `app-vX.Y.Z`, версія в `app/pubspec.yaml` (`X.Y.Z+build`), `app/CHANGELOG.md`
-  - `bridge` → тег `bridge-vX.Y.Z`, версія в `bridge/pyproject.toml`, `bridge/CHANGELOG.md`
-- SemVer; до стабільного протоколу — `0.x`.
-- Процес: мержі в `main` → release-please відкриває Release PR → оркестратор ревʼюїть changelog
-  (за потреби вручну дописує людський опис зверху) → мерж → тег + GitHub Release →
-  workflow збирає артефакти і прикріплює до релізу.
-- Опис релізу оформлюємо так: короткий підсумок людською мовою, розділи *Нове / Виправлено /
-  Ламаючі зміни / Сумісність* (мін. версія мосту ↔ застосунку, `protocol_version`), артефакти з SHA256.
+## Versions, changelog, releases
+- **release-please** (manifest, monorepo): two components with independent versions and tags:
+  - `app` → tag `app-vX.Y.Z`, version in `app/pubspec.yaml` (`X.Y.Z+build`), `app/CHANGELOG.md`
+  - `bridge` → tag `bridge-vX.Y.Z`, version in `bridge/pyproject.toml`, `bridge/CHANGELOG.md`
+- SemVer; `0.x` until the protocol is stable.
+- Process: merges to `main` → release-please opens a Release PR → the orchestrator reviews the changelog
+  (hand-writes a human-readable summary on top if needed) → merge → tag + GitHub Release →
+  the workflow builds the artifacts and attaches them to the release.
+- Release notes are structured as: a short human-language summary, sections *Features / Bug Fixes /
+  Breaking changes / Compatibility* (minimum bridge ↔ app version, `protocol_version`), artifacts with SHA256.
 
 ## CI (GitHub Actions)
-- `ci.yml` (PR + push): `flutter analyze`, `flutter test`, `python -m unittest` для мосту,
-  перевірка golden-векторів.
-- `release.yml` (на теги `app-v*`): Android APK + AAB; iOS IPA.
-  - Android: підпис release-keystore із secrets (`ANDROID_KEYSTORE_B64`, `ANDROID_KEY_ALIAS`,
-    `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_PASSWORD`). Без секретів — збірка unsigned з позначкою.
-  - iOS: на `macos-latest`. Без Apple-сертифікатів — `--no-codesign`, unsigned `.ipa`
-    (для sideload / AltStore). Коли буде акаунт Apple Developer — secrets для підпису й TestFlight.
-- `release-bridge.yml` (на теги `bridge-v*`): Docker-образ `ghcr.io/ostapyrih/kestrel-bridge:<version>` + `:latest` (linux/amd64, arm64), SBOM, digest у описі релізу.
+- `ci.yml` (PR + push): `flutter analyze`, `flutter test`, `python -m unittest` for the bridge,
+  golden-vector check.
+- `release.yml` (on `app-v*` tags): Android APK + AAB; iOS IPA.
+  - Android: signed with the release keystore from secrets (`ANDROID_KEYSTORE_B64`, `ANDROID_KEY_ALIAS`,
+    `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_PASSWORD`). Without secrets the build is unsigned and marked as such.
+  - iOS: on `macos-latest`. Without Apple certificates — `--no-codesign`, unsigned `.ipa`
+    (for sideloading / AltStore). Once an Apple Developer account exists — signing and TestFlight secrets.
+- `release-bridge.yml` (on `bridge-v*` tags): Docker image `ghcr.io/ostapyrih/kestrel-bridge:<version>` + `:latest` (linux/amd64, arm64), SBOM, digest in the release notes.
 
-## Середовище
-- Розробка: Windows (`C:\Users\ostap\Projects\meshchatx-mobile`), Flutter встановлено локально.
-- iOS-збірка локально — на Mac (x86_64); інакше через CI.
-- Образ MeshChatX на сервері лишається `latest-extra` (рішення користувача): міст перевіряє версію MeshChatX при старті, а CI має контракт-тести API.
-- Сервер: MeshChatX у Docker на `amd1` (доступ по SSH, деталі не в репо). Будь-які зміни на сервері
-  (деплой мосту, зміни compose, рестарт контейнерів) — тільки після явного «так» від користувача.
+## Environment
+- Development: Windows (`C:\Users\ostap\Projects\meshchatx-mobile`), Flutter installed locally.
+- iOS builds locally — on a Mac (x86_64); otherwise via CI.
+- The MeshChatX image on the server stays `latest-extra` (user's decision): the bridge checks the MeshChatX version at startup, and CI has API contract tests.
+- Server: MeshChatX in Docker on `amd1` (SSH access, details not in the repo). Any change on the server
+  (bridge deploy, compose changes, container restarts) — only after an explicit "yes" from the user.
