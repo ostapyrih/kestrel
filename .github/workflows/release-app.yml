@@ -91,7 +91,7 @@ jobs:
           for apk in build/app/outputs/flutter-apk/app-*-release.apk; do
             out="$("$apksigner" verify -v --print-certs "$apk")"
             printf '%s\n' "$out" | grep -iE 'verifies|certificate (DN|SHA-256)' || true
-            actual="$(printf '%s\n' "$out" | sed -n 's/^Signer #1 certificate SHA-256 digest: *//p' | head -n 1 | tr 'A-F' 'a-f')"
+            actual="$(printf '%s\n' "$out" | sed -n 's/^.*certificate SHA-256 digest: *//p' | tr 'A-F' 'a-f' | sort -u)"
             if [ "$actual" != "$expected" ]; then
               echo "::error::$apk is signed with an unexpected certificate (SHA-256 $actual)"
               exit 1
@@ -100,7 +100,7 @@ jobs:
           done
           # The AAB is a jar signed with jarsigner.
           aab_out="$(keytool -printcert -jarfile build/app/outputs/bundle/release/app-release.aab)"
-          aab_actual="$(printf '%s\n' "$aab_out" | sed -n 's/^ *SHA256: //p' | head -n 1 | tr -d ':' | tr 'A-F' 'a-f')"
+          aab_actual="$(printf '%s\n' "$aab_out" | sed -n 's/^[[:space:]]*SHA256: *//p' | head -n 1 | tr -d ':[:space:]' | tr 'A-F' 'a-f')"
           if [ "$aab_actual" != "$expected" ]; then
             echo "::error::app-release.aab is signed with an unexpected certificate (SHA-256 $aab_actual)"
             exit 1
