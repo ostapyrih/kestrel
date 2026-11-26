@@ -1,10 +1,11 @@
 name: altstore
 
 # Publishes the AltStore / SideStore source (altstore.json) to GitHub Pages.
-# Chained from release-please after a release (a `release: published` trigger does not
-# fire for releases created with GITHUB_TOKEN), and runnable by hand.
+# Dispatched by release-please after a release (a `release: published` trigger does not
+# fire for releases created with GITHUB_TOKEN), and runnable by hand. It must run as its
+# own workflow run: deploy-pages cannot find its artifact when nested via workflow_call.
+# Idempotent: it regenerates the source from the latest releases on every run.
 on:
-  workflow_call:
   workflow_dispatch:
 
 permissions:
