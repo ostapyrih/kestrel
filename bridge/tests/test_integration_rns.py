@@ -273,6 +273,10 @@ tcp_port = {tcp_port}
         # impostor: refused (error response or link torn down), never a successful /hello
         imp = res["impostor"]
         self.assertTrue(imp is None or imp.get("ok") is False, imp)
+        # ... but it is told why: exactly one kestrel.reject packet carrying "unauthorized" and the server time
+        rej = res["impostor_reject"]
+        self.assertEqual([(r["t"], r["code"]) for r in rej], [("kestrel.reject", "unauthorized")])
+        self.assertIsInstance(rej[0]["server_time"], float)
         self.assertEqual(res["pre_identify"]["error"]["code"], "unauthorized")
         self.assertTrue(res["hello"]["ok"])
         self.assertEqual(res["hello"]["result"]["protocol_version"], 2)
@@ -320,6 +324,9 @@ tcp_port = {tcp_port}
         self.assertIsNotNone(listed[b2_hash]["revoked_at"])
         self.assertIsNone(listed[b_hash]["revoked_at"])
         self.assertTrue(res2["B2_CLOSED"])
+        # the revoked device learned why on its live Link and again when it reconnected
+        self.assertEqual([(r["t"], r["code"]) for r in res2["b2_live_reject"]], [("kestrel.reject", "device_revoked")])
+        self.assertEqual([r["code"] for r in res2["b2_retry_reject"]], ["device_revoked"])
         after = res2["b2_after"]
         self.assertTrue(after is None or after.get("ok") is False, after)
 

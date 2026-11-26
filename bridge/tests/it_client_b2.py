@@ -40,16 +40,20 @@ def main() -> None:
     out("b2_subscribe", request(link, "/subscribe", {"topics": ["lxmf", "vault"], "profile": "full"}))
     out("B2_READY", True)
 
-    # B1 revokes this device now: the bridge must close the Link immediately
+    # B1 revokes this device now: the bridge tells it why (kestrel.reject device_revoked), then closes the Link
     wait(lambda: box.get("closed"), 90, "link closed by the bridge")
+    out("b2_live_reject", [p for p in pushes if p.get("t") == "kestrel.reject"])
     out("B2_CLOSED", True)
 
     # and the revoked key is refused on a new Link
     retry = None
     try:
         retry = connect(dest)
+        retry_packets = []
+        retry.set_packet_callback(lambda data, pkt: retry_packets.append(msgpack.unpackb(data, raw=False)))
         retry.identify(b2)
-        time.sleep(1.0)
+        wait(lambda: retry_packets, 15, "kestrel.reject on reconnect")
+        out("b2_retry_reject", retry_packets)
         try:
             out("b2_after", request(retry, "/hello", {"protocol_version": 2}, timeout=10))
         except Exception as e:      # the Link may already be gone: that is a refusal too

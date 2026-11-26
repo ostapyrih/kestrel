@@ -63,6 +63,8 @@ max_text_bytes = 4096
 constrained_max_text_bytes = 160           # LoRa profile truncation
 lxmf_ts_window = 86400                     # +/- seconds accepted for LXMF command ts
 send_rate_per_minute = 30
+reject_grace = 1.5                         # seconds a rejected/revoked Link stays open after its kestrel.reject reason packet
+reject_rate_per_minute = 20                # reason packets per remote identity per minute (10x that over all identities)
 
 [push]
 profile = "auto"                           # auto | full | constrained (override)

@@ -27,6 +27,7 @@ v1 had a flat whitelist of phone keys and one global view. v2 (breaking, no v1 c
 - `/hello`: min/max supported versions, own device record, `state_id`, vault info. `protocol_mismatch`
   carries the supported range.
 - LXMF commands use `"v": 2`; `/devices/*` and `/vault/*` exist only on the Link transport.
+- `kestrel.reject` reason packet for rejected/revoked Links (section 2.4; additive).
 - Config: `[[devices]]` replaces `[whitelist]` (the old key is still read as bootstrap devices, with a warning).
 
 A v1 client calling `/hello` with `protocol_version: 1` gets `protocol_mismatch` with
@@ -56,8 +57,10 @@ to upgrade. Its LXMF commands (`"v": 1`) are answered with the same error. Nothi
    opens an `RNS.Link`.
 2. D MUST call `link.identify(D_identity)` right after the link is established. The bridge looks up the
    **full public key** of the identified identity in the device registry.
-   - Unknown or revoked key: the link is torn down immediately.
-   - Not identified within `limits.identify_timeout` (default 30 s): the link is torn down.
+   - Unknown or revoked key: the bridge sends ONE reason packet (`kestrel.reject`, section 2.4) over the Link and tears it down
+     `limits.reject_grace` (default 1.5 s) later, or as soon as the client closes it. Nothing else is ever sent to such a Link and
+     every request on it is answered `unauthorized` / `device_revoked`.
+   - Not identified within `limits.identify_timeout` (default 30 s): the link is torn down (no reason packet).
    - Before `identify()` every request is answered with `unauthorized`.
 3. D sends `/hello`, checks the result (4.1), then `/subscribe` if it wants push.
 
@@ -87,6 +90,25 @@ Push events travel over the same Link after `/subscribe`:
   LXMF fallback copy of one event share it). Push is **best effort** with no acknowledgement: gaps in `seq`, a link
   reset or a `resync` event mean "sync via `/sync_chats`". After every reconnect D MUST resync. D MUST treat
   events idempotently and MAY drop an event whose `id` it already processed.
+
+### 2.4 Reject packet (`kestrel.reject`)
+Sent as one RNS packet (same callback as push, 2.3) when `identify()` carried a key that is not trusted, and to every live Link of a
+device at the moment it is revoked (4.3):
+
+```
+{"t": "kestrel.reject", "code": "unauthorized" | "device_revoked", "server_time": <float>}
+```
+
+- `unauthorized`: the key is unknown to the bridge (a new device that is not approved yet, or a stranger).
+  `device_revoked`: the key belongs to a revoked device.
+- `server_time`: the bridge's Unix time (clock offset estimate, as `/hello` `time`).
+- The packet is the only data an unauthenticated Link ever receives. The Link is torn down `limits.reject_grace` seconds after it
+  (default 1.5; a client SHOULD close it itself once it has read the reason). The bridge rate-limits the packet:
+  `limits.reject_rate_per_minute` (default 20) per remote identity hash and ten times that over all identities per minute; above
+  the limit the Link is closed without a packet, so a client that sees a Link closed right after `identify()` and no
+  `kestrel.reject` MUST treat it as "not accepted (reason unknown)".
+- Additive within v2: clients ignore unknown packets (`t` is not `push`); a client talking to an older bridge sees only the closed
+  Link and falls back to that heuristic. Clients MUST NOT treat the packet as authenticated beyond what the Link itself provides.
 
 ## 3. Offline / LoRa transport: LXMF fallback
 
@@ -132,11 +154,13 @@ printed by `--print-address`). Commands are LXMF messages D -> S, responses and 
 
 ### 4.3 Revocation
 - `revoked_at` is permanent: a revoked identity cannot be paired again (`device_revoked`); the user creates a new identity.
-- On revocation the bridge **closes every Link of that device immediately** (a device revoking itself gets the response first; its
-  Link closes about a second later), drops its subscriptions, rejects every further request with `device_revoked` (Link and LXMF; over LXMF
+- On revocation the bridge sends every live Link of that device a `kestrel.reject` with `code: "device_revoked"` (2.4) and closes it
+  `limits.reject_grace` later (a device revoking itself gets the response first; the reason packet and the close follow about a
+  second later), drops its subscriptions, rejects every further request with `device_revoked` (Link and LXMF; over LXMF
   with no reply), pushes `device_revoked` to the other devices and bumps the vault `key_epoch` (section 9).
 - The **last remaining trusted device cannot be revoked** (`last_trusted_device`).
-- A client that receives `device_revoked` (response or Link closed followed by `device_revoked` on reconnect) MUST wipe the bridge
+- A client that receives `device_revoked` (a `kestrel.reject` packet, a response, or, for older bridges, Link closed followed by
+  `device_revoked` on reconnect) MUST wipe the bridge
   account's local credentials and tell the user.
 
 ## 5. Pairing (QR) and device administration
@@ -176,8 +200,11 @@ The domain-separation prefix keeps the signature from being valid in any other c
 
 Result: `{"device": <device record>}` (`added_by` = approver, `bootstrap` false, `name` = override or payload name, `roles` default `[]`).
 The bridge pushes `device_added` to all subscribed Links (also the approver's). The new device then connects, identifies and works;
-it learns it was approved by trying `/hello` (until then `unauthorized`).
-UX note: the new device SHOULD retry `/hello` every few seconds for a minute after showing its QR.
+it learns it was approved by reconnecting: until then its `identify()` is answered with `kestrel.reject` `unauthorized` (2.4) and the
+Link is closed, which means "waiting for approval" for a device that is pairing. A `/hello` that succeeds means it was approved.
+UX note: the new device SHOULD reconnect (new Link, `identify()`, wait for either the reject packet or a `/hello` result) every few
+seconds for a minute after showing its QR, staying within `limits.reject_rate_per_minute`. A `device_revoked` reject during pairing
+means this identity was revoked and cannot be paired again.
 
 ### 5.3 Other device paths
 | path | request | result |
@@ -398,8 +425,8 @@ Exceeding one gives `rate_limited` with `details.retry_after` (seconds). Other l
 | code | meaning | cmd_id released |
 |---|---|---|
 | `bad_request` | malformed request / field validation (`details` may list `missing`/`unexpected`) | yes (not consumed) |
-| `unauthorized` | link not identified with a trusted device key / unknown device | - |
-| `device_revoked` | the device (or the pairing identity) was revoked | - |
+| `unauthorized` | link not identified with a trusted device key / unknown device (also the code of the `kestrel.reject` packet) | - |
+| `device_revoked` | the device (or the pairing identity) was revoked (also a `kestrel.reject` code) | - |
 | `unknown_path` | path not defined | - |
 | `unsupported_transport` | path needs a Link (`/subscribe`, `/devices/*`, `/vault/*`) | - |
 | `protocol_mismatch` | version outside range; `details: server_version, min_version, max_version, client_version` | - |

@@ -419,7 +419,8 @@ class RpcLinkTest(unittest.TestCase):
 
     def setUp(self):
         from kestrel_bridge.rpc import RpcServer
-        self.cfg = raw_config()
+        self.cfg = raw_config(limits={"reject_grace": 0})
+        self.sent = {}
         self.state, self.registry = make_registry(self.cfg)
         self.addCleanup(self.state.close)
         self.second = RealDevice()
@@ -444,6 +445,7 @@ class RpcLinkTest(unittest.TestCase):
         from kestrel_bridge.rpc import _LinkState
         st = _LinkState(link)
         st.device_id = device.device_id if device is not None else None
+        st.send = lambda data, n=n: self.sent.setdefault(n, []).append(codec.unpack(data)) or True
         self.rpc._links[link.link_id] = st
         return link, torn
 
@@ -497,20 +499,101 @@ class RpcLinkTest(unittest.TestCase):
         self.assertEqual(r["error"]["code"], errors.UNAUTHORIZED)
 
     def test_remote_identified_rejects_unknown_and_revoked(self):
+        def ident(device):
+            return SimpleNamespace(get_public_key=lambda: bytes.fromhex(device.public_key), hash=b"\x00" * 16)
         link, torn = self.add_link(None, 5)
-        self.rpc._remote_identified(link, SimpleNamespace(
-            get_public_key=lambda: bytes.fromhex(RealDevice().public_key), hash=b"\x00" * 16))
+        self.rpc._remote_identified(link, ident(RealDevice()))
         self.assertEqual(torn, [5])
+        self.assertEqual([p["code"] for p in self.sent[5]], ["unauthorized"])
         link, torn = self.add_link(None, 6)
-        self.rpc._remote_identified(link, SimpleNamespace(
-            get_public_key=lambda: bytes.fromhex(self.second.public_key), hash=b"\x00" * 16))
+        self.rpc._remote_identified(link, ident(self.second))
         self.assertEqual(torn, [])
+        self.assertNotIn(6, self.sent)
         self.assertEqual(self.rpc._links[link.link_id].device_id, self.second.device_id)
         self.registry.revoke(self.second.device_id, PHONE_ID)
         link, torn = self.add_link(None, 7)
-        self.rpc._remote_identified(link, SimpleNamespace(
-            get_public_key=lambda: bytes.fromhex(self.second.public_key), hash=b"\x00" * 16))
+        self.rpc._remote_identified(link, ident(self.second))
         self.assertEqual(torn, [7])
+        self.assertEqual([p["code"] for p in self.sent[7]], ["device_revoked"])
+
+    def test_reject_packet_content(self):
+        stranger = RealDevice()
+        link, _ = self.add_link(None, 5)
+        self.rpc._remote_identified(link, SimpleNamespace(
+            get_public_key=lambda: bytes.fromhex(stranger.public_key), hash=b"\x01" * 16))
+        (pkt,) = self.sent[5]
+        self.assertEqual(set(pkt), {"t", "code", "server_time"})
+        self.assertEqual((pkt["t"], pkt["code"]), ("kestrel.reject", "unauthorized"))
+        self.assertIsInstance(pkt["server_time"], float)
+
+    def test_rejected_link_stays_open_during_grace_and_cannot_call_anything(self):
+        self.rpc.cfg.limits.reject_grace = 0.3
+        stranger = RealDevice()
+        link, torn = self.add_link(None, 5)
+        self.rpc._remote_identified(link, SimpleNamespace(
+            get_public_key=lambda: bytes.fromhex(stranger.public_key), hash=b"\x01" * 16))
+        self.assertEqual(torn, [])                           # still open: the client can read the reason
+        self.assertEqual(len(self.sent[5]), 1)
+        for path in ("/hello", "/subscribe", "/sync_chats", "/devices/list", "/vault/key"):
+            r = self.rpc._handle(path, {}, link.link_id, self.identity_of(stranger))
+            self.assertEqual(r["error"]["code"], errors.UNAUTHORIZED)
+        self.assertEqual(len(self.sent[5]), 1)               # nothing else was sent, no subscription exists
+        self.assertIsNone(self.rpc._links[link.link_id].sub)
+        self.assertTrue(self.wait_for(lambda: torn == [5]))
+
+    def test_client_closing_cancels_the_grace_timer(self):
+        self.rpc.cfg.limits.reject_grace = 0.3
+        stranger = RealDevice()
+        link, torn = self.add_link(None, 5)
+        self.rpc._remote_identified(link, SimpleNamespace(
+            get_public_key=lambda: bytes.fromhex(stranger.public_key), hash=b"\x01" * 16))
+        self.rpc._link_closed(link)
+        import time
+        time.sleep(0.5)
+        self.assertEqual(torn, [])
+
+    def test_reject_rate_limit_per_identity(self):
+        limit = self.cfg.limits.reject_rate_per_minute
+        stranger = RealDevice()
+        ident = SimpleNamespace(get_public_key=lambda: bytes.fromhex(stranger.public_key), hash=b"\x02" * 16)
+        for n in range(1, limit + 3):
+            link, torn = self.add_link(None, n)
+            self.rpc._remote_identified(link, ident)
+            self.assertEqual(torn, [n])                      # always closed
+        self.assertEqual(sum(1 for n in self.sent), limit)    # but the packet only for the first `limit`
+        # another identity is not affected
+        other = SimpleNamespace(get_public_key=lambda: bytes.fromhex(stranger.public_key), hash=b"\x03" * 16)
+        link, _ = self.add_link(None, 200)
+        self.rpc._remote_identified(link, other)
+        self.assertIn(200, self.sent)
+        # the window slides
+        self.rpc._rej_clock = lambda: __import__("time").monotonic() + 61
+        link, _ = self.add_link(None, 201)
+        self.rpc._remote_identified(link, ident)
+        self.assertIn(201, self.sent)
+
+    def test_revocation_sends_the_reason_then_closes(self):
+        first = SimpleNamespace(public_key=PHONE_KEY, device_id=PHONE_ID)
+        self.add_link(first, 1)
+        _, torn2 = self.add_link(self.second, 2)
+        _, torn3 = self.add_link(self.second, 3)
+        r = self.rpc._handle("/devices/revoke", {"device_id": self.second.device_id}, bytes([1]) * 16,
+                             self.identity_of(first))
+        self.assertTrue(r["ok"], r)
+        self.assertEqual((torn2, torn3), ([2], [3]))
+        for n in (2, 3):
+            self.assertEqual([(p["t"], p["code"]) for p in self.sent[n]], [("kestrel.reject", "device_revoked")])
+        self.assertNotIn(1, self.sent)                       # the revoker is not told anything
+
+    def test_self_revocation_reason_comes_after_the_response(self):
+        first = SimpleNamespace(public_key=PHONE_KEY, device_id=PHONE_ID)
+        self.add_link(first, 1)
+        _, torn = self.add_link(self.second, 2)
+        self.rpc._handle("/devices/revoke", {"device_id": self.second.device_id}, bytes([2]) * 16,
+                         self.identity_of(self.second))
+        self.assertNotIn(2, self.sent)                       # not before the response was returned
+        self.assertTrue(self.wait_for(lambda: torn == [2]))
+        self.assertEqual([p["code"] for p in self.sent[2]], ["device_revoked"])
 
 
 if __name__ == "__main__":

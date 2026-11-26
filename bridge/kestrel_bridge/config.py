@@ -104,6 +104,8 @@ class Limits:
     journal_ttl: int = 7 * 86400
     send_rate_per_minute: int = 30
     identify_timeout: int = 30
+    reject_grace: float = 1.5              # seconds a rejected/revoked Link stays open after its reason packet
+    reject_rate_per_minute: int = 20       # reason packets per remote identity (and 20x that over all identities)
     rpc_timeout: float = 90.0
     # protocol v2: devices, pairing, read state
     max_devices: int = 16                  # trusted (non-revoked) devices
@@ -382,6 +384,8 @@ def parse_config(raw: dict) -> Config:
         journal_ttl=_int("limits", li, "journal_ttl", dl.journal_ttl, 60),
         send_rate_per_minute=_int("limits", li, "send_rate_per_minute", dl.send_rate_per_minute),
         identify_timeout=_int("limits", li, "identify_timeout", dl.identify_timeout),
+        reject_grace=_num("limits", li, "reject_grace", dl.reject_grace, 0),
+        reject_rate_per_minute=_int("limits", li, "reject_rate_per_minute", dl.reject_rate_per_minute),
         rpc_timeout=_num("limits", li, "rpc_timeout", dl.rpc_timeout),
         max_devices=_int("limits", li, "max_devices", dl.max_devices),
         pairing_window=_int("limits", li, "pairing_window", dl.pairing_window, 30),

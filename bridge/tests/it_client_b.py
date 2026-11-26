@@ -74,7 +74,12 @@ def main() -> None:
 
     # 1. an impostor (key not in the whitelist) must not get any service
     bad = connect(dest)
+    bad_packets = []
+    bad.set_packet_callback(lambda data, pkt: bad_packets.append(msgpack.unpackb(data, raw=False)))
     bad.identify(RNS.Identity())
+    # the bridge tells an unknown key why it is not served (one kestrel.reject packet), then closes the Link
+    wait(lambda: bad_packets, 15, "kestrel.reject for the impostor")
+    out("impostor_reject", bad_packets)
     resp = request(bad, "/hello", {"protocol_version": 2}, timeout=10)
     out("impostor", resp if resp is None else resp)
     try:
