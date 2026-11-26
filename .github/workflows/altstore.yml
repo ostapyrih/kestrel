@@ -6,8 +6,6 @@ name: altstore
 on:
   workflow_call:
   workflow_dispatch:
-  push:
-    branches: [feat/altstore-source]  # TEMP
 
 permissions:
   contents: read
