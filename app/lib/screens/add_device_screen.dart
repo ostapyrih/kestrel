@@ -6,14 +6,17 @@ import 'package:material_ui/material_ui.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../bridge/bridge_connection.dart';
+import '../bridge/bridge_service.dart';
 import '../bridge/codec.dart';
 import '../l10n/strings.dart';
 import '../providers.dart';
 import 'bridge_setup_screen.dart';
 import 'bridge_widgets.dart';
 
-/// "Add a device": either this is the NEW device (shows its pairing code) or
-/// a TRUSTED device approves the code of another one.
+/// "Add a device". The default on a trusted device is an invite QR that the
+/// new device scans (it joins in one step). "Other options" keeps the older
+/// flow: the NEW device shows its pairing code, or a TRUSTED device approves
+/// a pasted/scanned code.
 class AddDeviceScreen extends StatefulWidget {
   const AddDeviceScreen({super.key});
 
@@ -23,6 +26,7 @@ class AddDeviceScreen extends StatefulWidget {
 
 class _AddDeviceScreenState extends State<AddDeviceScreen> {
   bool _newDevice = false;
+  bool _other = false;
 
   @override
   Widget build(BuildContext context) {
@@ -32,27 +36,202 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          SegmentedButton<bool>(
-            key: const ValueKey('pair-mode'),
-            segments: [
-              ButtonSegment(
-                value: false,
-                label: Text(s.t('pair_approve_title')),
-                icon: const Icon(Icons.verified_user_outlined),
-              ),
-              ButtonSegment(
-                value: true,
-                label: Text(s.t('pair_new_title')),
-                icon: const Icon(Icons.qr_code_2),
-              ),
-            ],
-            selected: {_newDevice},
-            onSelectionChanged: (v) => setState(() => _newDevice = v.first),
+          InvitePane(onUnavailable: () => setState(() => _other = true)),
+          const SizedBox(height: 8),
+          TextButton.icon(
+            key: const ValueKey('other-options'),
+            icon: Icon(_other ? Icons.expand_less : Icons.expand_more),
+            label: Text(s.t('pair_other_options')),
+            onPressed: () => setState(() => _other = !_other),
           ),
-          const SizedBox(height: 16),
-          if (_newDevice) const NewDevicePane() else const ApproveDevicePane(),
+          if (_other) ...[
+            const SizedBox(height: 8),
+            SegmentedButton<bool>(
+              key: const ValueKey('pair-mode'),
+              segments: [
+                ButtonSegment(
+                  value: false,
+                  label: Text(s.t('pair_approve_title')),
+                  icon: const Icon(Icons.verified_user_outlined),
+                ),
+                ButtonSegment(
+                  value: true,
+                  label: Text(s.t('pair_new_title')),
+                  icon: const Icon(Icons.qr_code_2),
+                ),
+              ],
+              selected: {_newDevice},
+              onSelectionChanged: (v) => setState(() => _newDevice = v.first),
+            ),
+            const SizedBox(height: 16),
+            if (_newDevice)
+              const NewDevicePane()
+            else
+              const ApproveDevicePane(),
+          ],
         ],
       ),
+    );
+  }
+}
+
+/// On a TRUSTED device: shows an invite QR (and its text) with a countdown.
+/// A new code is requested when it expires or on demand.
+class InvitePane extends ConsumerStatefulWidget {
+  const InvitePane({super.key, this.onUnavailable});
+
+  /// Called when the bridge refuses invites (vault in use): the screen opens
+  /// the other options.
+  final VoidCallback? onUnavailable;
+
+  @override
+  ConsumerState<InvitePane> createState() => _InvitePaneState();
+}
+
+class _InvitePaneState extends ConsumerState<InvitePane> {
+  InviteQr? _invite;
+  Object? _error;
+  Timer? _tick;
+  Duration _left = Duration.zero;
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _create());
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) => _update());
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  void _update() {
+    final inv = _invite;
+    if (inv == null || !mounted) return;
+    final left = inv.expiresAt.difference(DateTime.now());
+    setState(() => _left = left.isNegative ? Duration.zero : left);
+  }
+
+  Future<void> _create() async {
+    if (_loading) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final inv = await ref.read(bridgeProvider).createInvite();
+      if (!mounted) return;
+      setState(() {
+        _invite = inv;
+        _left = inv.expiresAt.difference(DateTime.now());
+      });
+    } on Object catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _invite = null;
+        _error = e;
+      });
+      if (e is BridgeError && e.code == 'vault_in_use') {
+        widget.onUnavailable?.call();
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  String _fmt(Duration d) {
+    final m = d.inMinutes;
+    final sec = (d.inSeconds % 60).toString().padLeft(2, '0');
+    return '$m:$sec';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = Strings.of(context);
+    final configured = ref.watch(bridgeConfiguredProvider).value ?? false;
+    if (!configured) {
+      return Column(
+        children: [
+          Text(s.t('pair_need_bridge')),
+          const SizedBox(height: 8),
+          FilledButton(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const BridgeSetupScreen(),
+              ),
+            ),
+            child: Text(s.t('bridge_setup')),
+          ),
+        ],
+      );
+    }
+    final inv = _invite;
+    final expired = inv != null && _left == Duration.zero;
+    return Column(
+      children: [
+        Text(s.t('pair_invite_hint')),
+        const SizedBox(height: 16),
+        if (inv != null && !expired)
+          Center(
+            child: Container(
+              color: Colors.white,
+              padding: const EdgeInsets.all(8),
+              child: QrImageView(
+                key: const ValueKey('invite-qr'),
+                data: inv.text,
+                size: 240,
+                errorCorrectionLevel: QrErrorCorrectLevel.L,
+              ),
+            ),
+          ),
+        const SizedBox(height: 12),
+        if (inv != null && !expired) ...[
+          Text(
+            s.t('pair_invite_valid', {'time': _fmt(_left)}),
+            key: const ValueKey('invite-countdown'),
+          ),
+          SelectableText(
+            inv.text,
+            key: const ValueKey('invite-text'),
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+          ),
+          TextButton.icon(
+            icon: const Icon(Icons.copy, size: 16),
+            label: Text(s.t('pair_copy_code')),
+            onPressed: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              final copied = s.t('copied');
+              await Clipboard.setData(ClipboardData(text: inv.text));
+              messenger.showSnackBar(SnackBar(content: Text(copied)));
+            },
+          ),
+        ],
+        if (expired)
+          Text(
+            s.t('pair_invite_expired'),
+            key: const ValueKey('invite-expired'),
+          ),
+        if (_error != null)
+          Text(
+            bridgeErrorText(s, _error!),
+            key: const ValueKey('invite-error'),
+          ),
+        if (_loading)
+          const Padding(
+            padding: EdgeInsets.all(8),
+            child: CircularProgressIndicator(strokeWidth: 2),
+          )
+        else if (expired || _error != null)
+          OutlinedButton.icon(
+            key: const ValueKey('invite-new'),
+            icon: const Icon(Icons.refresh),
+            label: Text(s.t('pair_invite_new')),
+            onPressed: _create,
+          ),
+      ],
     );
   }
 }

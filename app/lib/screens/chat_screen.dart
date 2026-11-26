@@ -87,6 +87,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               d.deviceId: d.name,
           }
         : const <String, String>{};
+    final ownDevice = ref.watch(ownDeviceNameProvider);
     final olderItem = isA && !(chat?.olderDone ?? true);
     return Scaffold(
       appBar: AppBar(
@@ -125,6 +126,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   final m = list[list.length - 1 - i];
                   return MessageBubble(
                     message: m,
+                    deviceName: ownDevice,
                     originLabel: originLabel(s, m, deviceNames),
                   );
                 },
@@ -203,8 +205,16 @@ String? originLabel(Strings s, MessageRow m, Map<String, String> names) {
 }
 
 class MessageBubble extends StatelessWidget {
-  const MessageBubble({super.key, required this.message, this.originLabel});
+  const MessageBubble({
+    super.key,
+    required this.message,
+    this.originLabel,
+    this.deviceName,
+  });
   final MessageRow message;
+
+  /// Name of this device, shown as `B · <name>` on messages sent from B.
+  final String? deviceName;
 
   /// Label of the sending device (account A), see [originLabel].
   final String? originLabel;
@@ -217,7 +227,7 @@ class MessageBubble extends StatelessWidget {
     final out = m.outgoing;
     final failed = m.status == MsgStatus.failed;
     final meta = [
-      s.account(m.senderIdentity),
+      s.account(m.senderIdentity, device: deviceName),
       ?originLabel,
       if (m.route != null)
         m.route == 'via_bridge' ? s.t('route_via_bridge') : m.route!,

@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:kestrel/bridge/bridge_connection.dart';
 import 'package:kestrel/bridge/bridge_service.dart';
 import 'package:kestrel/bridge/codec.dart';
+import 'package:kestrel/platform.dart';
 import 'package:kestrel/storage/database.dart';
 import 'package:kestrel/storage/repo.dart';
 import 'package:kestrel_rns/kestrel_rns.dart';
@@ -483,6 +484,178 @@ void main() {
         expect((await repo.chats()).length, 1);
       },
     );
+  });
+
+  group('device name', () {
+    test('the app name and platform are handed to the connection', () async {
+      expect(api.infoName, defaultDeviceName());
+      expect(api.infoPlatform, platformId());
+      await repo.setSetting(SettingKeys.deviceName, 'Studio PC');
+      await svc.configure('bridge public key: ${'cd' * 64}');
+      expect(api.infoName, 'Studio PC');
+    });
+
+    test('renaming in settings stores it and renames on the bridge', () async {
+      await up();
+      api.handlers['/devices/rename'] = (a) => {
+        'device': deviceMap(me, name: a['name']! as String),
+      };
+      await svc.setDeviceName('  Studio PC ');
+      expect(await repo.getSetting(SettingKeys.deviceName), 'Studio PC');
+      expect(api.callsTo('/devices/rename').single, {'name': 'Studio PC'});
+      expect(api.infoName, 'Studio PC');
+      final own = (await svc.store.devices()).firstWhere(
+        (d) => d.deviceId == me,
+      );
+      expect(own.name, 'Studio PC');
+    });
+
+    test('offline rename is stored and sent with the next hello', () async {
+      await svc.setDeviceName('Laptop');
+      expect(await repo.getSetting(SettingKeys.deviceName), 'Laptop');
+      expect(api.infoName, 'Laptop');
+      expect(api.callsTo('/devices/rename'), isEmpty);
+    });
+
+    test('an empty name falls back to the platform default', () async {
+      await svc.setDeviceName('   ');
+      expect(await svc.deviceName(), defaultDeviceName());
+    });
+
+    test(
+      'a rename of this device from another one updates the setting',
+      () async {
+        await up();
+        api.push('device_updated', {'device': deviceMap(me, name: 'Renamed')});
+        await svc.flushEvents();
+        expect(await repo.getSetting(SettingKeys.deviceName), 'Renamed');
+        expect(await svc.deviceName(), 'Renamed');
+      },
+    );
+
+    test(
+      'the bridge record from /hello never overwrites the app name',
+      () async {
+        await repo.setSetting(SettingKeys.deviceName, 'Mine');
+        await up(); // hello carries the config name "This" (older bridge)
+        expect(await repo.getSetting(SettingKeys.deviceName), 'Mine');
+      },
+    );
+
+    test(
+      'renaming this device from My devices keeps the setting in step',
+      () async {
+        await up();
+        api.handlers['/devices/rename'] = (a) => {
+          'device': deviceMap(
+            a['device_id']! as String,
+            name: a['name']! as String,
+          ),
+        };
+        await svc.renameDevice(me, 'From list');
+        expect(await repo.getSetting(SettingKeys.deviceName), 'From list');
+        await svc.renameDevice('d1' * 16, 'Other');
+        expect(await repo.getSetting(SettingKeys.deviceName), 'From list');
+      },
+    );
+  });
+
+  group('invite pairing', () {
+    test(
+      'createInvite builds the QR with the bridge address and the token',
+      () async {
+        await up();
+        final token = Uint8List.fromList(List.generate(16, (i) => i + 1));
+        api.handlers['/devices/invite'] = (a) => {
+          'invite_id': 'ab' * 16,
+          'token': token,
+          'expires_at': 1700000600.0,
+        };
+        await repo.setSetting(SettingKeys.deviceName, 'Studio PC');
+        final inv = await svc.createInvite();
+        final p = decodeInviteQr(inv.text);
+        expect(p.bridgeKeyHex, 'cd' * 64);
+        expect(p.token, token);
+        expect((p.inviterName, p.expiresAt), ('Studio PC', 1700000600.0));
+        // the countdown uses the bridge clock offset stored at connect time
+        final offset = double.parse(
+          (await repo.getSetting(SettingKeys.bridgeClockOffset))!,
+        );
+        expect(
+          inv.expiresAt.millisecondsSinceEpoch,
+          ((1700000600.0 - offset) * 1000).round(),
+        );
+      },
+    );
+
+    test('createInvite surfaces vault_in_use', () async {
+      await up();
+      api.handlers['/devices/invite'] = (a) =>
+          throw BridgeError('vault_in_use', 'no');
+      await expectLater(
+        svc.createInvite(),
+        throwsA(
+          isA<BridgeError>().having((e) => e.code, 'code', 'vault_in_use'),
+        ),
+      );
+    });
+
+    InvitePayload invite({double? exp}) => InvitePayload(
+      bridgePubkey: Uint8List.fromList(List.filled(64, 0xee)),
+      token: Uint8List.fromList(List.filled(16, 9)),
+      inviterName: 'Studio PC',
+      expiresAt: exp ?? DateTime.now().millisecondsSinceEpoch / 1000 + 300,
+    );
+
+    test('redeemInvite configures the bridge address and redeems', () async {
+      final rec = await svc.redeemInvite(encodeInviteQr(invite()));
+      expect(await svc.configuredKey(), 'ee' * 64);
+      expect(api.redeemed!['token'], List.filled(16, 9));
+      expect(api.redeemed!['platform'], platformId());
+      expect(api.redeemed!['name'], defaultDeviceName());
+      expect(rec.deviceId, 'ee' * 16);
+      expect(
+        (await svc.store.devices()).map((d) => d.deviceId),
+        contains('ee' * 16),
+      );
+      expect(await repo.bridgeEnabled(), isTrue);
+    });
+
+    test(
+      'a refused invite on a fresh install leaves nothing configured',
+      () async {
+        await repo.setSetting(SettingKeys.bridgePubkey, '');
+        api.redeemError = BridgeError('pairing_replay', 'used');
+        await expectLater(
+          svc.redeemInvite(encodeInviteQr(invite())),
+          throwsA(isA<BridgeError>()),
+        );
+        expect(await svc.configuredKey(), isNull);
+        expect(await repo.bridgeEnabled(), isFalse);
+      },
+    );
+
+    test('a refused invite keeps an existing bridge', () async {
+      api.redeemError = BridgeError('pairing_expired', 'late');
+      await expectLater(
+        svc.redeemInvite(encodeInviteQr(invite())),
+        throwsA(isA<BridgeError>()),
+      );
+      expect(await svc.configuredKey(), 'cd' * 64);
+    });
+
+    test('junk and long expired invites never reach the bridge', () async {
+      await expectLater(svc.redeemInvite('hello'), throwsFormatException);
+      await expectLater(
+        svc.redeemInvite(
+          encodeInviteQr(
+            invite(exp: DateTime.now().millisecondsSinceEpoch / 1000 - 7200),
+          ),
+        ),
+        throwsA(isA<InviteExpired>()),
+      );
+      expect(api.redeemed, isNull);
+    });
   });
 
   group('devices', () {

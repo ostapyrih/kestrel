@@ -129,6 +129,41 @@ class FakeBridge extends Fake implements BridgeService {
   final List<String> rrcSent = [];
   final List<bool> enabled = [];
   Object? approveError;
+  Object? inviteError;
+  Duration inviteTtl = const Duration(minutes: 10);
+  int invitesCreated = 0;
+  final List<String> deviceNames = [];
+  final List<String> redeemedInvites = [];
+  Object? redeemError;
+
+  @override
+  Future<InviteQr> createInvite() async {
+    if (inviteError != null) throw inviteError!;
+    invitesCreated++;
+    return InviteQr(
+      'kestrel-invite:v1:test$invitesCreated',
+      DateTime.now().add(inviteTtl),
+    );
+  }
+
+  @override
+  Future<DeviceRecord> redeemInvite(String text) async {
+    if (redeemError != null) throw redeemError!;
+    redeemedInvites.add(text);
+    return DeviceRecord(
+      deviceId: 'ee' * 16,
+      publicKey: '',
+      name: 'x',
+      platform: 'linux',
+      roles: const [],
+      bootstrap: false,
+      addedBy: 'dd' * 16,
+      addedAt: 1,
+    );
+  }
+
+  @override
+  Future<void> setDeviceName(String name) async => deviceNames.add(name);
 
   @override
   Future<bool> cancelQueued(int messageId) async {

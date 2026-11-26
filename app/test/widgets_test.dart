@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kestrel/bridge/bridge_connection.dart';
+import 'package:kestrel/bridge/codec.dart';
 import 'package:kestrel/main.dart';
 import 'package:kestrel/node/node_service.dart';
 import 'package:kestrel/platform.dart';
@@ -107,7 +108,7 @@ void main() {
       tester,
     ) async {
       await show(tester, const ChatsScreen());
-      expect(find.text('B (телефон)'), findsOneWidget);
+      expect(find.text('B · ${defaultDeviceName()}'), findsOneWidget);
       expect(find.text('A (міст)'), findsWidgets);
       expect(find.text('Усі'), findsOneWidget);
       final a = tester.widget<ChoiceChip>(find.byKey(const ValueKey('chip-A')));
@@ -129,7 +130,7 @@ void main() {
     testWidgets('English fallback for English devices', (tester) async {
       await show(tester, const ChatsScreen(), locale: const Locale('en'));
       expect(find.text('New chat'), findsOneWidget);
-      expect(find.text('B (phone)'), findsOneWidget);
+      expect(find.text('B · ${defaultDeviceName()}'), findsOneWidget);
       await show(tester, const ChatsScreen(), locale: const Locale('de'));
       expect(find.text('Новий чат'), findsOneWidget); // Ukrainian default
     });
@@ -146,9 +147,12 @@ void main() {
 
       Text meta(int id) =>
           tester.widget<Text>(find.byKey(ValueKey('meta-$id')));
-      expect(meta(1).data, 'B (телефон) · opportunistic · TCP');
-      expect(meta(2).data, 'B (телефон) · direct · TCP');
-      expect(meta(3).data, 'B (телефон) · opportunistic · в черзі (офлайн)');
+      expect(meta(1).data, 'B · ${defaultDeviceName()} · opportunistic · TCP');
+      expect(meta(2).data, 'B · ${defaultDeviceName()} · direct · TCP');
+      expect(
+        meta(3).data,
+        'B · ${defaultDeviceName()} · opportunistic · в черзі (офлайн)',
+      );
 
       Icon icon(int id) =>
           tester.widget<Icon>(find.byKey(ValueKey('status-$id')));
@@ -161,7 +165,7 @@ void main() {
 
     testWidgets('composer states who the message is sent from', (tester) async {
       await show(tester, const ChatScreen(chatId: 1));
-      expect(find.text('Від: B (телефон)'), findsOneWidget);
+      expect(find.text('Від: B (цей пристрій)'), findsOneWidget);
     });
 
     testWidgets('composer for an A chat shows A', (tester) async {
@@ -311,6 +315,49 @@ void main() {
       await tester.pumpAndSettle();
       expect(bridge.configured, hasLength(1));
       expect(find.byType(BridgeSetupScreen), findsNothing);
+    });
+
+    testWidgets('pasting an invite joins the bridge in one step', (
+      tester,
+    ) async {
+      final bridge = FakeBridge();
+      await show(tester, const BridgeSetupScreen(), bridge: bridge);
+      await tester.enterText(
+        find.byKey(const ValueKey('bridge-key')),
+        'kestrel-invite:v1:abc',
+      );
+      await tester.tap(find.byKey(const ValueKey('bridge-connect')));
+      await tester.pumpAndSettle();
+      expect(bridge.redeemedInvites, ['kestrel-invite:v1:abc']);
+      expect(bridge.configured, isEmpty); // no manual address was needed
+    });
+
+    testWidgets('a refused invite shows the reason', (tester) async {
+      final bridge = FakeBridge()..redeemError = BridgeError('pairing_replay');
+      await show(tester, const BridgeSetupScreen(), bridge: bridge);
+      await tester.enterText(
+        find.byKey(const ValueKey('bridge-key')),
+        'kestrel-invite:v1:abc',
+      );
+      await tester.tap(find.byKey(const ValueKey('bridge-connect')));
+      await tester.pumpAndSettle();
+      expect(find.byType(BridgeSetupScreen), findsOneWidget);
+      expect(find.textContaining('уже використано'), findsOneWidget);
+    });
+
+    testWidgets('saving the device name goes through the bridge service', (
+      tester,
+    ) async {
+      final bridge = FakeBridge();
+      await show(tester, const SettingsScreen(), bridge: bridge);
+      await tester.pump();
+      await tester.enterText(
+        find.byKey(const ValueKey('device-name')),
+        'Studio PC',
+      );
+      await tester.tap(find.byKey(const ValueKey('save-device')));
+      await tester.pump();
+      expect(bridge.deviceNames, ['Studio PC']);
     });
 
     testWidgets('with a key the switch toggles the bridge service', (

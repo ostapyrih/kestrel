@@ -97,6 +97,7 @@ class BridgeIndicator extends StatelessWidget {
 String bridgeErrorText(Strings s, Object e) {
   if (e is VaultKeysUnsupported) return s.t('vault_unsupported');
   if (e is RrcCommandBlocked) return s.t('room_send_blocked');
+  if (e is InviteExpired) return s.t('invite_expired_local');
   if (e is BridgeNotConfigured || e is BridgeTransportError) {
     return s.t('bridge_not_connected');
   }
@@ -106,6 +107,7 @@ String bridgeErrorText(Strings s, Object e) {
       'pairing_replay' => s.t('pair_replay'),
       'pairing_invalid' => s.t('pair_invalid'),
       'device_exists' => s.t('pair_exists'),
+      'vault_in_use' => s.t('pair_invite_unavailable'),
       _ => s.t('error_code', {'code': e.code}),
     };
   }

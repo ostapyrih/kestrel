@@ -96,7 +96,7 @@ class ChatsScreen extends ConsumerWidget {
   }
 }
 
-/// `B (телефон)` / `A (міст)` (disabled until the bridge exists) / `Усі`.
+/// `B · <device name>` / `A (міст)` (disabled until the bridge exists) / `Усі`.
 class AccountSwitcher extends ConsumerWidget {
   const AccountSwitcher({super.key});
 
@@ -120,7 +120,9 @@ class AccountSwitcher extends ConsumerWidget {
             children: [
               ChoiceChip(
                 key: const ValueKey('chip-B'),
-                label: Text(s.account('B')),
+                label: Text(
+                  s.account('B', device: ref.watch(ownDeviceNameProvider)),
+                ),
                 selected: sel == 'B',
                 onSelected: (_) => notifier.select('B'),
               ),

@@ -117,13 +117,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             child: TextButton(
               key: const ValueKey('save-device'),
               onPressed: () {
-                final v = _device.text.trim();
-                ref
-                    .read(repoProvider)
-                    .setSetting(
-                      SettingKeys.deviceName,
-                      v.isEmpty ? defaultDeviceName() : v,
-                    );
+                // stored, sent with every /hello and renamed on the bridge now
+                ref.read(bridgeProvider).setDeviceName(_device.text);
               },
               child: Text(s.t('save')),
             ),

@@ -5,6 +5,7 @@ import 'bridge/bridge_service.dart';
 import 'bridge/bridge_store.dart';
 import 'bridge/codec.dart';
 import 'node/node_service.dart';
+import 'platform.dart';
 import 'storage/database.dart';
 import 'storage/repo.dart';
 
@@ -74,6 +75,13 @@ final peersProvider = StreamProvider<List<PeerRow>>((ref) {
 final settingProvider = StreamProvider.family<String?, String>((ref, key) {
   final repo = ref.watch(repoProvider);
   return repo.watch(() => repo.getSetting(key));
+});
+
+/// The name of this device (Settings -> device name, platform default
+/// otherwise): used in labels such as `B · Windows PC`.
+final ownDeviceNameProvider = Provider<String>((ref) {
+  final v = ref.watch(settingProvider(SettingKeys.deviceName)).value?.trim();
+  return (v == null || v.isEmpty) ? defaultDeviceName() : v;
 });
 
 final bridgeEnabledProvider = StreamProvider<bool>((ref) {

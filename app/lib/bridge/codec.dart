@@ -14,6 +14,9 @@ const int bridgeProtocolVersion = 2;
 /// Prefix of the pairing QR text (spec 5.1).
 const String pairingPrefix = 'kestrel-pair:v1:';
 
+/// Prefix of the invite QR text (spec 5.4).
+const String invitePrefix = 'kestrel-invite:v1:';
+
 /// Domain separation of the approval signature (spec 5.2).
 final Uint8List pairSigDomain = Uint8List.fromList(
   utf8.encode('kestrel-pair-approve:v1:'),
@@ -622,6 +625,106 @@ Uint8List pairingSignMessage(List<int> payload, String approverDeviceIdHex) =>
       ...payload,
       ...fromHex(approverDeviceIdHex),
     ]);
+
+// ------------------------------------------------------------------- invite
+
+/// Result of `/devices/invite` (spec 5.4).
+class InviteTicket {
+  InviteTicket({
+    required this.inviteId,
+    required this.token,
+    required this.expiresAt,
+  });
+
+  factory InviteTicket.fromMap(Map<String, Object?> m) {
+    final t = m['token'];
+    if (t is! Uint8List || t.length != 16) {
+      throw const FormatException('invite token must be 16 bytes');
+    }
+    return InviteTicket(
+      inviteId: (m['invite_id'] as String?) ?? '',
+      token: t,
+      expiresAt: asDouble(m['expires_at']) ?? 0,
+    );
+  }
+
+  final String inviteId;
+  final Uint8List token;
+
+  /// Bridge clock, Unix seconds.
+  final double expiresAt;
+}
+
+/// The content of the invite QR code (spec 5.4): the bridge address, the
+/// one-time token and what the user is shown for confirmation.
+class InvitePayload {
+  InvitePayload({
+    required this.bridgePubkey,
+    required this.token,
+    required this.inviterName,
+    required this.expiresAt,
+  });
+
+  final Uint8List bridgePubkey;
+  final Uint8List token;
+  final String inviterName;
+
+  /// Unix seconds (bridge clock as the inviting device knew it).
+  final double expiresAt;
+
+  Uint8List pack() => packb({
+    'bridge_pubkey': bridgePubkey,
+    'token': token,
+    'inviter_name': inviterName,
+    'expires_at': expiresAt,
+  });
+
+  String get bridgeKeyHex => toHex(bridgePubkey);
+}
+
+/// `kestrel-invite:v1:<base64url(msgpack payload)>` without padding.
+String encodeInviteQr(InvitePayload p) =>
+    '$invitePrefix${base64UrlNoPad(p.pack())}';
+
+/// Parses the invite QR text. Unknown payload keys are ignored. Throws
+/// [FormatException] for anything that is not a valid invite.
+InvitePayload decodeInviteQr(String text) {
+  final t = text.trim();
+  if (!t.startsWith(invitePrefix)) {
+    throw const FormatException('not a Kestrel invite');
+  }
+  final Uint8List raw;
+  try {
+    raw = base64UrlDecodeNoPad(t.substring(invitePrefix.length));
+  } on FormatException {
+    throw const FormatException('invite is not base64url');
+  }
+  if (raw.length > 1024) throw const FormatException('invite too large');
+  final Object? m;
+  try {
+    m = unpackb(raw);
+  } on Object {
+    throw const FormatException('invite is not valid msgpack');
+  }
+  if (m is! Map) throw const FormatException('invite must be a map');
+  final pub = m['bridge_pubkey'];
+  final token = m['token'];
+  final name = m['inviter_name'];
+  final exp = m['expires_at'];
+  if (pub is! Uint8List || pub.length != 64) {
+    throw const FormatException('bridge_pubkey must be 64 bytes');
+  }
+  if (token is! Uint8List || token.length != 16) {
+    throw const FormatException('token must be 16 bytes');
+  }
+  if (exp is! num) throw const FormatException('expires_at must be a number');
+  return InvitePayload(
+    bridgePubkey: pub,
+    token: token,
+    inviterName: name is String ? name : '',
+    expiresAt: exp.toDouble(),
+  );
+}
 
 // ------------------------------------------------------------ LXMF fallback
 

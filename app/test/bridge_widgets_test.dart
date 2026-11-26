@@ -6,6 +6,7 @@ import 'package:kestrel/bridge/bridge_connection.dart';
 import 'package:kestrel/bridge/bridge_service.dart';
 import 'package:kestrel/bridge/codec.dart';
 import 'package:kestrel/node/node_service.dart';
+import 'package:kestrel/platform.dart';
 import 'package:kestrel/main.dart';
 import 'package:kestrel/screens/add_device_screen.dart';
 import 'package:kestrel/screens/chat_screen.dart';
@@ -13,7 +14,6 @@ import 'package:kestrel/screens/chats_screen.dart';
 import 'package:kestrel/screens/devices_screen.dart';
 import 'package:kestrel/screens/rooms_screen.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 
 import 'support/fixtures.dart';
 
@@ -25,7 +25,7 @@ void main() {
     Widget home, {
     BridgeStatus status = const BridgeStatus(BridgeState.connected),
     bool configured = true,
-    Size size = const Size(420, 860),
+    Size size = const Size(420, 1800),
   }) async {
     const locale = Locale('uk');
     tester.platformDispatcher.localeTestValue = locale;
@@ -142,7 +142,7 @@ void main() {
 
     testWidgets('B chats show no origin label', (tester) async {
       await show(tester, const ChatScreen(chatId: 1));
-      expect(meta(tester, 2).data, 'B (телефон) · direct · TCP');
+      expect(meta(tester, 2).data, 'B · ${defaultDeviceName()} · direct · TCP');
     });
   });
 
@@ -253,6 +253,62 @@ void main() {
     });
   });
 
+  group('invite pairing', () {
+    testWidgets(
+      'a trusted device shows the invite QR first, with a countdown',
+      (tester) async {
+        await show(tester, const AddDeviceScreen());
+        await tester.pump();
+        expect(find.byKey(const ValueKey('invite-qr')), findsOneWidget);
+        expect(
+          tester
+              .widget<SelectableText>(find.byKey(const ValueKey('invite-text')))
+              .data,
+          startsWith('kestrel-invite:v1:'),
+        );
+        expect(find.byKey(const ValueKey('invite-countdown')), findsOneWidget);
+        expect(find.textContaining('Дійсний ще 9:'), findsOneWidget);
+        // the older flows are behind "Other options"
+        expect(find.byKey(const ValueKey('pair-input')), findsNothing);
+        await tester.tap(find.byKey(const ValueKey('other-options')));
+        await tester.pump();
+        expect(find.byKey(const ValueKey('pair-input')), findsOneWidget);
+      },
+    );
+
+    testWidgets('an expired invite is replaced on demand', (tester) async {
+      bridge.inviteTtl = const Duration(seconds: 1);
+      await show(tester, const AddDeviceScreen());
+      await tester.pump();
+      expect(bridge.invitesCreated, 1);
+      expect(find.byKey(const ValueKey('invite-qr')), findsOneWidget);
+      // real time passes (the countdown reads the wall clock)
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 1300)),
+      );
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byKey(const ValueKey('invite-expired')), findsOneWidget);
+      expect(find.byKey(const ValueKey('invite-qr')), findsNothing);
+      bridge.inviteTtl = const Duration(minutes: 10);
+      await tester.tap(find.byKey(const ValueKey('invite-new')));
+      await tester.pump();
+      await tester.pump();
+      expect(bridge.invitesCreated, 2);
+      expect(find.byKey(const ValueKey('invite-qr')), findsOneWidget);
+    });
+
+    testWidgets('vault in use: message and the other options open', (
+      tester,
+    ) async {
+      bridge.inviteError = BridgeError('vault_in_use');
+      await show(tester, const AddDeviceScreen());
+      await tester.pump();
+      await tester.pump();
+      expect(find.textContaining('Запрошення недоступні'), findsOneWidget);
+      expect(find.byKey(const ValueKey('pair-input')), findsOneWidget);
+    });
+  });
+
   group('add a device', () {
     PairingPayload payload() => PairingPayload(
       pubkey: Uint8List.fromList(List.filled(64, 5)),
@@ -266,6 +322,8 @@ void main() {
       'trusted device: paste, confirm name/platform/fingerprint, approve',
       (tester) async {
         await show(tester, const AddDeviceScreen());
+        await tester.tap(find.byKey(const ValueKey('other-options')));
+        await tester.pump();
         final p = payload();
         await tester.enterText(
           find.byKey(const ValueKey('pair-input')),
@@ -307,6 +365,8 @@ void main() {
 
     testWidgets('garbage and expired codes show clear errors', (tester) async {
       await show(tester, const AddDeviceScreen());
+      await tester.tap(find.byKey(const ValueKey('other-options')));
+      await tester.pump();
       await tester.enterText(find.byKey(const ValueKey('pair-input')), 'hello');
       await tester.tap(find.byKey(const ValueKey('pair-next')));
       await tester.pump();
@@ -328,6 +388,8 @@ void main() {
       tester,
     ) async {
       await show(tester, const AddDeviceScreen());
+      await tester.tap(find.byKey(const ValueKey('other-options')));
+      await tester.pump();
       bridge.approveError = VaultKeysUnsupported();
       await tester.enterText(
         find.byKey(const ValueKey('pair-input')),
@@ -349,12 +411,14 @@ void main() {
       await show(
         tester,
         const AddDeviceScreen(),
-        status: const BridgeStatus(BridgeState.rejected),
+        status: const BridgeStatus(BridgeState.awaitingApproval),
       );
+      await tester.tap(find.byKey(const ValueKey('other-options')));
+      await tester.pump();
       await tester.tap(find.text('Це новий пристрій'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
-      expect(find.byType(QrImageView), findsOneWidget);
+      expect(find.byKey(const ValueKey('pair-qr')), findsOneWidget);
       final text = tester
           .widget<SelectableText>(find.byKey(const ValueKey('pair-text')))
           .data!;
@@ -365,6 +429,8 @@ void main() {
 
     testWidgets('new device: shows done once connected', (tester) async {
       await show(tester, const AddDeviceScreen());
+      await tester.tap(find.byKey(const ValueKey('other-options')));
+      await tester.pump();
       await tester.tap(find.text('Це новий пристрій'));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('pair-done')), findsOneWidget);

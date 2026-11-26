@@ -4,11 +4,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../bridge/codec.dart';
 import '../l10n/strings.dart';
 import '../providers.dart';
+import 'bridge_widgets.dart';
 
-/// Camera scanning exists on phones only; desktop pastes the text.
-bool get canScanQr => Platform.isAndroid || Platform.isIOS;
+/// Camera scanning exists on phones and Macs; Windows and Linux paste the
+/// text.
+bool get canScanQr => Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
 
 /// Opens the camera and returns the text of the first QR code, or null.
 Future<String?> scanQr(BuildContext context) =>
@@ -68,7 +71,10 @@ class _BridgeSetupScreenState extends ConsumerState<BridgeSetupScreen> {
 
   Future<void> _scan() async {
     final v = await scanQr(context);
-    if (v != null) setState(() => _text.text = v);
+    if (v == null) return;
+    setState(() => _text.text = v);
+    // an invite carries everything: join straight away
+    if (v.trim().startsWith(invitePrefix)) await _connect();
   }
 
   Future<void> _connect() async {
@@ -78,10 +84,23 @@ class _BridgeSetupScreenState extends ConsumerState<BridgeSetupScreen> {
       _error = null;
     });
     try {
-      await ref.read(bridgeProvider).configure(_text.text);
+      final text = _text.text.trim();
+      if (text.startsWith(invitePrefix)) {
+        // invite QR: configures the bridge address and redeems the token
+        await ref.read(bridgeProvider).redeemInvite(text);
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(s.t('invite_joined'))));
+          Navigator.of(context).pop(true);
+        }
+        return;
+      }
+      await ref.read(bridgeProvider).configure(text);
       if (mounted) Navigator.of(context).pop(true);
     } on FormatException {
       setState(() => _error = s.t('bridge_key_invalid'));
+    } on Object catch (e) {
+      setState(() => _error = bridgeErrorText(s, e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -114,7 +133,7 @@ class _BridgeSetupScreenState extends ConsumerState<BridgeSetupScreen> {
                 OutlinedButton.icon(
                   key: const ValueKey('bridge-scan'),
                   icon: const Icon(Icons.qr_code_scanner),
-                  label: Text(s.t('bridge_scan')),
+                  label: Text(s.t('bridge_scan_invite')),
                   onPressed: _scan,
                 ),
               const Spacer(),
