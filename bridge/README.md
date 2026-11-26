@@ -82,7 +82,10 @@ announce_interval = 1800       # seconds, default 30 min
 `kestrel.bridge` is announced on startup, every `rns.announce_interval` seconds, and **after every
 TCP reconnect** (a small thread inside the bridge watches the interface `online` flag), so the phone
 can find a path through the MeshChatX transport node again after MeshChatX restarted and lost its
-path table. In shared mode only the startup/periodic announces apply.
+path table. Every start/reconnect is followed by two short follow-up announces (after 10 s and
+60 s): a transport node may register the very first announce on a brand-new connection late (observed
+with RNS 1.6), and a phone would otherwise wait for the next periodic announce. In shared mode only
+the startup/periodic announces apply.
 
 ### Push profile (full vs constrained)
 

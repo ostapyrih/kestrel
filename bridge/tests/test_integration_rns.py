@@ -144,7 +144,7 @@ mode = "standalone"
 config_dir = "{q(sc)}/rns"
 identity_path = "{q(sc)}/identity"
 lxmf_storage = "{q(sc)}/lxmf"
-announce_interval = 3600
+announce_interval = 15
 log_level = {int(os.environ.get("IT_RNS_LOG", "2"))}
 tcp_host = "127.0.0.1"
 tcp_port = {tcp_port}
@@ -198,7 +198,7 @@ tcp_port = {tcp_port}
             time.sleep(2)
             transport = self.spawn("transport2", transport_args)
             transport.wait_for("TRANSPORT_READY", 60)
-            # no periodic announce is due (3600 s): this one is the reconnect hook
+            # the reconnect hook fired (a log line distinct from the periodic announce)
             sidecar.wait_for("announced kestrel.bridge (interface reconnected)", 120)
             open(go_file, "w").close()
             client.wait_for("RESULT DONE", 180)

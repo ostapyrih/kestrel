@@ -16,6 +16,7 @@ from .config import RnsConfig, rns_config_value
 log = logging.getLogger("kestrel.rns")
 
 INTERFACE_NAME = "MeshChatX"
+FOLLOW_UPS = (10.0, 60.0)
 SHARED_RNS_CONFIG = """[reticulum]
   enable_transport = No
   share_instance = Yes
@@ -95,6 +96,11 @@ def interfaces_online(interfaces) -> bool:
 class AnnounceWatcher:
     """Announce on start, periodically, and after every interface (re)connect.
 
+    The first announce right after a (re)connect can be lost (the remote transport node may not be
+    reading from the new connection yet) and a phone could then not find S until the next periodic
+    announce, so every start/reconnect is followed by short follow-up announces
+    (``follow_ups`` = seconds after the connect; default 10 s and 60 s).
+
     ``interfaces()`` returns the interface objects to watch, or None when there is nothing to watch
     (shared mode: periodic announces only). An interface counts as connected while its ``online``
     flag is set. A new connection is recognised by an offline period or by a new socket object
@@ -102,12 +108,14 @@ class AnnounceWatcher:
     """
 
     def __init__(self, announce, interfaces=None, interval: float = 1800.0, poll: float = 1.0,
-                 clock=time.monotonic):
+                 clock=time.monotonic, follow_ups=FOLLOW_UPS):
         self.announce = announce
         self.interfaces = interfaces or (lambda: None)
         self.interval = interval
         self.poll = poll
         self._clock = clock
+        self.follow_ups = tuple(follow_ups)
+        self._pending: list[float] = []   # due times of follow-up announces
         self._sig = None          # connection signature seen at the last tick
         self._last = None         # time of the last announce
         self._stop = threading.Event()
@@ -126,9 +134,16 @@ class AnnounceWatcher:
         online = ifaces is None or interfaces_online(ifaces)
         now = self._clock()
         reason = None
-        if online:
+        if not online:
+            self._pending = []
+        else:
             if sig != self._sig:
                 reason = "startup" if self._last is None else "interface reconnected"
+                self._pending = [now + d for d in self.follow_ups]
+            elif self._pending and now >= self._pending[0]:
+                reason = "follow-up"
+                while self._pending and now >= self._pending[0]:
+                    self._pending.pop(0)
             elif self._last is None or now - self._last >= self.interval:
                 reason = "periodic"
         self._sig = sig
