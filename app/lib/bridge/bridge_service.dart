@@ -30,6 +30,20 @@ class RrcCommandBlocked implements Exception {
   String toString() => 'RRC messages starting with / are blocked';
 }
 
+/// The invite QR code is long expired.
+class InviteExpired implements Exception {
+  @override
+  String toString() => 'the invite expired';
+}
+
+/// An invite QR code ready to show: [text] is the QR content, [expiresAt]
+/// when it stops working (local time).
+class InviteQr {
+  InviteQr(this.text, this.expiresAt);
+  final String text;
+  final DateTime expiresAt;
+}
+
 class BridgeNotConfigured implements Exception {
   @override
   String toString() => 'bridge is not configured';
@@ -131,7 +145,7 @@ class BridgeService {
     await _attach(key);
   }
 
-  Future<void> _attach(String keyHex) async {
+  Future<void> _attach(String keyHex, {InvitePayload? redeem}) async {
     await _detach();
     final api = apiFactory(
       Uint8List.fromList(fromHex(keyHex)),
@@ -143,7 +157,34 @@ class BridgeService {
       ..add(api.statusChanges.listen(_onApiStatus))
       ..add(api.pushes.listen((e) => _chain(() => _onPush(e))))
       ..add(api.connected.listen((h) => _chain(() => _onConnected(h))));
-    await api.start();
+    api.setIdentityInfo(await deviceName(), platformId());
+    if (redeem == null) await api.start();
+  }
+
+  /// The device name the user chose (or the platform default). The app owns
+  /// it: it is sent with every `/hello` and shown in "My devices".
+  Future<String> deviceName() async {
+    final n = (await repo.getSetting(SettingKeys.deviceName))?.trim();
+    return (n == null || n.isEmpty) ? defaultDeviceName() : n;
+  }
+
+  /// Settings -> device name: stores it and tells the bridge right away
+  /// (otherwise the next `/hello` does).
+  Future<void> setDeviceName(String name) async {
+    final v = name.trim().isEmpty ? defaultDeviceName() : name.trim();
+    await repo.setSetting(SettingKeys.deviceName, v);
+    final api = _api;
+    if (api == null) return;
+    api.setIdentityInfo(v, platformId());
+    if (!api.linkUp) return;
+    try {
+      final r = await api.call('/devices/rename', {'name': v});
+      await store.upsertDevices([DeviceRecord.fromMap(asMap(r['device']))]);
+    } on BridgeError catch (e) {
+      _noteError(e);
+    } on BridgeTransportError {
+      // the next /hello carries the new name
+    }
   }
 
   /// A `device_revoked` reason from the bridge (spec 2.4) is handled like the
@@ -190,16 +231,48 @@ class BridgeService {
     await _attach(key);
   }
 
-  /// The mode switch. Turning it off only disconnects; no data is touched.
+  /// The mode switch. Off = [turnOff] (account A is dropped, nothing is
+  /// kept running); on = connect and sync from scratch.
   Future<void> setEnabled(bool on) async {
-    await repo.setBridgeEnabled(on);
     if (!on) {
-      await _detach();
+      await turnOff();
       return;
     }
+    await repo.setBridgeEnabled(true);
     final key = await configuredKey();
     if (key != null && !await isRevoked()) await _attach(key);
   }
+
+  /// How many typed-but-unsent account A messages exist (the confirmation
+  /// dialog tells the user they are lost when the bridge goes off).
+  Future<int> queuedSendCount() async =>
+      (await store.queuedAMessageIds()).length;
+
+  /// Turns the bridge off: stops the connection completely (no background
+  /// reconnects), then removes account A's local data in one transaction.
+  /// Account A is only a cache of MeshChatX, which keeps the history; the
+  /// pairing (identity, bridge address, trusted status) is kept, so turning
+  /// the bridge on again syncs everything back without re-pairing.
+  ///
+  /// Unsent A messages are discarded, unless [sendQueuedFromB] is set: then
+  /// each one is first re-sent as a NEW message from this device (B), the
+  /// user's explicit choice.
+  Future<void> turnOff({bool sendQueuedFromB = false}) async {
+    if (sendQueuedFromB) {
+      for (final id in await store.queuedAMessageIds()) {
+        await sendFromBInstead(id);
+      }
+    }
+    await repo.setBridgeEnabled(false);
+    await _detach();
+    await flushEvents(); // nothing from the old connection writes after this
+    await repo.purgeBridgeAccountData();
+  }
+
+  /// True while a sync from the bridge is running (progress indicator).
+  bool get syncing => _syncing;
+  Stream<bool> get syncingChanges => _syncCtl.stream;
+  final _syncCtl = StreamController<bool>.broadcast();
 
   Future<void> setFallback(bool on) async {
     _fallbackSetting = on;
@@ -219,6 +292,7 @@ class BridgeService {
     _stopped = true;
     await _detach();
     await _status.close();
+    await _syncCtl.close();
   }
 
   /// Offers an inbound LXMF message to the bridge connection; true if it was
@@ -250,6 +324,7 @@ class BridgeService {
     final api = _api;
     if (api == null || _syncing) return;
     _syncing = true;
+    if (!_syncCtl.isClosed) _syncCtl.add(true);
     try {
       var cursor = await store.cursor();
       var stateId = await store.stateId();
@@ -304,6 +379,7 @@ class BridgeService {
       // the link will drop and reconnect; resync runs again then
     } finally {
       _syncing = false;
+      if (!_syncCtl.isClosed) _syncCtl.add(false);
     }
   }
 
@@ -453,7 +529,9 @@ class BridgeService {
         await refreshRooms();
       case 'device_added' || 'device_updated':
         if (d['device'] is Map) {
-          await store.upsertDevices([DeviceRecord.fromMap(asMap(d['device']))]);
+          final rec = DeviceRecord.fromMap(asMap(d['device']));
+          await store.upsertDevices([rec]);
+          await _adoptOwnName(rec);
         }
       case 'device_revoked':
         if (d['device_id'] == ownDeviceId()) {
@@ -652,7 +730,20 @@ class BridgeService {
       'device_id': deviceId,
       'name': name,
     });
-    await store.upsertDevices([DeviceRecord.fromMap(asMap(r['device']))]);
+    final rec = DeviceRecord.fromMap(asMap(r['device']));
+    await store.upsertDevices([rec]);
+    await _adoptOwnName(rec);
+  }
+
+  /// Settings and "My devices" must show one name: when the record of THIS
+  /// device is renamed explicitly (from a trusted device: `device_updated`
+  /// push or a rename response), the setting follows. A `/hello` record is
+  /// not adopted: older bridges still hold the config name there.
+  Future<void> _adoptOwnName(DeviceRecord rec) async {
+    if (rec.deviceId != ownDeviceId() || rec.isRevoked) return;
+    if ((await repo.getSetting(SettingKeys.deviceName)) == rec.name) return;
+    await repo.setSetting(SettingKeys.deviceName, rec.name);
+    _api?.setIdentityInfo(rec.name, platformId());
   }
 
   Future<void> setFieldRole(String deviceId, bool enabled) async {
@@ -708,6 +799,80 @@ class BridgeService {
       nonce: secureRandomBytes(16),
       ts: DateTime.now().millisecondsSinceEpoch / 1000,
     );
+  }
+
+  /// TRUSTED device: asks the bridge for an invite (spec 5.4) and builds the
+  /// QR text. [InviteQr.expiresAt] is in local time (bridge clock offset
+  /// applied) so a countdown works even when the clocks differ.
+  Future<InviteQr> createInvite() async {
+    final key = await configuredKey();
+    if (key == null) throw BridgeNotConfigured();
+    final r = await _admin('/devices/invite', {});
+    final t = InviteTicket.fromMap(r);
+    final offset =
+        double.tryParse(
+          await repo.getSetting(SettingKeys.bridgeClockOffset) ?? '',
+        ) ??
+        0;
+    final text = encodeInviteQr(
+      InvitePayload(
+        bridgePubkey: Uint8List.fromList(fromHex(key)),
+        token: t.token,
+        inviterName: await deviceName(),
+        expiresAt: t.expiresAt,
+      ),
+    );
+    return InviteQr(
+      text,
+      DateTime.fromMillisecondsSinceEpoch(
+        ((t.expiresAt - offset) * 1000).round(),
+      ),
+    );
+  }
+
+  /// NEW device: configures the bridge address from the invite and redeems
+  /// the token in one step. Throws [FormatException] for text that is not an
+  /// invite, [InviteExpired] for an expired one, [BridgeError] when the
+  /// bridge refuses it. When there was no bridge before, a failed redeem
+  /// leaves the app unconfigured.
+  Future<DeviceRecord> redeemInvite(String text) async {
+    final inv = decodeInviteQr(text);
+    if (inv.expiresAt < DateTime.now().millisecondsSinceEpoch / 1000 - 600) {
+      // clocks may differ, so only an invite that is far in the past is
+      // refused locally; the bridge has the final word
+      throw InviteExpired();
+    }
+    final key = inv.bridgeKeyHex;
+    final old = await repo.getSetting(SettingKeys.bridgePubkey);
+    final hadBridge = old != null && old.length == 128;
+    if (hadBridge && old != key) {
+      await store.resetCursors();
+      await repo.setSetting(SettingKeys.bridgeStateId, '');
+    }
+    await repo.setSetting(SettingKeys.bridgePubkey, key);
+    await repo.setSetting(SettingKeys.bridgeRevoked, '0');
+    await repo.setBridgeEnabled(true);
+    await _attach(key, redeem: inv);
+    try {
+      final r = await _api!.redeem(
+        token: inv.token,
+        name: await deviceName(),
+        platform: platformId(),
+      );
+      final rec = DeviceRecord.fromMap(asMap(r['device']));
+      await store.upsertDevices([rec]);
+      return rec;
+    } on Object {
+      if (!hadBridge) {
+        await _detach();
+        await repo.setSetting(SettingKeys.bridgePubkey, '');
+        await repo.setBridgeEnabled(false);
+      } else if (old != key) {
+        await repo.setSetting(SettingKeys.bridgePubkey, old);
+        await _attach(old);
+      }
+      rethrow;
+    }
   }
 
   /// While a pairing code is on screen: connect and retry quickly until the

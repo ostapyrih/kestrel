@@ -1,6 +1,8 @@
 @Tags(['integration'])
 library;
 
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kestrel/bridge/bridge_connection.dart';
 import 'package:kestrel/bridge/bridge_service.dart';
@@ -47,9 +49,12 @@ class Dev {
     Identity identity,
     int port, {
     String deviceName = 'Dart device',
+    String? dbPath,
   }) async {
+    // devices 1 and 2 share the in-memory database; a path gives a device its
+    // own storage
     final adb = await AppDatabase.open(
-      inMemoryDatabasePath,
+      dbPath ?? inMemoryDatabasePath,
       factory: databaseFactoryFfi,
     );
     final repo = Repo(adb);
@@ -240,7 +245,61 @@ void main() {
         for (final d in await d2.bridge.store.devices()) d.deviceId: d.name,
       };
       expect(names[d1.id], 'Dart one');
-      expect(names[d2.id], 'Second device');
+      // the app owns the device name: device 2's own /hello replaced the
+      // proposed name that the approver used
+      expect(names[d2.id], 'Dart two');
+
+      // invite pairing: device 1 shows an invite QR, a brand new device 3
+      // joins from it alone (no bridge address typed)
+      final invite = await d1.bridge.createInvite();
+      expect(invite.text, startsWith('kestrel-invite:v1:'));
+      final tmp = Directory.systemTemp.createTempSync('kestrel-dart-it');
+      addTearDown(() => tmp.deleteSync(recursive: true));
+      final (s3, id3) = await Dev.newIdentity();
+      final d3 = await Dev.start(
+        s3,
+        id3,
+        env.tcpPort,
+        deviceName: 'Dart three',
+        dbPath: '${tmp.path}/d3.db',
+      );
+      addTearDown(d3.stop);
+      expect(await d3.bridge.configuredKey(), isNull);
+      final rec3 = await d3.bridge.redeemInvite(invite.text);
+      expect(
+        (rec3.deviceId, rec3.addedBy, rec3.name),
+        (d3.id, d1.id, 'Dart three'),
+      );
+      await waitFor(
+        () async => d3.bridge.status.state == BridgeState.connected,
+        what: 'device 3 connected on the redeemed link',
+      );
+      expect(await d3.bridge.configuredKey(), env.bridgePub);
+      // the same invite cannot be used twice
+      final (s4, id4) = await Dev.newIdentity();
+      final d4 = await Dev.start(
+        s4,
+        id4,
+        env.tcpPort,
+        dbPath: '${tmp.path}/d4.db',
+      );
+      addTearDown(d4.stop);
+      await expectLater(
+        d4.bridge.redeemInvite(invite.text),
+        throwsA(
+          isA<BridgeError>().having((e) => e.code, 'code', 'pairing_replay'),
+        ),
+      );
+      expect(await d4.bridge.configuredKey(), isNull);
+      // one device name: renaming in settings renames it on the bridge
+      await d3.bridge.setDeviceName('Dart three renamed');
+      await waitFor(
+        () async => (await d1.bridge.refreshDevices()).any(
+          (d) => d.deviceId == d3.id && d.name == 'Dart three renamed',
+        ),
+        what: 'device 3 rename visible on device 1',
+      );
+      await d3.bridge.stop();
 
       // revoke device 2 from device 1: its Link closes, it stays out
       await d1.bridge.revokeDevice(d2.id, reason: 'integration test');

@@ -212,12 +212,13 @@ class DeviceRegistry:
             raise BridgeError(errors.DEVICE_NOT_FOUND, "unknown device", device_id=device_id)
         return d
 
-    def update(self, device_id: str, name: str | None = None, roles=None) -> Device:
+    def update(self, device_id: str, name: str | None = None, roles=None, platform: str | None = None) -> Device:
         with self._lock:
             cur = self._require(device_id)
             if cur.revoked:
                 raise BridgeError(errors.DEVICE_REVOKED, "device is revoked", device_id=device_id)
             d = Device(**{**cur.__dict__, "name": validate_name(name) if name is not None else cur.name,
+                          "platform": validate_platform(platform) if platform is not None else cur.platform,
                           "roles": validate_roles(roles) if roles is not None else cur.roles})
             self._store(d)
             self._cache[device_id] = d

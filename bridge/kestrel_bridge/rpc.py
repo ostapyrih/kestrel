@@ -309,6 +309,34 @@ class RpcServer:
         if st is not None and st.sub is not None:
             self.push.unsubscribe(st.sub)
 
+    def _redeem(self, data, link_id: bytes, remote_identity) -> dict:
+        """``/devices/redeem`` on a Link identified with an unknown key. Success: the Link becomes a normal
+        trusted Link. Failure: the response is sent, then the Link is closed after one second."""
+        st = self._links.get(link_id)
+        if st is None or remote_identity is None:
+            return codec.err(errors.UNAUTHORIZED, "identify() first")
+        if st.timer is not None:
+            st.timer.cancel()          # the reject grace timer: this Link is redeeming
+            st.timer = None
+        try:
+            who = bytes(remote_identity.hash).hex()
+            pub = remote_identity.get_public_key().hex()
+            fut = asyncio.run_coroutine_threadsafe(self.service.redeem_unknown(who, pub, data), self.loop)
+            resp = fut.result(timeout=self.cfg.limits.rpc_timeout)
+        except Exception:
+            log.exception("redeem failed")
+            resp = codec.err(errors.INTERNAL, "internal error")
+        dev = device_of(remote_identity, self.registry) if resp.get("ok") else None
+        if dev is not None:
+            st.device_id = dev.device_id
+            st.closing = False
+            self.registry.touch_seen(dev.device_id)
+            log.info("device %s joined through an invite", dev.device_id[:8])
+        else:
+            st.closing = False
+            self._reject_and_close(st, errors.UNAUTHORIZED, 1.0, send=False)
+        return codec.clamp_response(resp, self.cfg.limits.max_response_bytes)
+
     # ---- requests ------------------------------------------------------------------------------------
     def _make_handler(self, path_name: str):
         def handler(path, data, request_id, link_id, remote_identity, requested_at):
@@ -325,6 +353,8 @@ class RpcServer:
                 pass
             if revoked is not None:
                 return codec.err(errors.DEVICE_REVOKED, "this device was revoked")
+            if path == "/devices/redeem":      # the only path an unknown key may call (spec 5.4)
+                return self._redeem(data, link_id, remote_identity)
             return codec.err(errors.UNAUTHORIZED, "identify() with a trusted device key first")
         st = self._links.get(link_id)
         if st is None:

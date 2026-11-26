@@ -23,12 +23,14 @@ class ChatsScreen extends ConsumerWidget {
     final chats = ref.watch(chatsProvider);
     final wide = MediaQuery.sizeOf(context).width >= wideLayoutBreakpoint;
     final selected = ref.watch(selectedChatProvider);
+    final bridgeMode = ref.watch(bridgeModeProvider);
     final list = Scaffold(
       appBar: AppBar(
         title: Text(s.t('app_title')),
         actions: [
           Center(child: ConnectionIndicator(conn)),
-          if (ref.watch(bridgeConfiguredProvider).value ?? false)
+          if (bridgeMode &&
+              (ref.watch(bridgeConfiguredProvider).value ?? false))
             IconButton(
               key: const ValueKey('open-rooms'),
               tooltip: s.t('rooms'),
@@ -48,7 +50,15 @@ class ChatsScreen extends ConsumerWidget {
       ),
       body: Column(
         children: [
-          const AccountSwitcher(),
+          // bridge off = a plain messenger: no account chips at all
+          if (bridgeMode) ...[
+            const AccountSwitcher(),
+            if (ref.watch(bridgeSyncingProvider).value ?? false)
+              LinearProgressIndicator(
+                key: const ValueKey('bridge-syncing'),
+                semanticsLabel: s.t('bridge_syncing'),
+              ),
+          ],
           Expanded(
             child: chats.when(
               data: (list) => list.isEmpty
@@ -96,7 +106,7 @@ class ChatsScreen extends ConsumerWidget {
   }
 }
 
-/// `B (телефон)` / `A (міст)` (disabled until the bridge exists) / `Усі`.
+/// `B · <device name>` / `A (міст)` (disabled until the bridge exists) / `Усі`.
 class AccountSwitcher extends ConsumerWidget {
   const AccountSwitcher({super.key});
 
@@ -120,7 +130,9 @@ class AccountSwitcher extends ConsumerWidget {
             children: [
               ChoiceChip(
                 key: const ValueKey('chip-B'),
-                label: Text(s.account('B')),
+                label: Text(
+                  s.account('B', device: ref.watch(ownDeviceNameProvider)),
+                ),
                 selected: sel == 'B',
                 onSelected: (_) => notifier.select('B'),
               ),
@@ -167,7 +179,7 @@ class AccountSwitcher extends ConsumerWidget {
   }
 }
 
-class ChatTile extends StatelessWidget {
+class ChatTile extends ConsumerWidget {
   const ChatTile({
     super.key,
     required this.chat,
@@ -181,8 +193,9 @@ class ChatTile extends StatelessWidget {
   final VoidCallback? onTap;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final title = chat.displayTitle;
+    final bridgeMode = ref.watch(bridgeModeProvider);
     return ListTile(
       selected: selected,
       leading: CircleAvatar(
@@ -197,8 +210,10 @@ class ChatTile extends StatelessWidget {
           Flexible(
             child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
           ),
-          const SizedBox(width: 8),
-          IdentityBadge(chat.accountIdentity),
+          if (bridgeMode) ...[
+            const SizedBox(width: 8),
+            IdentityBadge(chat.accountIdentity),
+          ],
         ],
       ),
       subtitle: Text(

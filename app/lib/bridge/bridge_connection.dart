@@ -99,6 +99,22 @@ abstract class BridgeApi {
 
   /// The bridge said this device was revoked: stop for good.
   void markRevoked();
+
+  /// The device name and platform this device reports in every `/hello`
+  /// (the app owns the device name, spec 6.1).
+  void setIdentityInfo(String name, String platform);
+
+  /// New device joining through an invite (spec 5.4): starts the connection
+  /// if needed, calls `/devices/redeem` right after `identify()` and returns
+  /// the device record map. Throws [BridgeError] when the bridge refuses the
+  /// invite and [BridgeTransportError] when the bridge cannot be reached in
+  /// [timeout].
+  Future<Map<String, Object?>> redeem({
+    required List<int> token,
+    required String name,
+    required String platform,
+    Duration timeout = const Duration(seconds: 60),
+  });
 }
 
 /// A `kestrel.reject` packet arrived on the Link (internal control flow).
@@ -174,6 +190,10 @@ class BridgeConnection implements BridgeApi {
   double _clockOffset = 0;
   Completer<void>? _wake;
   final Map<String, Completer<Map<String, Object?>>> _lxmfPending = {};
+  String? _deviceName;
+  String? _platform;
+  Map<String, Object?>? _redeemArgs;
+  Completer<Map<String, Object?>>? _redeemDone;
 
   @override
   BridgeStatus get status => _current;
@@ -246,6 +266,43 @@ class BridgeConnection implements BridgeApi {
   void retryNow() {
     final w = _wake;
     if (w != null && !w.isCompleted) w.complete();
+  }
+
+  @override
+  void setIdentityInfo(String name, String platform) {
+    _deviceName = name;
+    _platform = platform;
+  }
+
+  @override
+  Future<Map<String, Object?>> redeem({
+    required List<int> token,
+    required String name,
+    required String platform,
+    Duration timeout = const Duration(seconds: 60),
+  }) {
+    final done = Completer<Map<String, Object?>>();
+    _redeemDone = done;
+    _redeemArgs = {
+      'token': Uint8List.fromList(token),
+      'name': name,
+      'platform': platform,
+    };
+    _deviceName = name;
+    _platform = platform;
+    if (!_running) {
+      unawaited(start());
+    } else {
+      retryNow();
+    }
+    return done.future.timeout(
+      timeout,
+      onTimeout: () {
+        _redeemArgs = null;
+        _redeemDone = null;
+        throw BridgeTransportError('the bridge did not answer');
+      },
+    );
   }
 
   @override
@@ -344,7 +401,7 @@ class BridgeConnection implements BridgeApi {
       unawaited(link.teardown());
       throw BridgeTransportError('link not established');
     }
-    final reject = Completer<RejectPacket>();
+    var reject = Completer<RejectPacket>();
     link
       ..resourceStrategy = ResourceStrategy.all
       ..onPacket = (data, _) {
@@ -363,10 +420,21 @@ class BridgeConnection implements BridgeApi {
     _link = link;
     try {
       await link.identify(identity);
+      if (_redeemArgs != null) {
+        await _redeemOn(link);
+        // the reject packet that preceded the redeem is obsolete: this Link
+        // is trusted now
+        reject = Completer<RejectPacket>();
+      }
       final helloReq = _request(
         link,
         '/hello',
-        {'protocol_version': bridgeProtocolVersion, 'client': clientName},
+        {
+          'protocol_version': bridgeProtocolVersion,
+          'client': clientName,
+          if (_deviceName != null) 'name': _deviceName,
+          if (_platform != null) 'platform': _platform,
+        },
         null,
         expectIdentify: true,
       );
@@ -425,6 +493,26 @@ class BridgeConnection implements BridgeApi {
     } finally {
       if (identical(_link, link)) _link = null;
       unawaited(link.teardown());
+    }
+  }
+
+  /// `/devices/redeem` on the fresh Link (spec 5.4). The `kestrel.reject`
+  /// packet that precedes it is ignored here; on success the same Link is a
+  /// trusted Link and the session carries on with `/hello`.
+  Future<void> _redeemOn(Link link) async {
+    final args = _redeemArgs!;
+    final done = _redeemDone;
+    try {
+      final res = await _request(link, '/devices/redeem', args, null);
+      _redeemArgs = null;
+      _redeemDone = null;
+      if (done != null && !done.isCompleted) done.complete(res);
+    } on BridgeError catch (e) {
+      // the bridge said no (invalid / expired / used / vault ...): final
+      _redeemArgs = null;
+      _redeemDone = null;
+      if (done != null && !done.isCompleted) done.completeError(e);
+      rethrow;
     }
   }
 

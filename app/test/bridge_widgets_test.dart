@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,14 +7,15 @@ import 'package:kestrel/bridge/bridge_connection.dart';
 import 'package:kestrel/bridge/bridge_service.dart';
 import 'package:kestrel/bridge/codec.dart';
 import 'package:kestrel/node/node_service.dart';
+import 'package:kestrel/platform.dart';
 import 'package:kestrel/main.dart';
 import 'package:kestrel/screens/add_device_screen.dart';
 import 'package:kestrel/screens/chat_screen.dart';
 import 'package:kestrel/screens/chats_screen.dart';
 import 'package:kestrel/screens/devices_screen.dart';
 import 'package:kestrel/screens/rooms_screen.dart';
+import 'package:kestrel/screens/settings_screen.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 
 import 'support/fixtures.dart';
 
@@ -25,7 +27,9 @@ void main() {
     Widget home, {
     BridgeStatus status = const BridgeStatus(BridgeState.connected),
     bool configured = true,
-    Size size = const Size(420, 860),
+    bool? enabled,
+    Stream<bool>? enabledStream,
+    Size size = const Size(420, 1800),
   }) async {
     const locale = Locale('uk');
     tester.platformDispatcher.localeTestValue = locale;
@@ -42,6 +46,8 @@ void main() {
           bridge: bridge,
           bridgeStatus: status,
           bridgeConfigured: configured,
+          bridgeEnabled: enabled,
+          bridgeEnabledStream: enabledStream,
         ),
         child: KestrelApp(home: home),
       ),
@@ -142,7 +148,7 @@ void main() {
 
     testWidgets('B chats show no origin label', (tester) async {
       await show(tester, const ChatScreen(chatId: 1));
-      expect(meta(tester, 2).data, 'B (телефон) · direct · TCP');
+      expect(meta(tester, 2).data, 'B · ${defaultDeviceName()} · direct · TCP');
     });
   });
 
@@ -253,6 +259,208 @@ void main() {
     });
   });
 
+  group('bridge off: a plain single-identity messenger', () {
+    testWidgets('no account chips, badges, labels or bridge screens', (
+      tester,
+    ) async {
+      await show(tester, const ChatsScreen(), enabled: false);
+      expect(find.text('Alice'), findsOneWidget);
+      expect(find.text('Marichka'), findsNothing); // account A is hidden
+      for (final k in ['chip-A', 'chip-B', 'chip-all', 'open-rooms']) {
+        expect(find.byKey(ValueKey(k)), findsNothing, reason: k);
+      }
+      expect(find.byKey(const ValueKey('badge-A')), findsNothing);
+      expect(find.byKey(const ValueKey('badge-B')), findsNothing);
+      expect(find.textContaining('A (міст)'), findsNothing);
+      expect(find.textContaining('B ·'), findsNothing);
+    });
+
+    testWidgets('chat: no badge, no From line, the line is route · transport', (
+      tester,
+    ) async {
+      await show(tester, const ChatScreen(chatId: 1), enabled: false);
+      expect(find.byKey(const ValueKey('badge-B')), findsNothing);
+      expect(find.byKey(const ValueKey('composer-from')), findsNothing);
+      expect(meta(tester, 1).data, 'opportunistic · TCP');
+      expect(meta(tester, 2).data, 'direct · TCP');
+      // the details sheet has no sender-account row either
+      await tester.tap(find.text('Вітаю, як справи?'));
+      await tester.pumpAndSettle();
+      expect(find.text('Деталі повідомлення'), findsOneWidget);
+      expect(find.text('Відправник'), findsNothing);
+    });
+
+    testWidgets('settings: your address / your public key, no devices', (
+      tester,
+    ) async {
+      await show(tester, const SettingsScreen(), enabled: false);
+      await tester.pump();
+      expect(find.text('Ваша адреса'), findsOneWidget);
+      expect(find.text('Ваш публічний ключ'), findsOneWidget);
+      expect(find.textContaining('Ідентичність B'), findsNothing);
+      expect(find.textContaining('(цей пристрій)'), findsNothing);
+      expect(find.byKey(const ValueKey('bridge-switch')), findsOneWidget);
+      expect(find.byKey(const ValueKey('bridge-setup')), findsOneWidget);
+      expect(find.byKey(const ValueKey('my-devices')), findsNothing);
+      expect(find.byKey(const ValueKey('add-device-tile')), findsNothing);
+      expect(find.byKey(const ValueKey('fallback-switch')), findsNothing);
+    });
+
+    testWidgets('the dual-identity UI and account A come back when it is on', (
+      tester,
+    ) async {
+      final mode = StreamController<bool>();
+      addTearDown(mode.close);
+      await show(tester, const ChatsScreen(), enabledStream: mode.stream);
+      mode.add(false);
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('Marichka'), findsNothing);
+      expect(find.byKey(const ValueKey('chip-A')), findsNothing);
+      mode.add(true);
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      expect(find.text('Marichka'), findsOneWidget);
+      expect(find.byKey(const ValueKey('chip-A')), findsOneWidget);
+      expect(find.byKey(const ValueKey('chip-B')), findsOneWidget);
+      expect(find.byKey(const ValueKey('badge-A')), findsOneWidget);
+      expect(find.byKey(const ValueKey('open-rooms')), findsOneWidget);
+    });
+
+    testWidgets('bridge on keeps the labels', (tester) async {
+      await show(tester, const ChatScreen(chatId: 1), enabled: true);
+      expect(find.byKey(const ValueKey('composer-from')), findsOneWidget);
+      expect(
+        meta(tester, 1).data,
+        'B · ${defaultDeviceName()} · opportunistic · TCP',
+      );
+    });
+  });
+
+  group('turning the bridge off asks first', () {
+    Future<void> open(WidgetTester tester, {required int queued}) async {
+      bridge.queuedUnsent = queued;
+      await show(tester, const SettingsScreen(), enabled: true);
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('bridge-switch')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('bridge-off-dialog')), findsOneWidget);
+      expect(
+        find.textContaining('прибере чати облікового запису A'),
+        findsOneWidget,
+      );
+    }
+
+    testWidgets('no queued messages: Cancel or Turn off', (tester) async {
+      await open(tester, queued: 0);
+      expect(find.byKey(const ValueKey('bridge-off-queued')), findsNothing);
+      expect(find.byKey(const ValueKey('bridge-off-send-b')), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('bridge-off-cancel')));
+      await tester.pumpAndSettle();
+      expect(bridge.turnedOff, isEmpty);
+      await tester.tap(find.byKey(const ValueKey('bridge-switch')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('bridge-off-confirm')));
+      await tester.pumpAndSettle();
+      expect(bridge.turnedOff, ['discard']);
+    });
+
+    testWidgets('queued messages: warned, Cancel keeps everything', (
+      tester,
+    ) async {
+      await open(tester, queued: 2);
+      expect(
+        find.textContaining('Повідомлень, які треба надіслати як A, ще не'),
+        findsOneWidget,
+      );
+      // Cancel has the focus
+      final cancel = tester.widget<TextButton>(
+        find.byKey(const ValueKey('bridge-off-cancel')),
+      );
+      expect(cancel.autofocus, isTrue);
+      await tester.tap(find.byKey(const ValueKey('bridge-off-cancel')));
+      await tester.pumpAndSettle();
+      expect(bridge.turnedOff, isEmpty);
+      expect(find.byKey(const ValueKey('bridge-off-dialog')), findsNothing);
+    });
+
+    testWidgets('queued messages: send them from this device (B) instead', (
+      tester,
+    ) async {
+      await open(tester, queued: 3);
+      await tester.tap(find.byKey(const ValueKey('bridge-off-send-b')));
+      await tester.pumpAndSettle();
+      expect(bridge.turnedOff, ['send-from-b']);
+    });
+
+    testWidgets('queued messages: discard and turn off', (tester) async {
+      await open(tester, queued: 1);
+      await tester.tap(find.byKey(const ValueKey('bridge-off-confirm')));
+      await tester.pumpAndSettle();
+      expect(bridge.turnedOff, ['discard']);
+    });
+  });
+
+  group('invite pairing', () {
+    testWidgets(
+      'a trusted device shows the invite QR first, with a countdown',
+      (tester) async {
+        await show(tester, const AddDeviceScreen());
+        await tester.pump();
+        expect(find.byKey(const ValueKey('invite-qr')), findsOneWidget);
+        expect(
+          tester
+              .widget<SelectableText>(find.byKey(const ValueKey('invite-text')))
+              .data,
+          startsWith('kestrel-invite:v1:'),
+        );
+        expect(find.byKey(const ValueKey('invite-countdown')), findsOneWidget);
+        expect(
+          find.textContaining(RegExp(r'Дійсний ще \d+:\d\d')),
+          findsOneWidget,
+        );
+        // the older flows are behind "Other options"
+        expect(find.byKey(const ValueKey('pair-input')), findsNothing);
+        await tester.tap(find.byKey(const ValueKey('other-options')));
+        await tester.pump();
+        expect(find.byKey(const ValueKey('pair-input')), findsOneWidget);
+      },
+    );
+
+    testWidgets('an expired invite is replaced on demand', (tester) async {
+      bridge.inviteTtl = const Duration(seconds: 1);
+      await show(tester, const AddDeviceScreen());
+      await tester.pump();
+      expect(bridge.invitesCreated, 1);
+      expect(find.byKey(const ValueKey('invite-qr')), findsOneWidget);
+      // real time passes (the countdown reads the wall clock)
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 1300)),
+      );
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byKey(const ValueKey('invite-expired')), findsOneWidget);
+      expect(find.byKey(const ValueKey('invite-qr')), findsNothing);
+      bridge.inviteTtl = const Duration(minutes: 10);
+      await tester.tap(find.byKey(const ValueKey('invite-new')));
+      await tester.pump();
+      await tester.pump();
+      expect(bridge.invitesCreated, 2);
+      expect(find.byKey(const ValueKey('invite-qr')), findsOneWidget);
+    });
+
+    testWidgets('vault in use: message and the other options open', (
+      tester,
+    ) async {
+      bridge.inviteError = BridgeError('vault_in_use');
+      await show(tester, const AddDeviceScreen());
+      await tester.pump();
+      await tester.pump();
+      expect(find.textContaining('Запрошення недоступні'), findsOneWidget);
+      expect(find.byKey(const ValueKey('pair-input')), findsOneWidget);
+    });
+  });
+
   group('add a device', () {
     PairingPayload payload() => PairingPayload(
       pubkey: Uint8List.fromList(List.filled(64, 5)),
@@ -266,6 +474,8 @@ void main() {
       'trusted device: paste, confirm name/platform/fingerprint, approve',
       (tester) async {
         await show(tester, const AddDeviceScreen());
+        await tester.tap(find.byKey(const ValueKey('other-options')));
+        await tester.pump();
         final p = payload();
         await tester.enterText(
           find.byKey(const ValueKey('pair-input')),
@@ -307,6 +517,8 @@ void main() {
 
     testWidgets('garbage and expired codes show clear errors', (tester) async {
       await show(tester, const AddDeviceScreen());
+      await tester.tap(find.byKey(const ValueKey('other-options')));
+      await tester.pump();
       await tester.enterText(find.byKey(const ValueKey('pair-input')), 'hello');
       await tester.tap(find.byKey(const ValueKey('pair-next')));
       await tester.pump();
@@ -328,6 +540,8 @@ void main() {
       tester,
     ) async {
       await show(tester, const AddDeviceScreen());
+      await tester.tap(find.byKey(const ValueKey('other-options')));
+      await tester.pump();
       bridge.approveError = VaultKeysUnsupported();
       await tester.enterText(
         find.byKey(const ValueKey('pair-input')),
@@ -349,12 +563,14 @@ void main() {
       await show(
         tester,
         const AddDeviceScreen(),
-        status: const BridgeStatus(BridgeState.rejected),
+        status: const BridgeStatus(BridgeState.awaitingApproval),
       );
+      await tester.tap(find.byKey(const ValueKey('other-options')));
+      await tester.pump();
       await tester.tap(find.text('Це новий пристрій'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
-      expect(find.byType(QrImageView), findsOneWidget);
+      expect(find.byKey(const ValueKey('pair-qr')), findsOneWidget);
       final text = tester
           .widget<SelectableText>(find.byKey(const ValueKey('pair-text')))
           .data!;
@@ -365,6 +581,8 @@ void main() {
 
     testWidgets('new device: shows done once connected', (tester) async {
       await show(tester, const AddDeviceScreen());
+      await tester.tap(find.byKey(const ValueKey('other-options')));
+      await tester.pump();
       await tester.tap(find.text('Це новий пристрій'));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('pair-done')), findsOneWidget);

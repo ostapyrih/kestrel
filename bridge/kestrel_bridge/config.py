@@ -104,12 +104,15 @@ class Limits:
     journal_ttl: int = 7 * 86400
     send_rate_per_minute: int = 30
     identify_timeout: int = 30
-    reject_grace: float = 1.5              # seconds a rejected/revoked Link stays open after its reason packet
+    reject_grace: float = 5.0              # seconds a rejected/revoked Link stays open after its reason packet
     reject_rate_per_minute: int = 20       # reason packets per remote identity (and 20x that over all identities)
     rpc_timeout: float = 90.0
     # protocol v2: devices, pairing, read state
     max_devices: int = 16                  # trusted (non-revoked) devices
     pairing_window: int = 600              # seconds: accepted |now - ts| of a pairing QR payload
+    invite_ttl: int = 600                  # seconds an invite QR stays valid (30..600)
+    max_open_invites: int = 3              # open (unused, unexpired) invites per device
+    redeem_fail_rate_per_minute: int = 10  # failed /devices/redeem per remote identity
     device_admin_rate_per_minute: int = 20   # /devices/approve|rename|set_role|revoke per device
     mark_read_rate_per_minute: int = 60
     # protocol v2: vault (opaque ciphertext storage)
@@ -389,6 +392,10 @@ def parse_config(raw: dict) -> Config:
         rpc_timeout=_num("limits", li, "rpc_timeout", dl.rpc_timeout),
         max_devices=_int("limits", li, "max_devices", dl.max_devices),
         pairing_window=_int("limits", li, "pairing_window", dl.pairing_window, 30),
+        invite_ttl=_int("limits", li, "invite_ttl", dl.invite_ttl, 30),
+        max_open_invites=_int("limits", li, "max_open_invites", dl.max_open_invites),
+        redeem_fail_rate_per_minute=_int("limits", li, "redeem_fail_rate_per_minute",
+                                         dl.redeem_fail_rate_per_minute),
         device_admin_rate_per_minute=_int("limits", li, "device_admin_rate_per_minute",
                                           dl.device_admin_rate_per_minute),
         mark_read_rate_per_minute=_int("limits", li, "mark_read_rate_per_minute", dl.mark_read_rate_per_minute),
@@ -398,6 +405,8 @@ def parse_config(raw: dict) -> Config:
         vault_put_rate_per_minute=_int("limits", li, "vault_put_rate_per_minute", dl.vault_put_rate_per_minute),
         vault_get_max_ids=_int("limits", li, "vault_get_max_ids", dl.vault_get_max_ids),
     )
+    if limits.invite_ttl > 600:
+        raise ConfigError("limits.invite_ttl must be at most 600 seconds")
     if limits.pairing_window > 600:
         raise ConfigError("limits.pairing_window must be at most 600 seconds")
     if len(seeds) > limits.max_devices:

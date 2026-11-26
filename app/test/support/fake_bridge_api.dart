@@ -18,6 +18,10 @@ class FakeBridgeApi implements BridgeApi {
   bool up = false;
   bool fallback = false;
   bool revokedMarked = false;
+  String? infoName;
+  String? infoPlatform;
+  Map<String, Object?>? redeemed;
+  Object? redeemError;
   @override
   bool fastRetry = false;
   int retries = 0;
@@ -34,6 +38,37 @@ class FakeBridgeApi implements BridgeApi {
   bool get linkUp => up;
   @override
   bool get canFallback => fallback;
+
+  @override
+  void setIdentityInfo(String name, String platform) {
+    infoName = name;
+    infoPlatform = platform;
+  }
+
+  @override
+  Future<Map<String, Object?>> redeem({
+    required List<int> token,
+    required String name,
+    required String platform,
+    Duration timeout = const Duration(seconds: 60),
+  }) async {
+    final e = redeemError;
+    if (e != null) throw e;
+    redeemed = {'token': token, 'name': name, 'platform': platform};
+    return handlers['/devices/redeem']?.call(redeemed!) ??
+        {
+          'device': {
+            'device_id': 'ee' * 16,
+            'public_key': 'ab' * 64,
+            'name': name,
+            'platform': platform,
+            'roles': <String>[],
+            'bootstrap': false,
+            'added_by': 'dd' * 16,
+            'added_at': 1.0,
+          },
+        };
+  }
 
   List<Map<String, Object?>> callsTo(String path) => [
     for (final c in calls)

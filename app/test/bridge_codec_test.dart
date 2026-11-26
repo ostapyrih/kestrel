@@ -212,6 +212,57 @@ void main() {
       );
     });
 
+    test('invite QR (spec 5.4): round trip, unknown keys ignored, junk refused', () {
+      final p = InvitePayload(
+        bridgePubkey: Uint8List.fromList(List.filled(64, 7)),
+        token: Uint8List.fromList(List.generate(16, (i) => i)),
+        inviterName: 'Windows PC',
+        expiresAt: 1700000600.5,
+      );
+      final text = encodeInviteQr(p);
+      expect(text, startsWith('kestrel-invite:v1:'));
+      expect(text.contains('='), isFalse);
+      final d = decodeInviteQr(text);
+      expect(d.bridgePubkey, p.bridgePubkey);
+      expect(d.token, p.token);
+      expect((d.inviterName, d.expiresAt), ('Windows PC', 1700000600.5));
+      expect(d.bridgeKeyHex, '07' * 64);
+      final extra = packb({
+        'bridge_pubkey': p.bridgePubkey,
+        'token': p.token,
+        'expires_at': 5,
+        'future_key': 1,
+      });
+      expect(
+        decodeInviteQr('$invitePrefix${base64UrlNoPad(extra)}').inviterName,
+        '',
+      );
+      for (final bad in [
+        'hello',
+        'kestrel-pair:v1:abc',
+        '$invitePrefix!!!',
+        '$invitePrefix${base64UrlNoPad(packb([1, 2]))}',
+        '$invitePrefix${base64UrlNoPad(packb({'bridge_pubkey': Uint8List(3), 'token': p.token, 'expires_at': 1}))}',
+        '$invitePrefix${base64UrlNoPad(packb({'bridge_pubkey': p.bridgePubkey, 'token': Uint8List(15), 'expires_at': 1}))}',
+        '$invitePrefix${base64UrlNoPad(packb({'bridge_pubkey': p.bridgePubkey, 'token': p.token}))}',
+      ]) {
+        expect(() => decodeInviteQr(bad), throwsFormatException, reason: bad);
+      }
+    });
+
+    test('invite ticket parses the /devices/invite result', () {
+      final t = InviteTicket.fromMap({
+        'invite_id': 'ab' * 16,
+        'token': Uint8List(16),
+        'expires_at': 12.5,
+      });
+      expect((t.inviteId, t.expiresAt), ('ab' * 16, 12.5));
+      expect(
+        () => InviteTicket.fromMap({'token': Uint8List(4)}),
+        throwsFormatException,
+      );
+    });
+
     test('request args are string-keyed msgpack maps (round trip)', () {
       final args = {
         'cmd_id': newCmdId(),

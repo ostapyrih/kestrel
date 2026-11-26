@@ -67,7 +67,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ref.watch(settingProvider(SettingKeys.serverPort));
     _loadOnce();
     final info = ref.watch(identityInfoProvider);
-    final bridge = ref.watch(bridgeEnabledProvider).value ?? false;
+    final bridge = ref.watch(bridgeModeProvider);
     final configured = ref.watch(bridgeConfiguredProvider).value ?? false;
     final bridgeStatus = ref.watch(bridgeStatusProvider).value;
     final fbSetting = ref
@@ -118,13 +118,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             child: TextButton(
               key: const ValueKey('save-device'),
               onPressed: () {
-                final v = _device.text.trim();
-                ref
-                    .read(repoProvider)
-                    .setSetting(
-                      SettingKeys.deviceName,
-                      v.isEmpty ? defaultDeviceName() : v,
-                    );
+                // stored, sent with every /hello and renamed on the bridge now
+                ref.read(bridgeProvider).setDeviceName(_device.text);
               },
               child: Text(s.t('save')),
             ),
@@ -172,21 +167,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
           const Divider(height: 32),
-          Text(s.t('identity'), style: text.titleSmall),
+          Text(
+            bridge ? s.t('identity') : s.t('identity_plain'),
+            style: text.titleSmall,
+          ),
           const SizedBox(height: 8),
           info.when(
             data: (i) => Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _ValueRow(
-                  label: s.t('lxmf_address'),
+                  label: bridge ? s.t('lxmf_address') : s.t('your_address'),
                   value: i.address,
                   valueKey: const ValueKey('lxmf-address'),
                   onCopy: () => _copy(i.address),
                 ),
                 const SizedBox(height: 12),
                 _ValueRow(
-                  label: s.t('public_key'),
+                  label: bridge ? s.t('public_key') : s.t('your_public_key'),
                   value: i.publicKey,
                   valueKey: const ValueKey('public-key'),
                   onCopy: () => _copy(i.publicKey),
@@ -229,7 +227,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 );
                 return;
               }
-              await ref.read(bridgeProvider).setEnabled(v);
+              if (!v) {
+                final svc = ref.read(bridgeProvider);
+                final n = await svc.queuedSendCount();
+                if (!context.mounted) return;
+                final choice = await confirmTurnOffBridge(context, queued: n);
+                if (choice == null || choice == TurnOffChoice.cancel) return;
+                await svc.turnOff(
+                  sendQueuedFromB: choice == TurnOffChoice.sendFromB,
+                );
+                return;
+              }
+              await ref.read(bridgeProvider).setEnabled(true);
             },
           ),
           if (configured && bridgeStatus != null)
@@ -257,7 +266,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ),
           ),
-          if (configured) ...[
+          if (configured && bridge) ...[
             ListTile(
               key: const ValueKey('my-devices'),
               contentPadding: EdgeInsets.zero,

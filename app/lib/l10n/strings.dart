@@ -29,16 +29,22 @@ class Strings {
     return s;
   }
 
-  /// `B (телефон)` / `A (міст)` for an identity letter.
-  String account(String identity) =>
-      identity == 'A' ? t('account_a') : t('account_b');
+  /// `B (цей пристрій)` / `A (міст)` for an identity letter. With a
+  /// [device] name B is shown as `B · <device>` (chips, per-message line);
+  /// messages that other devices sent later use the same form with that
+  /// device's name.
+  String account(String identity, {String? device}) {
+    if (identity == 'A') return t('account_a');
+    final d = device?.trim();
+    return (d == null || d.isEmpty) ? t('account_b') : 'B · $d';
+  }
 
   static const _uk = <String, String>{
     'app_title': 'Kestrel',
     'tcp_online': 'TCP Online',
     'tcp_offline': 'Offline',
     'tcp_connecting': 'TCP...',
-    'account_b': 'B (телефон)',
+    'account_b': 'B (цей пристрій)',
     'account_a': 'A (міст)',
     'account_all': 'Усі',
     'bridge_hint': 'увімкніть міст',
@@ -54,15 +60,14 @@ class Strings {
     'invalid_address': 'Адреса має бути 32 hex-символи',
     'display_name': 'Імʼя в мережі',
     'device_name': 'Назва пристрою',
-    'device_name_hint':
-        'Зберігається лише локально; знадобиться для кількох пристроїв.',
+    'device_name_hint': 'Показується в «Мої пристрої» та на мості; зміна перейменовує цей пристрій усюди.',
     'chat_select': 'Оберіть чат зі списку',
     'save': 'Зберегти',
     'server': 'Сервер Reticulum (TCP)',
     'host': 'Хост',
     'port': 'Порт',
     'apply': 'Застосувати',
-    'identity': 'Ідентичність B (телефон)',
+    'identity': 'Ідентичність B (цей пристрій)',
     'lxmf_address': 'LXMF-адреса',
     'public_key': 'Публічний ключ (для whitelist мосту)',
     'copy': 'Копіювати',
@@ -70,7 +75,18 @@ class Strings {
     'bridge': 'Міст до MeshChatX',
     'bridge_enable': 'Увімкнути міст',
     'bridge_soon': 'потрібен ключ моста',
-    'bridge_note': 'Перемикач лише зберігається. Чати й повідомлення ніколи не видаляються при зміні режиму.',
+    'bridge_note': 'Вимкнення моста прибирає чати облікового запису A з цього пристрою (вони лишаються в MeshChatX). Ваші власні чати не зачіпаються.',
+    'identity_plain': 'Ваша ідентичність',
+    'your_address': 'Ваша адреса',
+    'your_public_key': 'Ваш публічний ключ',
+    'bridge_off_title': 'Вимкнути міст?',
+    'bridge_off_body': 'Вимкнення моста прибере чати облікового запису A з цього пристрою. Вони залишаться в MeshChatX і знову синхронізуються, коли ви ввімкнете міст.',
+    'bridge_off_queued': 'Повідомлень, які треба надіслати як A, ще не надіслано: {n}. Вимкнення моста їх відкине.',
+    'bridge_off_send_b': 'Надіслати їх з цього пристрою (B)',
+    'bridge_off_discard': 'Відкинути й вимкнути',
+    'bridge_off_confirm': 'Вимкнути',
+    'bridge_syncing': 'Синхронізація з мостом…',
+    'cancel': 'Скасувати',
     'from': 'Від: {account}',
     'message_hint': 'Повідомлення',
     'send': 'Надіслати',
@@ -127,6 +143,18 @@ class Strings {
     'bridge_key_hint':
         'Публічний ключ моста (128 hex) або вивід --print-address',
     'bridge_scan': 'Сканувати QR',
+    'bridge_scan_invite': 'Сканувати запрошення',
+    'invite_joining': 'Приєднуємось до мосту…',
+    'invite_joined': 'Пристрій приєднано до мосту.',
+    'invite_expired_local':
+        'Запрошення прострочене. Попросіть новий код на довіреному пристрої.',
+    'pair_invite_title': 'Показати запрошення',
+    'pair_invite_hint': 'Відскануйте цей код на новому пристрої: Налаштування мосту → Сканувати запрошення. Пристрій приєднається сам, адресу моста вводити не треба.',
+    'pair_invite_valid': 'Дійсний ще {time}',
+    'pair_invite_expired': 'Запрошення прострочене.',
+    'pair_invite_new': 'Новий код',
+    'pair_other_options': 'Інші способи',
+    'pair_invite_unavailable': 'Запрошення недоступні, поки активне сховище. Скористайтеся іншим способом (новий пристрій показує код).',
     'bridge_connect': 'Підключити',
     'bridge_key_invalid': 'У тексті немає публічного ключа моста (128 hex)',
     'bridge_configured': 'Міст налаштовано',
@@ -146,7 +174,6 @@ class Strings {
     'device_revoke_title': 'Відкликати пристрій?',
     'device_revoke_body': '«{name}» одразу втратить доступ до моста. Це незворотно: щоб користуватись ним знову, потрібна нова ідентичність.',
     'devices_empty': 'Список порожній. Підключіться до моста.',
-    'cancel': 'Скасувати',
     'ok': 'Гаразд',
     'vault_unsupported': 'Ключі сховища ще не підтримуються: ця дія недоступна, поки сховище активне (Фаза 4b).',
     'error_code': 'Помилка: {code}',
@@ -201,7 +228,7 @@ class Strings {
   static const _en = <String, String>{
     'tcp_offline': 'Offline',
     'chats_empty': 'No chats yet. Tap "New chat".',
-    'account_b': 'B (phone)',
+    'account_b': 'B (this device)',
     'account_a': 'A (bridge)',
     'account_all': 'All',
     'bridge_hint': 'enable the bridge',
@@ -216,14 +243,14 @@ class Strings {
     'invalid_address': 'The address must be 32 hex characters',
     'display_name': 'Display name',
     'device_name': 'Device name',
-    'device_name_hint': 'Stored locally only; used later for multiple devices.',
+    'device_name_hint': 'Shown in My devices and on the bridge; changing it renames this device everywhere.',
     'chat_select': 'Select a chat from the list',
     'save': 'Save',
     'server': 'Reticulum server (TCP)',
     'host': 'Host',
     'port': 'Port',
     'apply': 'Apply',
-    'identity': 'Identity B (phone)',
+    'identity': 'Identity B (this device)',
     'lxmf_address': 'LXMF address',
     'public_key': 'Public key (for the bridge whitelist)',
     'copy': 'Copy',
@@ -231,7 +258,18 @@ class Strings {
     'bridge': 'Bridge to MeshChatX',
     'bridge_enable': 'Enable bridge',
     'bridge_soon': 'needs the bridge key',
-    'bridge_note': 'The switch is only stored. Chats and messages are never deleted when the mode changes.',
+    'bridge_note': "Turning the bridge off removes account A's chats from this device (they stay in MeshChatX). Your own chats are never touched.",
+    'identity_plain': 'Your identity',
+    'your_address': 'Your address',
+    'your_public_key': 'Your public key',
+    'bridge_off_title': 'Turn the bridge off?',
+    'bridge_off_body': "Turning the bridge off removes account A's chats from this device. They stay in MeshChatX and will sync back when you turn the bridge on again.",
+    'bridge_off_queued': "{n} messages to send as A haven't been sent yet. Turning the bridge off will discard them.",
+    'bridge_off_send_b': 'Send them from this device (B) instead',
+    'bridge_off_discard': 'Discard and turn off',
+    'bridge_off_confirm': 'Turn off',
+    'bridge_syncing': 'Syncing with the bridge…',
+    'cancel': 'Cancel',
     'from': 'From: {account}',
     'message_hint': 'Message',
     'send': 'Send',
@@ -287,6 +325,18 @@ class Strings {
     'bridge_key_hint':
         'Bridge public key (128 hex) or the --print-address output',
     'bridge_scan': 'Scan QR',
+    'bridge_scan_invite': 'Scan invite QR',
+    'invite_joining': 'Joining the bridge…',
+    'invite_joined': 'This device joined the bridge.',
+    'invite_expired_local':
+        'This invite expired. Ask for a new code on a trusted device.',
+    'pair_invite_title': 'Show an invite',
+    'pair_invite_hint': 'Scan this code on the new device: Bridge setup → Scan invite. It joins by itself; no bridge address to type.',
+    'pair_invite_valid': 'Valid for {time}',
+    'pair_invite_expired': 'The invite expired.',
+    'pair_invite_new': 'New code',
+    'pair_other_options': 'Other options',
+    'pair_invite_unavailable': 'Invites are unavailable while the vault is in use. Use another option (the new device shows a code).',
     'bridge_connect': 'Connect',
     'bridge_key_invalid': 'No bridge public key (128 hex) found in the text',
     'bridge_configured': 'Bridge is set up',
@@ -306,7 +356,6 @@ class Strings {
     'device_revoke_title': 'Revoke device?',
     'device_revoke_body': '"{name}" loses access to the bridge immediately. This cannot be undone: it needs a new identity to be used again.',
     'devices_empty': 'The list is empty. Connect to the bridge.',
-    'cancel': 'Cancel',
     'ok': 'OK',
     'vault_unsupported': 'Vault keys are not supported yet: this action is unavailable while the vault is in use (Phase 4b).',
     'error_code': 'Error: {code}',

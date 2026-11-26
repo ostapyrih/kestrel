@@ -5,6 +5,7 @@ import 'bridge/bridge_service.dart';
 import 'bridge/bridge_store.dart';
 import 'bridge/codec.dart';
 import 'node/node_service.dart';
+import 'platform.dart';
 import 'storage/database.dart';
 import 'storage/repo.dart';
 
@@ -45,7 +46,10 @@ final selectedChatProvider = NotifierProvider<SelectedChat, int?>(
 final chatsProvider = StreamProvider<List<ChatRow>>((ref) {
   final repo = ref.watch(repoProvider);
   final f = ref.watch(accountFilterProvider);
-  return repo.watch(() => repo.chats(accountIdentity: f));
+  // bridge off: only this device's own chats are shown
+  final mode = ref.watch(bridgeModeProvider);
+  final effective = mode ? f : 'B';
+  return repo.watch(() => repo.chats(accountIdentity: effective));
 });
 
 final chatProvider = StreamProvider.family<ChatRow?, int>((ref, id) {
@@ -76,9 +80,31 @@ final settingProvider = StreamProvider.family<String?, String>((ref, key) {
   return repo.watch(() => repo.getSetting(key));
 });
 
+/// The name of this device (Settings -> device name, platform default
+/// otherwise): used in labels such as `B · Windows PC`.
+final ownDeviceNameProvider = Provider<String>((ref) {
+  final v = ref.watch(settingProvider(SettingKeys.deviceName)).value?.trim();
+  return (v == null || v.isEmpty) ? defaultDeviceName() : v;
+});
+
 final bridgeEnabledProvider = StreamProvider<bool>((ref) {
   final repo = ref.watch(repoProvider);
   return repo.watch(repo.bridgeEnabled);
+});
+
+/// The single source of truth for the UI: true when the bridge mode is on.
+/// Off = a plain single-identity LXMF messenger: no account chips, no A/B
+/// badges or labels, no devices, rooms or pairing screens. Widgets watch this
+/// instead of reading the setting themselves.
+final bridgeModeProvider = Provider<bool>(
+  (ref) => ref.watch(bridgeEnabledProvider).value ?? false,
+);
+
+/// True while the bridge sync runs (a progress indicator in the chat list).
+final bridgeSyncingProvider = StreamProvider<bool>((ref) async* {
+  final b = ref.watch(bridgeProvider);
+  yield b.syncing;
+  yield* b.syncingChanges;
 });
 
 /// Identity B facts shown in settings (available once the node is up).

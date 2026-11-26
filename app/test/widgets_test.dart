@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kestrel/bridge/bridge_connection.dart';
+import 'package:kestrel/bridge/codec.dart';
 import 'package:kestrel/main.dart';
 import 'package:kestrel/node/node_service.dart';
 import 'package:kestrel/platform.dart';
@@ -29,6 +30,8 @@ void main() {
     FakeBridge? bridge,
     BridgeStatus bridgeStatus = const BridgeStatus(BridgeState.off),
     bool bridgeConfigured = false,
+    bool? bridgeEnabled,
+    Stream<bool>? bridgeEnabledStream,
     Locale locale = const Locale('uk'),
     Size size = const Size(420, 860),
   }) async {
@@ -48,6 +51,8 @@ void main() {
           bridge: bridge,
           bridgeStatus: bridgeStatus,
           bridgeConfigured: bridgeConfigured,
+          bridgeEnabled: bridgeEnabled,
+          bridgeEnabledStream: bridgeEnabledStream,
         ),
         child: KestrelApp(home: home),
       ),
@@ -69,7 +74,12 @@ void main() {
     testWidgets('wide: list on the left, selected chat on the right', (
       tester,
     ) async {
-      await show(tester, const ChatsScreen(), size: const Size(1200, 800));
+      await show(
+        tester,
+        const ChatsScreen(),
+        size: const Size(1200, 800),
+        bridgeEnabled: true,
+      );
       expect(find.text('Оберіть чат зі списку'), findsOneWidget);
       expect(find.byType(ChatScreen), findsNothing);
       await tester.tap(find.text('Alice'));
@@ -87,7 +97,7 @@ void main() {
     testWidgets('shows chats with identity badges and the TCP indicator', (
       tester,
     ) async {
-      await show(tester, const ChatsScreen());
+      await show(tester, const ChatsScreen(), bridgeEnabled: true);
       expect(find.text('Alice'), findsOneWidget);
       expect(find.text('Marichka'), findsOneWidget);
       expect(find.text('TCP Online'), findsOneWidget);
@@ -106,8 +116,8 @@ void main() {
     testWidgets('account switcher: B, A (disabled, hint) and All', (
       tester,
     ) async {
-      await show(tester, const ChatsScreen());
-      expect(find.text('B (телефон)'), findsOneWidget);
+      await show(tester, const ChatsScreen(), bridgeEnabled: true);
+      expect(find.text('B · ${defaultDeviceName()}'), findsOneWidget);
       expect(find.text('A (міст)'), findsWidgets);
       expect(find.text('Усі'), findsOneWidget);
       final a = tester.widget<ChoiceChip>(find.byKey(const ValueKey('chip-A')));
@@ -127,9 +137,14 @@ void main() {
     });
 
     testWidgets('English fallback for English devices', (tester) async {
-      await show(tester, const ChatsScreen(), locale: const Locale('en'));
+      await show(
+        tester,
+        const ChatsScreen(),
+        locale: const Locale('en'),
+        bridgeEnabled: true,
+      );
       expect(find.text('New chat'), findsOneWidget);
-      expect(find.text('B (phone)'), findsOneWidget);
+      expect(find.text('B · ${defaultDeviceName()}'), findsOneWidget);
       await show(tester, const ChatsScreen(), locale: const Locale('de'));
       expect(find.text('Новий чат'), findsOneWidget); // Ukrainian default
     });
@@ -139,16 +154,19 @@ void main() {
     testWidgets('bubbles show sender, route, transport and status icon', (
       tester,
     ) async {
-      await show(tester, const ChatScreen(chatId: 1));
+      await show(tester, const ChatScreen(chatId: 1), bridgeEnabled: true);
       expect(find.text('Привіт!'), findsOneWidget);
       expect(find.text('Вітаю, як справи?'), findsOneWidget);
       expect(find.text('Невдала спроба'), findsOneWidget);
 
       Text meta(int id) =>
           tester.widget<Text>(find.byKey(ValueKey('meta-$id')));
-      expect(meta(1).data, 'B (телефон) · opportunistic · TCP');
-      expect(meta(2).data, 'B (телефон) · direct · TCP');
-      expect(meta(3).data, 'B (телефон) · opportunistic · в черзі (офлайн)');
+      expect(meta(1).data, 'B · ${defaultDeviceName()} · opportunistic · TCP');
+      expect(meta(2).data, 'B · ${defaultDeviceName()} · direct · TCP');
+      expect(
+        meta(3).data,
+        'B · ${defaultDeviceName()} · opportunistic · в черзі (офлайн)',
+      );
 
       Icon icon(int id) =>
           tester.widget<Icon>(find.byKey(ValueKey('status-$id')));
@@ -160,12 +178,12 @@ void main() {
     });
 
     testWidgets('composer states who the message is sent from', (tester) async {
-      await show(tester, const ChatScreen(chatId: 1));
-      expect(find.text('Від: B (телефон)'), findsOneWidget);
+      await show(tester, const ChatScreen(chatId: 1), bridgeEnabled: true);
+      expect(find.text('Від: B (цей пристрій)'), findsOneWidget);
     });
 
     testWidgets('composer for an A chat shows A', (tester) async {
-      await show(tester, const ChatScreen(chatId: 2));
+      await show(tester, const ChatScreen(chatId: 2), bridgeEnabled: true);
       expect(find.text('Від: A (через міст)'), findsOneWidget);
     });
 
@@ -313,6 +331,49 @@ void main() {
       expect(find.byType(BridgeSetupScreen), findsNothing);
     });
 
+    testWidgets('pasting an invite joins the bridge in one step', (
+      tester,
+    ) async {
+      final bridge = FakeBridge();
+      await show(tester, const BridgeSetupScreen(), bridge: bridge);
+      await tester.enterText(
+        find.byKey(const ValueKey('bridge-key')),
+        'kestrel-invite:v1:abc',
+      );
+      await tester.tap(find.byKey(const ValueKey('bridge-connect')));
+      await tester.pumpAndSettle();
+      expect(bridge.redeemedInvites, ['kestrel-invite:v1:abc']);
+      expect(bridge.configured, isEmpty); // no manual address was needed
+    });
+
+    testWidgets('a refused invite shows the reason', (tester) async {
+      final bridge = FakeBridge()..redeemError = BridgeError('pairing_replay');
+      await show(tester, const BridgeSetupScreen(), bridge: bridge);
+      await tester.enterText(
+        find.byKey(const ValueKey('bridge-key')),
+        'kestrel-invite:v1:abc',
+      );
+      await tester.tap(find.byKey(const ValueKey('bridge-connect')));
+      await tester.pumpAndSettle();
+      expect(find.byType(BridgeSetupScreen), findsOneWidget);
+      expect(find.textContaining('уже використано'), findsOneWidget);
+    });
+
+    testWidgets('saving the device name goes through the bridge service', (
+      tester,
+    ) async {
+      final bridge = FakeBridge();
+      await show(tester, const SettingsScreen(), bridge: bridge);
+      await tester.pump();
+      await tester.enterText(
+        find.byKey(const ValueKey('device-name')),
+        'Studio PC',
+      );
+      await tester.tap(find.byKey(const ValueKey('save-device')));
+      await tester.pump();
+      expect(bridge.deviceNames, ['Studio PC']);
+    });
+
     testWidgets('with a key the switch toggles the bridge service', (
       tester,
     ) async {
@@ -322,6 +383,7 @@ void main() {
         const SettingsScreen(),
         bridge: bridge,
         bridgeConfigured: true,
+        bridgeEnabled: false,
         bridgeStatus: const BridgeStatus(BridgeState.connected),
       );
       await tester.scrollUntilVisible(
@@ -330,10 +392,10 @@ void main() {
         scrollable: find.byType(Scrollable).first,
       );
       expect(find.text('Міст: онлайн'), findsOneWidget);
+      expect(find.byKey(const ValueKey('my-devices')), findsNothing);
       await tester.tap(find.byKey(const ValueKey('bridge-switch')));
       await tester.pump();
-      expect(bridge.enabled, [true]);
-      expect(find.byKey(const ValueKey('my-devices')), findsOneWidget);
+      expect(bridge.enabled, [true]); // turning on needs no confirmation
     });
   });
 

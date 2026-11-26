@@ -150,8 +150,9 @@ class PeerRow {
 String shortHash(String h) =>
     h.length <= 12 ? h : '${h.substring(0, 6)}..${h.substring(h.length - 4)}';
 
-/// All SQL of the app. There is deliberately no method that deletes chats or
-/// messages (see docs/PLAN.md section 2: modes never erase data).
+/// All SQL of the app. The only code that deletes chats or messages is
+/// [purgeBridgeAccountData]: account A is a cache of MeshChatX, so turning
+/// the bridge off drops it; account B (this device) is never deleted.
 class Repo {
   Repo(this.adb);
   final AppDatabase adb;
@@ -188,9 +189,43 @@ class Repo {
   Future<bool> bridgeEnabled() async =>
       (await getSetting(SettingKeys.bridgeEnabled)) == '1';
 
-  /// Mode toggle: touches only `settings`. Never deletes or hides data.
+  /// Mode toggle: touches only `settings`. Deleting account A's cache is a
+  /// separate, explicit step ([purgeBridgeAccountData]).
   Future<void> setBridgeEnabled(bool v) =>
       setSetting(SettingKeys.bridgeEnabled, v ? '1' : '0');
+
+  /// Turning the bridge off: removes everything that belongs to account A
+  /// (chats, messages, delivery log, outbox, RRC rooms and messages, the
+  /// device-list cache, sync cursors and state id; per-chat ids and read
+  /// state live in the chat rows) in ONE transaction. Account B rows and the
+  /// pairing (bridge address, identity) are never touched, so turning the
+  /// bridge on again needs no re-pairing and simply syncs from scratch.
+  Future<void> purgeBridgeAccountData() async {
+    final a = await accountId('A');
+    await _db.transaction((txn) async {
+      await txn.rawDelete(
+        'DELETE FROM delivery_log WHERE message_id IN '
+        '(SELECT id FROM messages WHERE account_id = ?)',
+        [a],
+      );
+      await txn.rawDelete('DELETE FROM outbox WHERE account_id = ?', [a]);
+      await txn.rawDelete('DELETE FROM messages WHERE account_id = ?', [a]);
+      await txn.rawDelete('DELETE FROM chats WHERE account_id = ?', [a]);
+      await txn.delete('rrc_messages');
+      await txn.delete('rrc_rooms');
+      await txn.delete('bridge_devices');
+      for (final e in {
+        SettingKeys.bridgeStateId: '',
+        SettingKeys.bridgeCursor: '0',
+      }.entries) {
+        await txn.insert('settings', {
+          'key': e.key,
+          'value': e.value,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
+    adb.notify();
+  }
 
   // ----------------------------------------------------------------- accounts
 

@@ -131,6 +131,11 @@ class IntegrationTest(unittest.TestCase):
         b2_file = os.path.join(d, "b2.identity")
         b2_id.to_file(b2_file)
         b2_hash = b2_id.hash.hex()
+        # identity of the third device B3: joins through an invite
+        b3_id = RNS.Identity()
+        b3_file = os.path.join(d, "b3.identity")
+        b3_id.to_file(b3_file)
+        b3_hash = b3_id.hash.hex()
 
         # transport node (the "MeshChatX side" Reticulum) and fake MeshChatX
         transport_args = ["-m", "tests.it_transport", os.path.join(d, "transport"), str(tcp_port)]
@@ -243,6 +248,15 @@ tcp_port = {tcp_port}
                         client2.stop()
                         continue
                     raise
+            # B3 joins through an invite created by B1 (B1 writes the token file)
+            b3dir = os.path.join(d, "b3")
+            os.makedirs(b3dir)
+            with open(os.path.join(b3dir, "config"), "w") as f:
+                f.write(CLIENT_RNS_CONFIG.format(tcp_port=tcp_port))
+            client3 = self.spawn("client_b3", ["-m", "tests.it_client_b3", b3dir, b3_file, s_pub,
+                                               os.path.join(d, "invite.token")])
+            client3.wait_for("RESULT B3_DONE", 180)
+            client.wait_for("RESULT INVITED", 60)
             open(revoke_file, "w").close()          # B1 revokes B2 now
             client2.wait_for("RESULT B2_CLOSED", 60)
             client2.wait_for("RESULT DONE", 120)
@@ -263,8 +277,8 @@ tcp_port = {tcp_port}
 
         if os.environ.get("IT_RNS_LOG"):
             print(_safe("\n".join(client.lines)))
-        res, res2 = {}, {}
-        for lines, target in ((client.lines, res), (client2.lines, res2)):
+        res, res2, res3 = {}, {}, {}
+        for lines, target in ((client.lines, res), (client2.lines, res2), (client3.lines, res3)):
             for line in lines:
                 if line.startswith("RESULT "):
                     _, name, payload = line.split(" ", 2)
@@ -329,6 +343,26 @@ tcp_port = {tcp_port}
         self.assertEqual([r["code"] for r in res2["b2_retry_reject"]], ["device_revoked"])
         after = res2["b2_after"]
         self.assertTrue(after is None or after.get("ok") is False, after)
+
+        # invite pairing: a wrong token fails, the right one turns the same Link into a trusted one, no replay
+        self.assertEqual(res3["b3_wrong"]["error"]["code"], "pairing_invalid")
+        self.assertEqual(res3["b3_other_path"]["error"]["code"], "unauthorized")   # unknown key: redeem only
+        self.assertTrue(res3["b3_closed_after_failure"])
+        self.assertTrue(res3["b3_redeem"]["ok"], res3["b3_redeem"])
+        rec = res3["b3_redeem"]["result"]["device"]
+        self.assertEqual((rec["device_id"], rec["added_by"], rec["name"], rec["platform"], rec["bootstrap"]),
+                         (b3_hash, b_hash, "Invited PC", "windows", False))
+        self.assertTrue(res3["b3_hello"]["ok"], res3["b3_hello"])
+        self.assertEqual(res3["b3_hello"]["result"]["device"]["name"], "Invited PC 2")   # /hello renames itself
+        self.assertEqual(res3["b3_hello"]["result"]["device"]["platform"], "windows")
+        self.assertIn("pairing_invite", res3["b3_hello"]["result"]["capabilities"])
+        self.assertIn(b3_hash, {x["device_id"] for x in res3["b3_list"]["result"]["devices"]})
+        self.assertTrue(res3["b3_still_up"])
+        self.assertTrue(res3["b3_hello_late"]["ok"])
+        self.assertEqual(res3["b3_replay"]["error"]["code"], "pairing_replay")
+        self.assertTrue(res["invite"]["ok"])
+        self.assertEqual(res["invite_added_push"]["data"]["device"]["device_id"], b3_hash)
+        self.assertEqual(res["invite_added_push"]["data"]["approved_by"], b_hash)
 
         calls = http("GET", base + "/_test/calls")
         self.assertEqual([s["text"] for s in calls["sent"]], ["from phone"])   # exactly once despite the replay

@@ -11,12 +11,13 @@ from dataclasses import dataclass
 from . import __version__, codec, errors
 from .codec import MAX_PROTOCOL_VERSION, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION
 from .config import Config
-from .devices import DeviceRegistry
+from .devices import DeviceRegistry, validate_name, validate_platform
 from .errors import BridgeError
 from .meshchatx_client import MeshChatXClient
 from .push import PushHub
 from .service_devices import DeviceMixin
 from .state import State
+from .invites import InviteStore
 from .vault import Vault
 
 log = logging.getLogger("kestrel.service")
@@ -26,10 +27,12 @@ MUTATING = frozenset({"/send_lxmf", "/send_rrc"})
 PATHS = ("/hello", "/sync_chats", "/get_messages", "/list_rooms", "/get_room_messages",
          "/send_lxmf", "/send_rrc", "/subscribe", "/mark_read",
          "/devices/list", "/devices/approve", "/devices/rename", "/devices/set_role", "/devices/revoke",
+         "/devices/invite", "/devices/redeem",
          "/vault/put", "/vault/list", "/vault/get", "/vault/key", "/vault/set_keys")
 # Paths that only exist on the Link transport (binary payloads, interactive, or too chatty for LoRa).
 LINK_ONLY = frozenset({"/subscribe", "/devices/list", "/devices/approve", "/devices/rename", "/devices/set_role",
-                       "/devices/revoke", "/vault/put", "/vault/list", "/vault/get", "/vault/key", "/vault/set_keys"})
+                       "/devices/revoke", "/devices/invite", "/devices/redeem",
+                       "/vault/put", "/vault/list", "/vault/get", "/vault/key", "/vault/set_keys"})
 CMD_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 HEX32_RE = re.compile(r"^[0-9a-f]{32}$")
 METHODS = (None, "direct", "opportunistic", "propagated")
@@ -142,6 +145,7 @@ class Service(DeviceMixin):
         self._read_by: dict[str, str] = {}
         self.registry = registry or DeviceRegistry(state, cfg.limits.max_devices, clock)
         self.vault = Vault(state, cfg.limits, clock)
+        self.invites = InviteStore(cfg.limits, self.registry, self.vault, clock)
         self.online = lambda device_id: False     # set by the RPC layer: does the device have a live Link?
         self.registry.subscribe(self._on_device_event)
         self._last_state: OrderedDict[str, str] = OrderedDict()
@@ -258,7 +262,7 @@ class Service(DeviceMixin):
                               server_version=PROTOCOL_VERSION, client_version=v,
                               min_version=MIN_PROTOCOL_VERSION, max_version=MAX_PROTOCOL_VERSION)
         lim = self.cfg.limits
-        dev = self.registry.trusted(ctx.device_id)
+        dev = self._hello_identity(args, ctx)
         return {
             "protocol_version": PROTOCOL_VERSION,
             "min_protocol_version": MIN_PROTOCOL_VERSION,
@@ -269,7 +273,7 @@ class Service(DeviceMixin):
             "cursor": self.state.cursor(),
             "device": dev.to_wire(),
             "capabilities": ["lxmf", "rrc", "push", "lxmf_transport", "devices", "pairing", "read_state",
-                             "origin_device", "vault"],
+                             "origin_device", "vault", "pairing_invite"],
             "compat": {"ok": self.compat_ok, "meshchatx_version": self.client.version,
                        "api_version": self.client.api_version,
                        "checked": self.compat_checked, "error": self.last_compat_error},
@@ -280,11 +284,25 @@ class Service(DeviceMixin):
                        "constrained_max_text_bytes": lim.constrained_max_text_bytes,
                        "lxmf_max_response_bytes": lim.lxmf_max_response_bytes,
                        "lxmf_ts_window": lim.lxmf_ts_window, "pairing_window": lim.pairing_window,
+                       "invite_ttl": lim.invite_ttl,
                        "max_devices": lim.max_devices, "vault_max_blob_bytes": lim.vault_max_blob_bytes,
                        "vault_device_quota_bytes": lim.vault_device_quota_bytes,
                        "vault_total_quota_bytes": lim.vault_total_quota_bytes,
                        "vault_get_max_ids": lim.vault_get_max_ids},
         }
+
+    def _hello_identity(self, args: dict, ctx: Ctx):
+        """The caller's device record; an optional ``name``/``platform`` in /hello updates it (the app owns
+        the device name; the config name is only the initial one)."""
+        dev = self.registry.trusted(ctx.device_id)
+        name, platform = args.get("name"), args.get("platform")
+        if name is None and platform is None:
+            return dev
+        name = validate_name(name) if name is not None else None
+        platform = validate_platform(platform) if platform is not None else None
+        if (name is not None and name != dev.name) or (platform is not None and platform != dev.platform):
+            dev = self.registry.update(dev.device_id, name=name, platform=platform)
+        return dev
 
     def _subscribe(self, args: dict, ctx: Ctx) -> dict:
         topics = args.get("topics", ["lxmf", "rrc", "vault"])

@@ -26,7 +26,10 @@ v1 had a flat whitelist of phone keys and one global view. v2 (breaking, no v1 c
 - **Vault** (`/vault/*`): opaque E2E-encrypted blob storage and group-key epochs (section 9).
 - `/hello`: min/max supported versions, own device record, `state_id`, vault info. `protocol_mismatch`
   carries the supported range.
-- LXMF commands use `"v": 2`; `/devices/*` and `/vault/*` exist only on the Link transport.
+- LXMF commands use `"v": 2`; `/devices/*` (including `invite` and `redeem`) and `/vault/*` exist only on the Link transport.
+- **Invite pairing** (`/devices/invite`, `/devices/redeem`, capability `pairing_invite`): the trusted device shows a QR code, the new
+  device scans it and joins in one step (section 5.4). Additive within v2.
+- `/hello` accepts optional `name` and `platform` and updates the caller's own device record (section 6.1).
 - `kestrel.reject` reason packet for rejected/revoked Links (section 2.4; additive).
 - Config: `[[devices]]` replaces `[whitelist]` (the old key is still read as bootstrap devices, with a warning).
 
@@ -58,8 +61,9 @@ to upgrade. Its LXMF commands (`"v": 1`) are answered with the same error. Nothi
 2. D MUST call `link.identify(D_identity)` right after the link is established. The bridge looks up the
    **full public key** of the identified identity in the device registry.
    - Unknown or revoked key: the bridge sends ONE reason packet (`kestrel.reject`, section 2.4) over the Link and tears it down
-     `limits.reject_grace` (default 1.5 s) later, or as soon as the client closes it. Nothing else is ever sent to such a Link and
-     every request on it is answered `unauthorized` / `device_revoked`.
+     `limits.reject_grace` (default 5 s) later, or as soon as the client closes it. Nothing else is ever sent to such a Link and
+     every request on it is answered `unauthorized` / `device_revoked`, with one exception: a Link of an **unknown** (not revoked)
+     key may call `/devices/redeem` (section 5.4) within that time.
    - Not identified within `limits.identify_timeout` (default 30 s): the link is torn down (no reason packet).
    - Before `identify()` every request is answered with `unauthorized`.
 3. D sends `/hello`, checks the result (4.1), then `/subscribe` if it wants push.
@@ -103,7 +107,7 @@ device at the moment it is revoked (4.3):
   `device_revoked`: the key belongs to a revoked device.
 - `server_time`: the bridge's Unix time (clock offset estimate, as `/hello` `time`).
 - The packet is the only data an unauthenticated Link ever receives. The Link is torn down `limits.reject_grace` seconds after it
-  (default 1.5; a client SHOULD close it itself once it has read the reason). The bridge rate-limits the packet:
+  (default 5; a client SHOULD close it itself once it has read the reason). The bridge rate-limits the packet:
   `limits.reject_rate_per_minute` (default 20) per remote identity hash and ten times that over all identities per minute; above
   the limit the Link is closed without a packet, so a client that sees a Link closed right after `identify()` and no
   `kestrel.reject` MUST treat it as "not accepted (reason unknown)".
@@ -206,6 +210,48 @@ UX note: the new device SHOULD reconnect (new Link, `identify()`, wait for eithe
 seconds for a minute after showing its QR, staying within `limits.reject_rate_per_minute`. A `device_revoked` reject during pairing
 means this identity was revoked and cannot be paired again.
 
+### 5.4 Invite pairing (`/devices/invite`, `/devices/redeem`)
+The reverse flow (like linking a device in Signal or WhatsApp): the **trusted** device shows a QR code, the **new** device scans it.
+No camera is needed on the trusted side, and the new device needs no manual bridge setup.
+
+**`/devices/invite`** (trusted device, Link; counts as admin request for the rate limit). Request `{}`. Result
+```
+{"invite_id": hash32, "token": bin(16), "expires_at": float}
+```
+`token` is 16 random bytes. The bridge stores only a SHA-256 hash of it (in memory: a bridge restart invalidates open invites), bound to the
+inviting device. The invite is single use and valid for `limits.invite_ttl` seconds (default and maximum 600). A device may have at most
+`limits.max_open_invites` (default 3) open invites (`rate_limited`, `details.max`). Invites made by a device stop working when it is revoked.
+
+**QR payload**, shown by the inviting device:
+```
+kestrel-invite:v1:<base64url(msgpack payload)>       # RFC 4648 section 5 alphabet, no padding
+payload = {"bridge_pubkey": bin(64), "token": bin(16), "inviter_name": str, "expires_at": number}
+```
+`bridge_pubkey` is S's public key (so the new device can address the bridge), `inviter_name` is informational (shown to the user for
+confirmation), `expires_at` lets the new device show a countdown. A client MUST ignore unknown payload keys and MUST refuse a payload it
+cannot parse or whose `expires_at` is in the past (by the clock offset it knows, if any).
+
+**`/devices/redeem`** (new device). The new device builds the Link to S as usual and calls `identify()` with its NEW identity. This is the
+only path a Link identified with an **unknown** key may call (every other path keeps answering `unauthorized`; a **revoked** key gets
+`device_revoked` here as everywhere). The bridge still sends the `kestrel.reject unauthorized` packet right after `identify()`; a client
+that is redeeming MUST ignore it, and SHOULD send `/devices/redeem` without waiting for it (the Link stays open for `limits.reject_grace`).
+Request `{"token": bin(16), "name": str, "platform": str}` (`name`, `platform` as in 4.1; `platform` defaults to `unknown`). Result
+`{"device": <device record>}` with `added_by` = the inviter, `bootstrap` false, `roles` `[]`.
+- On success the device exists, the bridge pushes `device_added` (`approved_by` = inviter) to all subscribed Links, and **the same Link
+  becomes a normal trusted Link**: no reconnect is needed; the new device continues with `/hello` and `/subscribe` on it.
+- Errors (nothing is consumed by a failed attempt, except that a used token stays used): `pairing_invalid` (unknown token, malformed token,
+  or the inviting device is no longer trusted), `pairing_expired` (`details.server_time`), `pairing_replay` (already used),
+  `bad_request` (invalid `name`/`platform`), `too_many_devices`, `vault_in_use` (below), `rate_limited`. After a failed redeem the
+  response is delivered and the Link is closed about a second later.
+- Failed redeems are rate limited per remote identity: `limits.redeem_fail_rate_per_minute` (default 10); above it the answer is
+  `rate_limited` without looking at the token.
+- A trusted device calling `/devices/redeem` gets `device_exists`.
+
+**Vault.** Invites are **not available while the vault is in use** (`/vault/set_keys` was called): `/devices/invite` and `/devices/redeem`
+fail with `vault_in_use`, because the new device cannot receive a wrapped group key it has not got a public key for before it connects.
+Use the QR flow of 5.2 (new device shows the QR, the trusted device approves and wraps the key). Wrapping the key for invited devices
+(a `vault_pending` state) is deferred to the vault phase.
+
 ### 5.3 Other device paths
 | path | request | result |
 |---|---|---|
@@ -221,17 +267,20 @@ means this identity was revoked and cannot be paired again.
 All of this works on both transports unless stated. `limit` is clamped to `limits.page_max` (default 100).
 
 ### 6.1 `/hello`
-Request: `{"protocol_version": 2, "client": "<name/version>"?}`. A `protocol_version` outside [min, max] fails with
+Request: `{"protocol_version": 2, "client": "<name/version>"?, "name": str?, "platform": str?}`. `name` and `platform` are the caller's own
+device name and platform as the **app** knows them (the app owns the device name; the config `[[devices]].name` is only the initial
+one): when present and different from the stored record, the bridge validates them (4.1; `bad_request` otherwise), updates the
+caller's own record and pushes `device_updated`. A `/hello` without them (keepalives) changes nothing. A `protocol_version` outside [min, max] fails with
 `protocol_mismatch`, `details: {server_version, min_version, max_version, client_version}`. Result:
 ```
 {"protocol_version": 2, "min_protocol_version": 2, "max_protocol_version": 2, "server": "kestrel-bridge/<ver>",
  "time": <float>, "state_id": "<hex16>", "cursor": <int>, "device": <device record>,
- "capabilities": ["lxmf","rrc","push","lxmf_transport","devices","pairing","read_state","origin_device","vault"],
+ "capabilities": ["lxmf","rrc","push","lxmf_transport","devices","pairing","read_state","origin_device","vault","pairing_invite"],
  "compat": {"ok": bool, "meshchatx_version": str|null, "api_version": int|null, "checked": bool, "error": str|null},
  "profile": "full"|"constrained"|null,
  "vault": {"key_epoch": int, "in_use": bool, "used_bytes": int},
  "limits": {"max_text_bytes","page_max","constrained_max_text_bytes","lxmf_max_response_bytes","lxmf_ts_window",
-            "pairing_window","max_devices","vault_max_blob_bytes","vault_device_quota_bytes","vault_total_quota_bytes",
+            "pairing_window","invite_ttl","max_devices","vault_max_blob_bytes","vault_device_quota_bytes","vault_total_quota_bytes",
             "vault_get_max_ids"}}
 ```
 `time` lets the client estimate its clock offset (it matters for pairing and LXMF `ts`). `compat.ok = false` means the MeshChatX
@@ -441,9 +490,10 @@ Exceeding one gives `rate_limited` with `details.retry_after` (seconds). Other l
 | `device_exists` | device already paired | - |
 | `last_trusted_device` | the last trusted device cannot be revoked | - |
 | `too_many_devices` | `limits.max_devices` reached | - |
-| `pairing_invalid` | QR payload malformed | - |
-| `pairing_expired` | `ts` outside `pairing_window`; `details.server_time` | - |
-| `pairing_replay` | pairing nonce already used | - |
+| `pairing_invalid` | QR payload malformed; unknown/malformed invite token | - |
+| `pairing_expired` | `ts` outside `pairing_window` or the invite expired; `details.server_time` | - |
+| `pairing_replay` | pairing nonce or invite token already used | - |
+| `vault_in_use` | invites are unavailable while the vault is in use (5.4) | - |
 | `bad_signature` | approval signature invalid | - |
 | `forbidden` | e.g. `/vault/put` with another device's id | - |
 | `key_epoch_stale` | wrong `key_epoch`; `details.key_epoch` = current | - |

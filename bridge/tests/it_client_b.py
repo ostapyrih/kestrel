@@ -121,6 +121,14 @@ def main() -> None:
     wait(lambda: any(p.get("event") == "device_added" for p in pushes), 30, "device_added push")
     out("device_added_push", [p for p in pushes if p.get("event") == "device_added"][0])
     out("PAIRED", True)
+    # invite pairing: create an invite for device B3 (the driver starts it_client_b3 when the token file exists)
+    inv = request(link, "/devices/invite", {})
+    out("invite", {"ok": inv["ok"], "keys": sorted(inv["result"]) if inv["ok"] else None})
+    with open(os.path.join(os.path.dirname(qr_file), "invite.token"), "w") as f:
+        f.write(inv["result"]["token"].hex())
+    wait(lambda: sum(1 for p in pushes if p.get("event") == "device_added") >= 2, 60, "device_added push for B3")
+    out("invite_added_push", [p for p in pushes if p.get("event") == "device_added"][1])
+    out("INVITED", True)
     wait(lambda: os.path.exists(revoke_file), 120, "revoke file")
     b2_id = next(p for p in pushes if p.get("event") == "device_added")["data"]["device"]["device_id"]
     out("revoke", request(link, "/devices/revoke", {"device_id": b2_id, "reason": "integration test"}))
