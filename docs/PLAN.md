@@ -88,6 +88,19 @@ Reticulum on amd1 (transport + propagation node, shared instance)
 
 ---
 
+## Multi-device (decided 2026-11-26)
+
+- Reticulum forbids running one identity on several devices at once (path flapping, random delivery). Therefore **every device has its own identity**: `B-pc`, `B-iphone`, `B-android`, … (generated locally, the key never leaves the device). Account `A` (via the bridge) is the shared account on all devices; MeshChatX on the server is the single source of truth for `A`'s history.
+- The bridge serves many devices at once: the whitelist holds several keys; every device keeps its own sync cursor; push events fan out to all connected device Links; offline devices catch up via sync. Delivery state and read state propagate to all devices (read state via MeshChatX mark-as-read).
+- Every message sent as `A` records the originating device (the bridge keeps an `lxmf_hash → device` mapping in its state and returns it in sync/push), so the UI shows e.g. "A · from iPhone · direct · delivered".
+- LoRa/LXMF fallback push goes only to devices flagged as "field" devices; the others catch up over TCP.
+- **Device pairing via QR (decided):** the new device shows a QR with its public key; an already-trusted device scans it and approves; the approval is a request signed by the trusted device's identity over its identified Link; the bridge stores the dynamic device list in its own state (the server config only bootstraps the first device). Settings → "My devices": name, platform, last seen, revoke. Revoked keys are rejected immediately and their Links closed.
+- **Standalone history sync (decided: yes, via the bridge, end-to-end encrypted):** devices share a device-group key, distributed during pairing (the approving device encrypts it to the new device's public key). Each device uploads its Standalone (`B-x`) messages as encrypted append-only blobs to a bridge "vault"; other devices pull and decrypt them and show them read-only with a device badge ("B-android"). The bridge only stores opaque ciphertext and cannot read it. Revocation rotates the group key; new blobs use the new key.
+- This requires **bridge protocol v2**: `/devices/list`, `/devices/approve`, `/devices/revoke`, `/devices/rename`, `/vault/put`, `/vault/list` (cursor), `/vault/get`, device id in `/hello`, per-device cursors, origin device in message records.
+- **Desktop:** Flutter Windows, macOS and Linux builds from the same code. Releases ship a Windows .zip (or installer), a macOS .dmg (unsigned), a Linux AppImage/tar.gz. On desktop an RNode connects via USB serial (KISS), not BLE.
+
+---
+
 ## 4. Data model on the phone (SQLite)
 
 - `accounts` — `A` (bridge, remote) and `B` (local): hash, name, type.
@@ -113,10 +126,12 @@ Switching modes changes only `settings.bridge_enabled`; no DELETEs on data.
 | 2 | Dart RNS core + golden tests (`packages/kestrel_rns`) | PR #1 merged: identity, token, packet, announce, HDLC/KISS, msgpack, LXMF — matches Python RNS 1.6.1 / LXMF 1.3.1 in both directions (271 tests + 80 cross-checks in Python) | ✅ |
 | 3a | Network layer in `kestrel_rns` | PR #3 merged: TCP, Transport (endpoint), Link + identify + request/response, Resource (≤1 MiB), ratchets, announce stamps; 345 tests, 36 integration tests against Python RNS 1.6.1, including Dart↔Dart through a Python transport. Deferred: Resource >1 MiB, Channel/Buffer, IFAC | ✅ |
 | 3b | LXMF + Standalone mode + UI | PR #5 merged: `LxmRouter` (opportunistic/direct/resource, receipts, retries, stamps) — interop with Python LXMF; app: identity B in secure storage, SQLite per §4 (triggers fix the outbox, a test that the switch deletes nothing), chats with "from · route · transport · status" badges, settings + QR; debug APK in CI. Deferred: tickets, QR scanner, background service | ✅ |
-| 4 | Bridge mode in the app | switch, A/B accounts, sync, sending via the bridge, route/transport/status badges, queue | ⬜ |
+| 4 | Bridge mode in the app + multi-device (protocol v2: devices, per-device cursors, origin device, QR pairing) | switch, A/B accounts, sync, sending via the bridge, route/transport/status badges, queue | ⬜ |
+| 4b | Standalone history vault (E2E-encrypted sync of B-x chats via the bridge) | devices share a group key; encrypted append-only blobs in the bridge vault; read-only device-badged history on other devices | ⬜ |
 | 5 | Propagation sync + offline queue | `B` fetches messages from a propagation node | ⬜ |
-| 6 | BLE RNode | KISS + radio config (parameters = those of the LoRa gateway), `LoRa` transport badge | ⬜ |
+| 6 | RNode: BLE on mobile, USB serial on desktop | KISS + radio config (parameters = those of the LoRa gateway), `LoRa` transport badge | ⬜ |
 | 7 | iOS build on Mac + background notifications | `flutter build ios`, push without content | ⬜ |
+| D | Desktop builds (Windows/macOS/Linux) + USB RNode on desktop | Windows .zip/installer, macOS .dmg (unsigned), Linux AppImage/tar.gz from the same code | ⬜ |
 
 **Environment:** development on Windows (`C:\Users\ostap\Projects\meshchatx-mobile`), Flutter is installed here. The iOS build is done on a Mac (x86_64) with git.
 
@@ -125,7 +140,7 @@ Switching modes changes only `settings.bridge_enabled`; no DELETEs on data.
 ## 6. Open questions
 
 1. Is there a physical LoRa gateway (an RNode attached to a transport with a path to `amd1`) and what are its radio parameters?
-2. One identity `B` for both roles, or a separate hidden control identity (see §2)?
+2. ~~One identity per device~~ — decided: every device has its own identity `B-x` (see Multi-device). Still open: whether `B-x` also serves as the bridge control key or a separate hidden control identity is used (see §2).
 3. Background notification channel: ntfy (self-hosted) or APNs/FCM?
 4. ~~Plugin API~~ — resolved: sidecar (§3).
 6. **Announce stamps:** RNS 1.6 adds a PoW stamp to announces by default; Dart does not generate it yet. Stamps are not required on `amd1`, but other nodes of the network may require them — generation was implemented in 3a (cost 25, separate isolate, cached per destination). In 3b, measure the time on a real phone.
