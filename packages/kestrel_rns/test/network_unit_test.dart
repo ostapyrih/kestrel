@@ -159,6 +159,22 @@ void main() {
           a2.recallDestination(d.hash, 'kestrel', ['unit', 'wrong']), isNull);
     });
 
+    test('rememberDestination learns an identity from its public key', () async {
+      final (a, b, _, _) = await pair();
+      addTearDown(a.stop);
+      addTearDown(b.stop);
+      final other = await Identity.generate();
+      final h = a.rememberDestination(other.publicKey, 'lxmf', ['delivery']);
+      expect(h, Destination.hashFor(other, 'lxmf', ['delivery']));
+      final d = a.recallDestination(h, 'lxmf', ['delivery']);
+      expect(d, isNotNull);
+      expect(d!.identity!.hash, other.hash);
+      expect(a.recallDestination(h, 'lxmf', ['other']), isNull);
+      // never replaces an existing entry; unknown elsewhere
+      expect(a.rememberDestination(other.publicKey, 'lxmf', ['delivery']), h);
+      expect(b.recallDestination(h, 'lxmf', ['delivery']), isNull);
+    });
+
     test('JsonFileStorage round trip + atomic overwrite', () async {
       final dir = await Directory.systemTemp.createTemp('kestrel_store');
       addTearDown(() => dir.delete(recursive: true));

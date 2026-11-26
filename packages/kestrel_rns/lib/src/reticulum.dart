@@ -112,6 +112,15 @@ class Reticulum {
   ) =>
       transport.outboundDestination(destinationHash, appName, aspects);
 
+  /// Remembers a destination of an identity known only by its public key
+  /// (see [Transport.rememberDestination]); returns the destination hash.
+  Uint8List rememberDestination(
+    List<int> publicKey,
+    String appName,
+    List<String> aspects,
+  ) =>
+      transport.rememberDestination(publicKey, appName, aspects);
+
   /// Loads/creates persisted ratchets for [d] (Destination.enable_ratchets).
   Future<void> enableRatchets(Destination d) async {
     final key = 'ratchets/${toHex(d.hash)}';

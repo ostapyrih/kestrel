@@ -249,6 +249,29 @@ class Transport {
     return k == null ? null : Identity.fromPublicKey(k.publicKey);
   }
 
+  /// Remembers the destination `appName.aspects` of an identity whose public
+  /// key was learned out of band (Identity.remember without an announce), so
+  /// that [recallIdentity] / [outboundDestination] work for it. Never
+  /// replaces an existing entry. Returns the destination hash.
+  Uint8List rememberDestination(
+    List<int> publicKey,
+    String appName,
+    List<String> aspects,
+  ) {
+    final id = Identity.fromPublicKey(publicKey);
+    final hash = Destination.hashFor(id, appName, aspects);
+    _known.putIfAbsent(
+      _hex(hash),
+      () => KnownDestination(
+        destinationHash: hash,
+        publicKey: id.publicKey,
+        timestamp: DateTime.now().millisecondsSinceEpoch / 1000,
+        packetHash: Uint8List(32),
+      ),
+    );
+    return hash;
+  }
+
   KnownDestination? recall(List<int> destinationHash) =>
       _known[_hex(destinationHash)];
 
