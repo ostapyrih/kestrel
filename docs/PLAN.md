@@ -88,6 +88,13 @@ Reticulum on amd1 (transport + propagation node, shared instance)
 
 ---
 
+### Transport decision (2026-11-26)
+Reticulum everywhere stays: the app talks to the bridge only over RNS (TCP online, RNode offline). An HTTPS/WebSocket transport for online mode was considered (less fragile online, no announces/stamps/path discovery) and **rejected** to keep a single implementation in the app.
+
+Consequences:
+- The bridge disables RNS announce and path-request stamping by default (`[rns] stamps = false`). Its announces are reached through the owner's own transport node, and proof-of-work does not finish on small servers.
+- Server capacity matters. MeshChatX keeps running as a public propagation node, so it needs enough CPU (stamp validation) and `/dev/shm` (multiprocessing). Tune the peering limits rather than disabling the node.
+
 ## Multi-device (decided 2026-11-26)
 
 - Reticulum forbids running one identity on several devices at once (path flapping, random delivery). Therefore **every device has its own identity**: `B-pc`, `B-iphone`, `B-android`, … (generated locally, the key never leaves the device). Account `A` (via the bridge) is the shared account on all devices; MeshChatX on the server is the single source of truth for `A`'s history.
