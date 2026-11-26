@@ -188,6 +188,8 @@ class HelloResult {
     required this.device,
     required this.capabilities,
     required this.compatOk,
+    this.compatChecked = true,
+    this.compatError,
     required this.meshchatxVersion,
     required this.vaultKeyEpoch,
     required this.vaultInUse,
@@ -211,6 +213,9 @@ class HelloResult {
           for (final c in m['capabilities']! as List) c.toString(),
       ],
       compatOk: compat['ok'] != false,
+      // additive fields: absent on older bridges, which then only had `ok`
+      compatChecked: compat['checked'] != false,
+      compatError: compat['error'] as String?,
       meshchatxVersion: compat['meshchatx_version'] as String?,
       vaultKeyEpoch: asInt(vault['key_epoch']) ?? 1,
       vaultInUse: vault['in_use'] == true,
@@ -230,6 +235,14 @@ class HelloResult {
   final DeviceRecord device;
   final List<String> capabilities;
   final bool compatOk;
+
+  /// False while the bridge has not completed its first MeshChatX check (it
+  /// is starting or MeshChatX is not reachable yet): not an incompatibility.
+  final bool compatChecked;
+  final String? compatError;
+
+  /// MeshChatX version/API is known to be unsupported (checked and not ok).
+  bool get upstreamIncompatible => compatChecked && !compatOk;
   final String? meshchatxVersion;
   final int vaultKeyEpoch;
   final bool vaultInUse;

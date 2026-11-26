@@ -73,6 +73,7 @@ class BridgeService {
   bool _flushing = false;
   bool _syncing = false;
   Timer? _retry;
+  Timer? _upstreamRetry;
   bool? _fallbackSetting;
   bool _ownField = false;
   bool _vaultInUse = false;
@@ -147,6 +148,7 @@ class BridgeService {
 
   Future<void> _detach() async {
     _retry?.cancel();
+    _upstreamRetry?.cancel();
     for (final s in _subs) {
       await s.cancel();
     }
@@ -276,6 +278,15 @@ class BridgeService {
         await store.saveCursor(cursor, stateId);
         if (!r.more) break;
       }
+      if (_statusNow.detail == 'upstream_unavailable' && _statusNow.connected) {
+        _emit(
+          BridgeStatus(
+            BridgeState.connected,
+            fallback: _statusNow.fallback,
+            hello: _statusNow.hello,
+          ),
+        );
+      }
     } on BridgeError catch (e) {
       _noteError(e);
     } on BridgeTransportError {
@@ -287,6 +298,28 @@ class BridgeService {
 
   void _noteError(BridgeError e) {
     if (e.code == 'device_revoked') unawaited(_handleRevoked());
+    if (e.code == 'upstream_unavailable') {
+      // The bridge is starting or MeshChatX is not reachable yet (spec: not an
+      // incompatibility): show it and try again after `retry_after`.
+      final st = _statusNow;
+      if (st.connected) {
+        _emit(
+          BridgeStatus(
+            BridgeState.connected,
+            detail: 'upstream_unavailable',
+            fallback: st.fallback,
+            hello: st.hello,
+          ),
+        );
+      }
+      _upstreamRetry?.cancel();
+      final d = Duration(
+        milliseconds: ((e.retryAfter ?? 10) * 1000).ceil() + 250,
+      );
+      _upstreamRetry = Timer(d, () {
+        if (!_stopped) _chain(() => resync());
+      });
+    }
   }
 
   /// Fetches new messages of one conversation (catch-up after the stored

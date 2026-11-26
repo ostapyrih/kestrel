@@ -7,6 +7,10 @@ import '../l10n/strings.dart';
 import '../platform.dart';
 import '../providers.dart';
 import '../storage/database.dart';
+import 'add_device_screen.dart';
+import 'bridge_setup_screen.dart';
+import 'bridge_widgets.dart';
+import 'devices_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -63,6 +67,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _loadOnce();
     final info = ref.watch(identityInfoProvider);
     final bridge = ref.watch(bridgeEnabledProvider).value ?? false;
+    final configured = ref.watch(bridgeConfiguredProvider).value ?? false;
+    final bridgeStatus = ref.watch(bridgeStatusProvider).value;
+    final fbSetting = ref
+        .watch(settingProvider(SettingKeys.bridgeLxmfFallback))
+        .value;
+    final ownRoles =
+        ref.watch(settingProvider(SettingKeys.bridgeOwnRoles)).value ?? '';
+    // default on for field devices
+    final fallback = fbSetting == null
+        ? ownRoles.contains('field')
+        : fbSetting == '1';
     final text = Theme.of(context).textTheme;
 
     return Scaffold(
@@ -198,10 +213,79 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             key: const ValueKey('bridge-switch'),
             contentPadding: EdgeInsets.zero,
             title: Text(s.t('bridge_enable')),
-            subtitle: Text(s.t('bridge_soon')),
+            subtitle: Text(
+              configured && bridgeStatus != null
+                  ? bridgeStateText(s, bridgeStatus)
+                  : s.t('bridge_soon'),
+            ),
             value: bridge,
-            onChanged: (v) => ref.read(repoProvider).setBridgeEnabled(v),
+            onChanged: (v) async {
+              if (v && !configured) {
+                await Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const BridgeSetupScreen(),
+                  ),
+                );
+                return;
+              }
+              await ref.read(bridgeProvider).setEnabled(v);
+            },
           ),
+          if (configured && bridgeStatus != null)
+            if (bridgeStateHelp(s, bridgeStatus) case final help?)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  help,
+                  key: const ValueKey('bridge-help'),
+                  style: text.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ),
+          ListTile(
+            key: const ValueKey('bridge-setup'),
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.hub_outlined),
+            title: Text(
+              configured ? s.t('bridge_change') : s.t('bridge_setup'),
+            ),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const BridgeSetupScreen(),
+              ),
+            ),
+          ),
+          if (configured) ...[
+            ListTile(
+              key: const ValueKey('my-devices'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.devices),
+              title: Text(s.t('my_devices')),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const DevicesScreen()),
+              ),
+            ),
+            ListTile(
+              key: const ValueKey('add-device-tile'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.qr_code_2),
+              title: Text(s.t('add_device')),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const AddDeviceScreen(),
+                ),
+              ),
+            ),
+            SwitchListTile(
+              key: const ValueKey('fallback-switch'),
+              contentPadding: EdgeInsets.zero,
+              title: Text(s.t('bridge_fallback')),
+              subtitle: Text(s.t('bridge_fallback_hint')),
+              value: fallback,
+              onChanged: (v) => ref.read(bridgeProvider).setFallback(v),
+            ),
+          ],
           Text(s.t('bridge_note'), style: text.bodySmall),
         ],
       ),
