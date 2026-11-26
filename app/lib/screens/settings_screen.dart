@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../l10n/strings.dart';
+import '../platform.dart';
 import '../providers.dart';
 import '../storage/database.dart';
 
@@ -16,6 +17,7 @@ class SettingsScreen extends ConsumerStatefulWidget {
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   final _name = TextEditingController();
+  final _device = TextEditingController();
   final _host = TextEditingController();
   final _port = TextEditingController();
   bool _loaded = false;
@@ -23,6 +25,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   void dispose() {
     _name.dispose();
+    _device.dispose();
     _host.dispose();
     _port.dispose();
     super.dispose();
@@ -31,11 +34,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   void _loadOnce() {
     if (_loaded) return;
     final n = ref.read(settingProvider(SettingKeys.displayName));
+    final d = ref.read(settingProvider(SettingKeys.deviceName));
     final h = ref.read(settingProvider(SettingKeys.serverHost));
     final p = ref.read(settingProvider(SettingKeys.serverPort));
-    if (n.isLoading || h.isLoading || p.isLoading) return;
+    if (n.isLoading || d.isLoading || h.isLoading || p.isLoading) return;
     _loaded = true;
     _name.text = n.value ?? '';
+    _device.text = d.value ?? defaultDeviceName();
     _host.text = h.value ?? defaultServerHost;
     _port.text = p.value ?? '$defaultServerPort';
   }
@@ -52,6 +57,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final s = Strings.of(context);
     // Re-evaluate when the settings stream delivers its first values.
     ref.watch(settingProvider(SettingKeys.displayName));
+    ref.watch(settingProvider(SettingKeys.deviceName));
     ref.watch(settingProvider(SettingKeys.serverHost));
     ref.watch(settingProvider(SettingKeys.serverPort));
     _loadOnce();
@@ -78,6 +84,32 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               key: const ValueKey('save-name'),
               onPressed: () =>
                   ref.read(nodeProvider).setDisplayName(_name.text),
+              child: Text(s.t('save')),
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            key: const ValueKey('device-name'),
+            controller: _device,
+            decoration: InputDecoration(
+              labelText: s.t('device_name'),
+              helperText: s.t('device_name_hint'),
+              border: const OutlineInputBorder(),
+            ),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              key: const ValueKey('save-device'),
+              onPressed: () {
+                final v = _device.text.trim();
+                ref
+                    .read(repoProvider)
+                    .setSetting(
+                      SettingKeys.deviceName,
+                      v.isEmpty ? defaultDeviceName() : v,
+                    );
+              },
               child: Text(s.t('save')),
             ),
           ),

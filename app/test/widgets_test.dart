@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kestrel/main.dart';
 import 'package:kestrel/node/node_service.dart';
+import 'package:kestrel/platform.dart';
 import 'package:kestrel/screens/chat_screen.dart';
 import 'package:kestrel/screens/chats_screen.dart';
 import 'package:kestrel/screens/new_chat_screen.dart';
@@ -25,12 +26,13 @@ void main() {
     FakeNode? node,
     Repo? repo,
     Locale locale = const Locale('uk'),
+    Size size = const Size(420, 860),
   }) async {
     tester.platformDispatcher.localeTestValue = locale;
     tester.platformDispatcher.localesTestValue = [locale];
     addTearDown(tester.platformDispatcher.clearLocaleTestValue);
     addTearDown(tester.platformDispatcher.clearLocalesTestValue);
-    tester.view.physicalSize = const Size(420 * 2, 860 * 2);
+    tester.view.physicalSize = size * 2;
     tester.view.devicePixelRatio = 2;
     addTearDown(tester.view.resetPhysicalSize);
     await tester.pumpWidget(
@@ -42,6 +44,33 @@ void main() {
     await tester.pump();
     await tester.pump();
   }
+
+  group('responsive layout', () {
+    testWidgets('narrow: single pane, tap pushes the chat', (tester) async {
+      await show(tester, const ChatsScreen());
+      expect(find.text('Оберіть чат зі списку'), findsNothing);
+      await tester.tap(find.text('Alice'));
+      await tester.pumpAndSettle();
+      expect(find.byType(ChatScreen), findsOneWidget);
+      expect(find.byType(ChatsScreen), findsNothing);
+    });
+
+    testWidgets('wide: list on the left, selected chat on the right', (
+      tester,
+    ) async {
+      await show(tester, const ChatsScreen(), size: const Size(1200, 800));
+      expect(find.text('Оберіть чат зі списку'), findsOneWidget);
+      expect(find.byType(ChatScreen), findsNothing);
+      await tester.tap(find.text('Alice'));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('Оберіть чат зі списку'), findsNothing);
+      expect(find.byType(ChatScreen), findsOneWidget);
+      // the list stays visible next to the open chat
+      expect(find.byType(ChatsScreen), findsOneWidget);
+      expect(find.text('Marichka'), findsOneWidget);
+    });
+  });
 
   group('chats list', () {
     testWidgets('shows chats with identity badges and the TCP indicator', (
@@ -190,6 +219,16 @@ void main() {
   });
 
   group('settings', () {
+    testWidgets('shows a platform default device name', (tester) async {
+      await show(tester, const SettingsScreen());
+      await tester.pump();
+      final f = tester.widget<TextField>(
+        find.byKey(const ValueKey('device-name')),
+      );
+      expect(f.controller!.text, defaultDeviceName());
+      expect(f.controller!.text, isNotEmpty);
+    });
+
     testWidgets('shows address, public key, QR and server defaults', (
       tester,
     ) async {

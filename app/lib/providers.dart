@@ -26,6 +26,18 @@ final accountFilterProvider = NotifierProvider<AccountFilter, String?>(
   AccountFilter.new,
 );
 
+/// Chat open in the right-hand pane of the wide (desktop) layout.
+class SelectedChat extends Notifier<int?> {
+  @override
+  int? build() => null;
+
+  void select(int? id) => state = id;
+}
+
+final selectedChatProvider = NotifierProvider<SelectedChat, int?>(
+  SelectedChat.new,
+);
+
 final chatsProvider = StreamProvider<List<ChatRow>>((ref) {
   final repo = ref.watch(repoProvider);
   final f = ref.watch(accountFilterProvider);

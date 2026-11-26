@@ -12,7 +12,14 @@ abstract class SecretStore {
 
 class SecureSecretStore implements SecretStore {
   SecureSecretStore([FlutterSecureStorage? s])
-    : _s = s ?? const FlutterSecureStorage();
+    : _s =
+          s ??
+          const FlutterSecureStorage(
+            // Unsigned macOS builds have no keychain-access-groups
+            // entitlement, so the data-protection keychain fails (-34018);
+            // use the file-based login keychain instead.
+            mOptions: MacOsOptions(usesDataProtectionKeychain: false),
+          );
   final FlutterSecureStorage _s;
 
   @override

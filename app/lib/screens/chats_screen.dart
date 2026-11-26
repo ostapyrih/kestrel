@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../l10n/strings.dart';
 import '../node/node_service.dart';
+import '../platform.dart';
 import '../providers.dart';
 import '../storage/repo.dart';
 import 'chat_screen.dart';
@@ -18,7 +19,9 @@ class ChatsScreen extends ConsumerWidget {
     final s = Strings.of(context);
     final conn = ref.watch(connectionProvider).value ?? NodeConnection.offline;
     final chats = ref.watch(chatsProvider);
-    return Scaffold(
+    final wide = MediaQuery.sizeOf(context).width >= wideLayoutBreakpoint;
+    final selected = ref.watch(selectedChatProvider);
+    final list = Scaffold(
       appBar: AppBar(
         title: Text(s.t('app_title')),
         actions: [
@@ -43,7 +46,15 @@ class ChatsScreen extends ConsumerWidget {
                       itemCount: list.length,
                       separatorBuilder: (_, _) =>
                           const Divider(height: 1, indent: 72),
-                      itemBuilder: (_, i) => ChatTile(chat: list[i]),
+                      itemBuilder: (_, i) => ChatTile(
+                        chat: list[i],
+                        selected: wide && selected == list[i].id,
+                        onTap: wide
+                            ? () => ref
+                                  .read(selectedChatProvider.notifier)
+                                  .select(list[i].id)
+                            : null,
+                      ),
                     ),
               loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => Center(child: Text('$e')),
@@ -58,6 +69,18 @@ class ChatsScreen extends ConsumerWidget {
           context,
         ).push(MaterialPageRoute<void>(builder: (_) => const NewChatScreen())),
       ),
+    );
+    if (!wide) return list;
+    return Row(
+      children: [
+        SizedBox(width: 360, child: list),
+        const VerticalDivider(width: 1),
+        Expanded(
+          child: selected == null
+              ? Scaffold(body: Center(child: Text(s.t('chat_select'))))
+              : ChatScreen(key: ValueKey('chat-$selected'), chatId: selected),
+        ),
+      ],
     );
   }
 }
@@ -116,13 +139,23 @@ class AccountSwitcher extends ConsumerWidget {
 }
 
 class ChatTile extends StatelessWidget {
-  const ChatTile({super.key, required this.chat});
+  const ChatTile({
+    super.key,
+    required this.chat,
+    this.selected = false,
+    this.onTap,
+  });
   final ChatRow chat;
+  final bool selected;
+
+  /// Overrides the default push navigation (two-pane layout).
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final title = chat.displayTitle;
     return ListTile(
+      selected: selected,
       leading: CircleAvatar(
         child: Text(
           title.isEmpty
@@ -157,9 +190,11 @@ class ChatTile extends StatelessWidget {
           if (chat.unread > 0) Badge(label: Text('${chat.unread}')),
         ],
       ),
-      onTap: () => Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => ChatScreen(chatId: chat.id)),
-      ),
+      onTap:
+          onTap ??
+          () => Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => ChatScreen(chatId: chat.id)),
+          ),
     );
   }
 }
