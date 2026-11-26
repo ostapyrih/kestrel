@@ -146,6 +146,12 @@ Switching modes changes only `settings.bridge_enabled`; no DELETEs on data.
 
 ## 6. Open questions
 
+> **LoRa gateway (answered 2026-11-26):** the owner relies on community-run LoRa transport nodes with internet uplinks to carry traffic between the field and the public Reticulum backbone that `amd1` is connected to. No own gateway is planned. Consequences for Phase 6:
+> - RNode radio parameters must be user-configurable (frequency, BW, SF, CR, TX power), with presets for common community setups.
+> - Path discovery over LoRa goes through path requests forwarded by community gateways (their interface mode and announce caps apply), so the app must tolerate slow discovery and stamp path requests if a gateway enforces stamps.
+> - Bridge traffic over LoRa must stay minimal (the constrained push profile, small acks).
+> - No delivery guarantee: if no community gateway is in range, only Standalone (`B`) to nearby peers works. The UI must make that visible.
+
 1. Is there a physical LoRa gateway (an RNode attached to a transport with a path to `amd1`) and what are its radio parameters?
 2. ~~One identity per device~~ — decided: every device has its own identity `B-x` (see Multi-device). Still open: whether `B-x` also serves as the bridge control key or a separate hidden control identity is used (see §2).
 3. Background notification channel: ntfy (self-hosted) or APNs/FCM?
