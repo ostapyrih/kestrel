@@ -36,14 +36,21 @@ jobs:
     secrets: inherit
 
   # Refresh the AltStore / SideStore source on GitHub Pages once the IPA is uploaded.
+  # deploy-pages cannot find its artifact when run as a reusable workflow inside this
+  # run (it also holds release artifacts), so altstore.yml is dispatched as its own run.
   altstore:
     needs: [release-please, release-app]
     if: needs.release-please.outputs.app_released == 'true'
+    runs-on: ubuntu-latest
     permissions:
+      actions: write
       contents: read
-      pages: write
-      id-token: write
-    uses: ./.github/workflows/altstore.yml
+    steps:
+      - name: Dispatch the AltStore workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run altstore.yml --ref main
 
   release-bridge:
     needs: release-please
