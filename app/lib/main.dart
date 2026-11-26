@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'l10n/strings.dart';
 import 'node/identity_store.dart';
 import 'node/node_service.dart';
+import 'platform.dart';
 import 'providers.dart';
 import 'screens/chats_screen.dart';
 import 'storage/database.dart';
@@ -17,6 +18,7 @@ import 'storage/repo.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  initDatabaseFactory();
   final dir = await getApplicationSupportDirectory();
   final adb = await AppDatabase.open(p.join(dir.path, 'kestrel.db'));
   final repo = Repo(adb);

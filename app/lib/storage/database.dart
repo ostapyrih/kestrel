@@ -141,6 +141,7 @@ abstract final class SettingKeys {
   static const displayName = 'display_name';
   static const serverHost = 'server_host';
   static const serverPort = 'server_port';
+  static const deviceName = 'device_name';
 }
 
 const defaultServerHost = 'rns.ostapyrih.com';
