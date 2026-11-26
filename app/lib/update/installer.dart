@@ -132,8 +132,9 @@ class MacInstaller implements UpdateInstaller {
         mount.path,
         verified.path,
       ]);
-      if (a.exitCode != 0)
+      if (a.exitCode != 0) {
         throw InstallException('hdiutil attach: ${a.stderr}');
+      }
       attached = true;
       final apps = mount
           .listSync()
