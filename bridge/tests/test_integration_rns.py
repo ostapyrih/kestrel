@@ -199,7 +199,7 @@ tcp_port = {tcp_port}
             transport = self.spawn("transport2", transport_args)
             transport.wait_for("TRANSPORT_READY", 60)
             # the reconnect hook fired (a log line distinct from the periodic announce)
-            sidecar.wait_for("announced kestrel.bridge (interface reconnected)", 120)
+            sidecar.wait_for("announce emitted for kestrel.bridge (interface reconnected", 120)
             open(go_file, "w").close()
             client.wait_for("RESULT DONE", 180)
         except AssertionError:
