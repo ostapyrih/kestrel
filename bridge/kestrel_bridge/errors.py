@@ -36,6 +36,7 @@ BLOB_TOO_LARGE = "blob_too_large"
 BLOB_CONFLICT = "blob_conflict"
 SEQ_CONFLICT = "seq_conflict"
 QUOTA_EXCEEDED = "quota_exceeded"
+VAULT_IN_USE = "vault_in_use"
 
 # Errors after which nothing was executed upstream: the phone may retry with the same cmd_id.
 RETRYABLE = frozenset({UPSTREAM_UNAVAILABLE, UPSTREAM_AUTH, RATE_LIMITED})

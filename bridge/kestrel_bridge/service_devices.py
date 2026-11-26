@@ -1,7 +1,7 @@
 """Handlers for /devices/* and /vault/* (mixed into Service). All of them need an RNS Link."""
 from __future__ import annotations
 
-from . import errors
+from . import codec, errors
 from .devices import (pairing_sign_message, parse_pairing_payload,
                       validate_name, validate_roles, verify_signature)
 from .errors import BridgeError
@@ -22,7 +22,8 @@ class DeviceMixin:
 
     # ---- routing -----------------------------------------------------------------------------
     def _device_or_vault(self, path: str, args: dict, ctx) -> dict:
-        admin = {"/devices/approve", "/devices/rename", "/devices/set_role", "/devices/revoke"}
+        admin = {"/devices/approve", "/devices/rename", "/devices/set_role", "/devices/revoke",
+                 "/devices/invite"}
         if path in admin and not self.rate_ok("device_admin", ctx.device_id,
                                               self.cfg.limits.device_admin_rate_per_minute):
             raise BridgeError(errors.RATE_LIMITED, "too many device administration requests", retry_after=60)
@@ -33,6 +34,7 @@ class DeviceMixin:
             "/devices/list": self._devices_list, "/devices/approve": self._devices_approve,
             "/devices/rename": self._devices_rename, "/devices/set_role": self._devices_set_role,
             "/devices/revoke": self._devices_revoke,
+            "/devices/invite": self._devices_invite, "/devices/redeem": self._devices_redeem_trusted,
             "/vault/put": self._vault_put, "/vault/list": self._vault_list, "/vault/get": self._vault_get,
             "/vault/key": self._vault_key, "/vault/set_keys": self._vault_set_keys,
         }[path]
@@ -92,6 +94,28 @@ class DeviceMixin:
             raise
         self.registry.emit("added", dev)
         return {"device": self._wire_device(dev)}
+
+    def _devices_invite(self, args: dict, ctx) -> dict:
+        if self.registry.trusted(ctx.device_id) is None:
+            raise BridgeError(errors.DEVICE_REVOKED, "the inviting device is not trusted")
+        return self.invites.create(ctx.device_id)
+
+    def _devices_redeem_trusted(self, args: dict, ctx) -> dict:
+        raise BridgeError(errors.DEVICE_EXISTS, "this device is already paired", device_id=ctx.device_id)
+
+    async def redeem_unknown(self, who: str, public_key: str, args) -> dict:
+        """``/devices/redeem`` from a Link identified with an unknown key (the only path such a Link may call).
+        Returns a wire response; on success the device exists and ``device_added`` was pushed."""
+        try:
+            if args is None:
+                args = {}
+            if not isinstance(args, dict):
+                raise BridgeError(errors.BAD_REQUEST, "request must be a map")
+            dev = self.invites.redeem(who, public_key, args)
+            self.registry.emit("added", dev)
+            return codec.ok({"device": self._wire_device(dev)})
+        except BridgeError as e:
+            return e.to_wire()
 
     def _devices_rename(self, args: dict, ctx) -> dict:
         did = _device_id(args, default=ctx.device_id)
