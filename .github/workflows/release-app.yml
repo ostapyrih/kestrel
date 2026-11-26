@@ -247,21 +247,7 @@ jobs:
           Categories=Network;InstantMessaging;
           Terminal=false
           DESKTOP
-          # Placeholder icon (solid teal) until the app has a real one.
-          python3 - <<'PY'
-          import struct, zlib
-          w = h = 256
-          row = b"\x00" + bytes([0, 150, 136]) * w
-          raw = row * h
-          def chunk(t, d):
-              c = struct.pack(">I", len(d)) + t + d
-              return c + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
-          png = (b"\x89PNG\r\n\x1a\n"
-                 + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
-                 + chunk(b"IDAT", zlib.compress(raw))
-                 + chunk(b"IEND", b""))
-          open("AppDir/kestrel.png", "wb").write(png)
-          PY
+          cp ../assets/icon/kestrel-512.png AppDir/kestrel.png
           ARCH=x86_64 "$RUNNER_TEMP/appimagetool" --appimage-extract-and-run AppDir \
             "../dist/kestrel-${VERSION}-linux-x86_64.AppImage"
       - uses: actions/upload-artifact@v4
