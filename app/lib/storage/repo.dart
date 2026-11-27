@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:sqflite/sqflite.dart';
 
+import '../nomadnet/browser_sync.dart';
 import 'database.dart';
 
 /// Delivery status shown on a message (docs/PLAN.md section 2.3).
@@ -627,6 +628,7 @@ class Repo {
       await txn.rawDelete('DELETE FROM vault_seen');
       await txn.rawDelete('DELETE FROM vault_messages');
       await txn.rawDelete('DELETE FROM vault_chats');
+      await BrowserSyncStore.markAllDirty(txn);
       for (final e in {
         SettingKeys.vaultGen: '$gen',
         SettingKeys.vaultLastSeq: '0',

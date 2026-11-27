@@ -182,6 +182,7 @@ HelloResult helloFor(
   bool vaultInUse = false,
   List<String> roles = const [],
   List<String> capabilities = const ['lxmf', 'rrc'],
+  Map<String, Object?> limits = const {},
 }) => HelloResult.fromMap({
   'protocol_version': 2,
   'min_protocol_version': 2,
@@ -194,7 +195,7 @@ HelloResult helloFor(
   'capabilities': capabilities,
   'compat': {'ok': true, 'meshchatx_version': '4.12.0', 'api_version': 1},
   'vault': {'key_epoch': 1, 'in_use': vaultInUse, 'used_bytes': 0},
-  'limits': {},
+  'limits': limits,
 });
 
 Map<String, Object?> convMap(

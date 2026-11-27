@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:sqflite/sqflite.dart';
 
+import '../nomadnet/browser_sync.dart';
 import '../storage/database.dart';
 import '../storage/repo.dart';
 
@@ -63,9 +64,17 @@ const deleteMark = 'delete_chat';
 /// SQL of the vault sync. Everything here only ever writes the vault
 /// tables; the user's own chats and messages are read, never changed.
 class VaultStore {
-  VaultStore(this.repo);
+  VaultStore(this.repo) : browser = BrowserSyncStore(repo.adb);
   final Repo repo;
+  final BrowserSyncStore browser;
   Database get _db => repo.adb.db;
+
+  /// History visits are uploaded in batches: once the oldest waiting visit
+  /// is this old (ms), or at once when [flushHistory] is set (app pause).
+  int historyBatchMs = 3 * 60 * 1000;
+  bool flushHistory = false;
+
+  int? get _historyMinAge => flushHistory ? 0 : historyBatchMs;
 
   // --------------------------------------------------------------- settings
 
@@ -175,7 +184,13 @@ LIMIT ?''',
 
   /// Anything to upload: messages or queued chat deletions.
   Future<bool> hasUploadWork() async =>
-      (await candidates(1)).isNotEmpty || (await nextDelete()) != null;
+      (await candidates(1)).isNotEmpty ||
+      (await nextDelete()) != null ||
+      (await browserOps(1)).isNotEmpty;
+
+  /// Browser records (and due history visits) waiting to be uploaded.
+  Future<List<PendingOp>> browserOps(int limit) =>
+      browser.pending(limit: limit, historyMinAgeMs: _historyMinAge);
 
   Future<PendingBlob?> pending() async {
     final r = await _db.query('vault_pending', where: 'id = 1');
@@ -209,7 +224,12 @@ LIMIT ?''',
   Future<void> completePending(PendingBlob p) async {
     final g = await gen();
     await _db.transaction((txn) async {
+      final sent = await BrowserSyncStore.completeMarks(txn, p.marks);
+      if (sent > 0) {
+        await _bump(txn, SettingKeys.browserSent, sent);
+      }
       for (final m in p.marks) {
+        if (m[0] is String && m[0] != deleteMark) continue;
         if (m[0] == deleteMark) {
           await txn.delete(
             'vault_delete_out',
@@ -232,6 +252,31 @@ LIMIT ?''',
       }, conflictAlgorithm: ConflictAlgorithm.replace);
       await txn.delete('vault_pending');
     });
+  }
+
+  Future<void> _bump(DatabaseExecutor x, String key, int by) async {
+    final r = await x.query('settings', where: 'key = ?', whereArgs: [key]);
+    final v = r.isEmpty ? 0 : int.tryParse(r.first['value']! as String) ?? 0;
+    await x.insert('settings', {
+      'key': key,
+      'value': '${v + by}',
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  /// Browser records sent and received by this device (diagnostics).
+  Future<(int, int)> browserCounts() async => (
+    await _int(SettingKeys.browserSent),
+    await _int(SettingKeys.browserReceived),
+  );
+
+  /// Merges the ops of a `browser` blob of another device.
+  Future<int> applyBrowser(List<Object?> ops) async {
+    final n = await browser.apply(ops);
+    if (n > 0) {
+      await _bump(_db, SettingKeys.browserReceived, n);
+      repo.adb.notify();
+    }
+    return n;
   }
 
   // ------------------------------------------------------------ downloading

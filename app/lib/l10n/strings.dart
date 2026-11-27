@@ -268,6 +268,8 @@ class Strings {
     'vault_full_resync': 'Повна повторна синхронізація',
     'vault_diag_title': 'Діагностика',
     'vault_diag_uploaded': 'Вивантажено блобів із цього пристрою: {n}',
+    'vault_diag_browser':
+        'Дані браузера: надіслано {sent}, отримано {received}',
     'vault_diag_downloaded': 'Отримано від «{device}»: {n}',
     'vault_diag_none': 'Нічого не отримано від інших пристроїв',
     'vault_diag_error': 'Остання помилка: {err}',
@@ -503,6 +505,7 @@ class Strings {
     'vault_full_resync': 'Full resync',
     'vault_diag_title': 'Diagnostics',
     'vault_diag_uploaded': 'Blobs uploaded from this device: {n}',
+    'vault_diag_browser': 'Browser data: {sent} sent, {received} received',
     'vault_diag_downloaded': 'Received from "{device}": {n}',
     'vault_diag_none': 'Nothing received from other devices',
     'vault_diag_error': 'Last error: {err}',

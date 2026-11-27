@@ -209,7 +209,10 @@ void main() {
     expect(await svc.store.chatIdForPeer(peer), isNull);
     expect(await svc.store.chatIdForPeer(peerKeep), isNotNull);
     expect(await repo.remoteChats(), isEmpty);
-    expect(await repo.getSetting(SettingKeys.syncSemanticsVersion), '1');
+    expect(
+      await repo.getSetting(SettingKeys.syncSemanticsVersion),
+      '$kSyncSemanticsVersion',
+    );
 
     // the next start does not repeat the catch-up
     syncCursors.clear();

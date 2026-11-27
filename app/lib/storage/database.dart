@@ -316,6 +316,23 @@ CREATE TABLE a_tombstones (
   before_ts INTEGER NOT NULL
 )''',
   ]),
+  // Browser data sync (Phase N2, docs/bridge-protocol.md 9.5 kind `browser`).
+  // `browser_sync` holds, per synced key (`b:<url>`, `f:<node>`,
+  // `s:<node>:<setting>`, `h:clear`), the winning last-writer-wins record:
+  // timestamp (ms), tombstone flag, the op as canonical JSON and whether it
+  // still has to be uploaded. Tombstones stay forever. `nomad_history.synced`
+  // is 0 until the visit was uploaded (or came from another device).
+  Migration(10, [
+    '''
+CREATE TABLE browser_sync (
+  key TEXT PRIMARY KEY,
+  ts INTEGER NOT NULL,
+  deleted INTEGER NOT NULL DEFAULT 0,
+  op TEXT NOT NULL,
+  dirty INTEGER NOT NULL DEFAULT 1
+)''',
+    'ALTER TABLE nomad_history ADD COLUMN synced INTEGER NOT NULL DEFAULT 0',
+  ]),
 ];
 
 /// Version of the SYNC SEMANTICS this app implements (what the bridge change
@@ -329,7 +346,13 @@ CREATE TABLE a_tombstones (
 /// connection does a one-time full catch-up (bridge cursor to 0, vault replay
 /// from 0; known records are deduplicated, tombstones applied). Documented in
 /// docs/bridge-protocol.md, "Client guidance".
-const int kSyncSemanticsVersion = 1;
+///
+/// Version 2: vault blob kind `browser` (Phase N2). An app that predates it
+/// skips such blobs but still advances its vault cursor, so after it is
+/// updated the bookmarks, favourites, settings and history of the other
+/// devices would never arrive: the bump makes it replay the vault once
+/// (browser ops are idempotent and order independent).
+const int kSyncSemanticsVersion = 2;
 
 /// The one statement that may delete chats outside the user's own delete
 /// flows: only LXMF chats with zero messages and zero outbox rows.
@@ -385,6 +408,12 @@ abstract final class SettingKeys {
   static const vaultUsedBytes = 'vault_used_bytes';
   static const vaultQuotaBytes = 'vault_quota_bytes';
   static const vaultQuotaFull = 'vault_quota_full';
+
+  // Browser data sync: the one-time backfill of the existing bookmarks,
+  // favourites and settings into `browser_sync`, and diagnostics counters.
+  static const browserBackfilled = 'browser_sync_backfilled';
+  static const browserSent = 'browser_sync_sent';
+  static const browserReceived = 'browser_sync_received';
 }
 
 const defaultServerHost = 'rns.ostapyrih.com';
