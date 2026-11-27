@@ -11,6 +11,7 @@ import 'add_device_screen.dart';
 import 'bridge_setup_screen.dart';
 import 'bridge_widgets.dart';
 import '../update/update_ui.dart';
+import '../desktop/desktop_settings.dart';
 import 'devices_screen.dart';
 import 'vault_widgets.dart';
 
@@ -301,6 +302,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const SizedBox(height: 8),
           Text(s.t('bridge_note'), style: text.bodySmall),
           const UpdateSettingsSection(),
+          const DesktopSettingsSection(),
         ],
       ),
     );

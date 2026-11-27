@@ -183,7 +183,7 @@ class UpdateService {
     FetchBytes? fetch,
     DownloadFile? download,
     this.publicKeyB64 = releasePublicKeyB64,
-    this.exitApp = _exit,
+    this.exitApp = defaultExit,
     this.checkInterval = const Duration(hours: 6),
   }) : _fetch = fetch ?? httpFetchBytes,
        _download = download ?? httpDownloadFile,
@@ -198,14 +198,14 @@ class UpdateService {
       linuxAppImage = false,
       autoCheckEnabled = null,
       publicKeyB64 = releasePublicKeyB64,
-      exitApp = _exit,
+      exitApp = defaultExit,
       checkInterval = const Duration(hours: 6),
       _fetch = httpFetchBytes,
       _download = httpDownloadFile,
       _state = const UpdateState(),
       _disabled = true;
 
-  static void _exit() => exit(0);
+  static void defaultExit() => exit(0);
 
   final AppVersion? currentVersion;
   final UpdatePlatform? platform;

@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' show AppExitResponse, AppExitType;
 
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:kestrel_rns/kestrel_rns.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:nativeapi/nativeapi.dart' as napi;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -12,6 +15,10 @@ import 'bridge/bridge_service.dart';
 import 'l10n/strings.dart';
 import 'node/identity_store.dart';
 import 'node/node_service.dart';
+import 'desktop/desktop_settings.dart';
+import 'desktop/desktop_shell.dart';
+import 'desktop/desktop_strings.dart';
+import 'desktop/native_desktop.dart';
 import 'nomadnet/nomad_providers.dart';
 import 'nomadnet/nomad_service.dart';
 import 'nomadnet/nomad_store.dart';
@@ -56,8 +63,48 @@ Future<void> main() async {
   );
   node.bridge = bridge;
   final nomad = NomadService(node: node, store: NomadStore(adb));
-  final updates = await createUpdateService(repo)
-    ..start();
+  // Closing the window hides it to the tray; every real exit (tray menu,
+  // updater, setting off, Cmd+Q) goes through shutdown() and closes the
+  // database cleanly.
+  Future<void>? shuttingDown;
+  Future<void> shutdown() => shuttingDown ??= () async {
+    for (final step in <Future<void> Function()>[
+      bridge.vault.flushHistory,
+      bridge.stop,
+      node.stop,
+      adb.close,
+    ]) {
+      try {
+        await step().timeout(const Duration(seconds: 2));
+      } catch (e) {
+        debugPrint('shutdown step failed: $e');
+      }
+    }
+  }();
+  final shell = DesktopShell(
+    desktop: isDesktop,
+    window: NativeWindowHost(),
+    tray: NativeTrayHost(),
+    closeToTray: () async =>
+        closeToTrayFrom(await repo.getSetting(closeToTrayKey)),
+    shutdown: shutdown,
+    exitProcess: () async {
+      await ServicesBinding.instance.exitApplication(AppExitType.required);
+    },
+    labels: () {
+      final lang = deviceLang();
+      return TrayLabels(
+        open: desktopText(lang, 'tray_open'),
+        quit: desktopText(lang, 'tray_quit'),
+        tooltip: (n) => n > 0
+            ? desktopText(lang, 'tray_tooltip_unread', {'n': '$n'})
+            : desktopText(lang, 'tray_tooltip'),
+      );
+    },
+  );
+  final updates =
+      await createUpdateService(repo, exitApp: () => unawaited(shell.quit()))
+        ..start();
   // The UI comes up immediately; the node starts in the background and the
   // connection indicator reports progress.
   unawaited(
@@ -71,6 +118,36 @@ Future<void> main() async {
     onHide: () => unawaited(bridge.vault.flushHistory()),
     onPause: () => unawaited(bridge.vault.flushHistory()),
   );
+  if (isDesktop) {
+    // exits the platform asks for (Cmd+Q, session end) close the database too
+    AppLifecycleListener(
+      onExitRequested: () async {
+        await shutdown();
+        return AppExitResponse.exit;
+      },
+      onDetach: () => unawaited(shutdown()),
+    );
+    unawaited(
+      shell.start().then((_) {
+        unawaited(
+          repo
+              .watch(() async {
+                final chats = await repo.chats();
+                return chats.fold<int>(0, (a, c) => a + c.unread);
+              })
+              .forEach((n) => unawaited(shell.setUnread(n))),
+        );
+        if (Platform.isMacOS) {
+          // Dock click on a hidden window brings it back
+          napi.Application.instance.addListener((e) {
+            if (e is napi.ApplicationActivatedEvent) {
+              unawaited(shell.showIfHidden());
+            }
+          });
+        }
+      }),
+    );
+  }
   runApp(
     ProviderScope(
       overrides: [

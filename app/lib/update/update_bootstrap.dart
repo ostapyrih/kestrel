@@ -12,7 +12,10 @@ import 'version.dart';
 
 /// Builds the updater for this platform. Mobile gets an inert service (iOS
 /// updates through AltStore, Android through Obtainium).
-Future<UpdateService> createUpdateService(Repo repo) async {
+Future<UpdateService> createUpdateService(
+  Repo repo, {
+  void Function()? exitApp,
+}) async {
   if (!isDesktop) return UpdateService.disabled();
   final info = await PackageInfo.fromPlatform();
   final current = AppVersion.tryParse(info.version);
@@ -23,6 +26,8 @@ Future<UpdateService> createUpdateService(Repo repo) async {
     platform: platform,
     tempDir: await getTemporaryDirectory(),
     installer: installerForCurrentPlatform(),
+    // a real quit (flushes and closes the database), never a hide
+    exitApp: exitApp ?? UpdateService.defaultExit,
     linuxAppImage: Platform.environment['APPIMAGE'] != null,
     autoCheckEnabled: () async =>
         await repo.getSetting(updateAutoCheckKey) != '0',

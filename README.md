@@ -100,7 +100,23 @@ The source is regenerated from the GitHub releases after every app release (`too
 Each install generates its own identity (a desktop install is its own identity B).
 RNode (LoRa) support is planned: BLE on mobile, USB serial on desktop.
 
-Linux build dependencies: `clang cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev liblzma-dev`.
+### Tray and background running (desktop)
+
+Closing the main window hides Kestrel to the system tray / menu bar and keeps it running (network, sync,
+incoming messages). Open it again from the tray icon (left click on Windows, the menu on Linux and macOS), by
+launching Kestrel again (a second launch shows the running window instead of starting another process), or
+with a Dock click on macOS. **Quit** from the tray menu really exits. Settings, **Close to tray**, turns this
+off (closing the window then quits); it is on by default and absent on mobile.
+
+- Windows: tray icon in the notification area; per-user installer and in-app updates are unaffected (the updater quits the app for real).
+- macOS: menu-bar icon (template image) and a Dock badge with the unread count; Cmd+Q quits.
+- Linux: the tray is a StatusNotifierItem. It needs a panel that hosts them: KDE Plasma, XFCE, most others;
+  GNOME needs the [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/)
+  (`gnome-shell-extension-appindicator`, enabled by default on Ubuntu). No `libayatana-appindicator` is needed.
+  The check uses `dbus-send` (package `dbus` / `dbus-bin`). If no tray host is found, closing the window
+  **minimizes** it instead of hiding, so it cannot get lost. Build dependencies additionally need `libx11-dev libxi-dev`.
+
+Linux build dependencies: `clang cmake ninja-build pkg-config libgtk-3-dev libx11-dev libxi-dev libsecret-1-dev liblzma-dev`.
 
 ## Repository layout
 
