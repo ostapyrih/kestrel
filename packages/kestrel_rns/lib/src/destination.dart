@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'announce_timebase.dart';
 import 'crypto/hashes.dart';
 import 'crypto/random.dart';
 import 'identity.dart';
@@ -54,6 +55,14 @@ class RequestHandlerEntry {
   final RequestPolicy policy;
   final List<Uint8List> allowedList;
   final bool autoCompress;
+}
+
+/// One ratchet private key with its creation time (unix seconds, 0 =
+/// unknown); the unit of [Destination.exportRatchets] / `mergeRatchets`.
+class RatchetEntry {
+  RatchetEntry(this.key, this.createdAt);
+  final Uint8List key;
+  final int createdAt;
 }
 
 /// An RNS destination: name + aspects, optionally bound to an [Identity].
@@ -146,6 +155,23 @@ class Destination {
   bool deregisterRequestHandler(String path) =>
       requestHandlers.remove(_hex(truncatedHash(utf8.encode(path)))) != null;
 
+  // ---- device-group announce control (docs/spikes/device-group.md) ----
+
+  /// A silent destination is never announced and never answers path
+  /// requests: in a device group only the elected announcer is audible; any
+  /// other device holding the same identity must not hijack the path
+  /// (stock RNS answers every path request for a registered destination,
+  /// Transport.py:4018). It still accepts and decrypts traffic that reaches it.
+  bool silent = false;
+
+  /// Group-wide monotonic announce timebase; when set, announces use
+  /// `max(now, last + 1)` as their emission time.
+  AnnounceTimebase? announceTimebase;
+
+  /// Whether this device may create new ratchets. Only the announcer rotates
+  /// (two rotating devices would announce different "newest" ratchets).
+  bool ratchetRotationAllowed = true;
+
   /// Retained private ratchet keys, newest first (null = ratchets disabled).
   List<Uint8List>? ratchets;
   bool enforceRatchets = false;
@@ -153,25 +179,125 @@ class Destination {
   int ratchetIntervalSeconds = 30 * 60; // Destination.RATCHET_INTERVAL
   int _latestRatchetTime = 0;
 
+  /// Creation time (unix seconds) per ratchet, by hex of the private key;
+  /// 0 = unknown (keys from older versions or stock RNS files).
+  final Map<String, int> _ratchetTimes = {};
+
   /// Called whenever [ratchets] changed so the owner can persist them.
   FutureOr<void> Function(List<Uint8List> ratchets)? onRatchetsChanged;
 
-  /// Enables ratchets, optionally with previously persisted keys.
-  void enableRatchets([List<Uint8List>? existing]) {
+  /// Enables ratchets, optionally with previously persisted keys (newest
+  /// first) and their creation times (same order, 0 = unknown).
+  void enableRatchets([List<Uint8List>? existing, List<int>? times]) {
     ratchets = [...?existing];
+    _ratchetTimes.clear();
+    if (existing != null && times != null) {
+      for (var i = 0; i < existing.length && i < times.length; i++) {
+        _ratchetTimes[_hex(existing[i])] = times[i];
+      }
+    }
+  }
+
+  /// Creation times parallel to [ratchets] (for persistence).
+  List<int> get ratchetCreationTimes => [
+        for (final k in ratchets ?? const <Uint8List>[])
+          _ratchetTimes[_hex(k)] ?? 0,
+      ];
+
+  /// The ratchet list as a portable, newest-first snapshot.
+  List<RatchetEntry> exportRatchets() => [
+        for (final k in ratchets ?? const <Uint8List>[])
+          RatchetEntry(Uint8List.fromList(k), _ratchetTimes[_hex(k)] ?? 0),
+      ];
+
+  /// Merges a sibling's ratchets into the local list. Never overwrites and
+  /// never drops a local key: the result is the union by key value, ordered
+  /// newest first by creation time (unknown times keep their relative order
+  /// and sort after timed keys; ties favour local keys), capped at
+  /// [retainedRatchets] (oldest dropped, as Python). Returns the number of
+  /// new keys. A ratchet created by any member within the rotation interval
+  /// also postpones local rotation.
+  Future<int> mergeRatchets(Iterable<RatchetEntry> incoming) async {
+    final r = ratchets;
+    if (r == null) throw StateError('ratchets are not enabled');
+    final byKey = <String, ({Uint8List key, int time, int order})>{};
+    var order = 0;
+    for (final k in r) {
+      byKey[_hex(k)] = (
+        key: k,
+        time: _ratchetTimes[_hex(k)] ?? 0,
+        order: order++,
+      );
+    }
+    var added = 0;
+    var changed = false;
+    for (final e in incoming) {
+      if (e.key.length != 32) continue;
+      final h = _hex(e.key);
+      final cur = byKey[h];
+      if (cur == null) {
+        byKey[h] = (
+          key: Uint8List.fromList(e.key),
+          time: e.createdAt,
+          order: order++,
+        );
+        added++;
+        changed = true;
+      } else if (e.createdAt > cur.time) {
+        byKey[h] = (key: cur.key, time: e.createdAt, order: cur.order);
+        changed = true;
+      }
+    }
+    if (!changed) return 0;
+    final merged = byKey.values.toList()
+      ..sort((a, b) {
+        final c = b.time.compareTo(a.time);
+        return c != 0 ? c : a.order.compareTo(b.order);
+      });
+    if (merged.length > retainedRatchets) {
+      merged.removeRange(retainedRatchets, merged.length);
+    }
+    r
+      ..clear()
+      ..addAll(merged.map((v) => v.key));
+    _ratchetTimes.clear();
+    for (final v in merged) {
+      _ratchetTimes[_hex(v.key)] = v.time;
+      if (v.time > _latestRatchetTime) _latestRatchetTime = v.time;
+    }
+    await onRatchetsChanged?.call(r);
+    return added;
+  }
+
+  /// The newest ratchet public key, or null without ratchets.
+  Future<Uint8List?> currentRatchetPublic() async {
+    final r = ratchets;
+    if (r == null || r.isEmpty) return null;
+    return Identity.ratchetPublicBytes(r.first);
   }
 
   /// Rotates the ratchet if the interval elapsed and returns the newest
   /// ratchet public key (Destination.rotate_ratchets, Destination.py:244).
-  Future<Uint8List> rotateRatchets(
-      {int? nowSeconds, RandomBytes? random}) async {
+  Future<Uint8List> rotateRatchets({
+    int? nowSeconds,
+    RandomBytes? random,
+  }) async {
     final r = ratchets;
     if (r == null) throw StateError('ratchets are not enabled');
+    if (!ratchetRotationAllowed) {
+      if (r.isEmpty) throw StateError('no ratchet and rotation not allowed');
+      return Identity.ratchetPublicBytes(r.first);
+    }
     final now = nowSeconds ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
     if (r.isEmpty || now > _latestRatchetTime + ratchetIntervalSeconds) {
-      r.insert(0, Identity.generateRatchet(random: random));
+      final k = Identity.generateRatchet(random: random);
+      r.insert(0, k);
+      _ratchetTimes[_hex(k)] = now;
       _latestRatchetTime = now;
       if (r.length > retainedRatchets) {
+        for (final x in r.sublist(retainedRatchets)) {
+          _ratchetTimes.remove(_hex(x));
+        }
         r.removeRange(retainedRatchets, r.length);
       }
       await onRatchetsChanged?.call(r);
@@ -248,8 +374,10 @@ class Destination {
     } else if (identityOrHash is List<int> && identityOrHash.length == 16) {
       material.add(identityOrHash);
     } else if (identityOrHash != null) {
-      throw ArgumentError('Invalid material supplied for destination hash '
-          'calculation');
+      throw ArgumentError(
+        'Invalid material supplied for destination hash '
+        'calculation',
+      );
     }
     return truncatedHash(material.toBytes());
   }

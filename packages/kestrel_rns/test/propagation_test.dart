@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:kestrel_rns/kestrel_rns.dart';
 import 'package:test/test.dart';
 
+import 'support/it_support.dart' show until;
 import 'support/memory_interface.dart';
 
 const _noStamps =
@@ -390,6 +391,65 @@ void main() {
       expect(fake.lastLimitKb, 1234);
     });
 
+    test(
+        'one message arriving opportunistically and via the node is '
+        'delivered once (dedupe by message hash across paths)', () async {
+      await setUp0();
+      final sender = senderId ??= await Identity.generate();
+      final m = LXMessage(
+        destinationHash: LXMessage.deliveryHash(me),
+        sourceHash: LXMessage.deliveryHash(sender),
+        content: 'everywhere',
+        timestamp: 1700000123.0,
+      );
+      await m.pack(sender);
+      final seen = <String>[];
+      router.incoming.listen((r) => seen.add(r.message.contentAsString));
+      // Opportunistic copy straight to the router's destination.
+      await router.announce();
+      await until(() => rnsNode.transport.hasPath(router.address));
+      final out = rnsNode
+          .recallDestination(router.address, 'lxmf', const ['delivery'])!;
+      await rnsNode.transport
+          .sendData(out, m.packed!.sublist(16), createReceipt: false);
+      await until(() => seen.isNotEmpty);
+      // The same message (same hash, other encryption) sits on the node.
+      final pp = await m.propagationPacked(me, now: 1700000123);
+      final data = Uint8List.fromList(pp.lxmfData);
+      fake.messages[toHex(sha256(data))] = data;
+      final r = await router.syncInbox();
+      expect(r.duplicates, 1, reason: '$r');
+      expect(r.delivered, 0);
+      expect(r.purged, 1);
+      expect(seen, ['everywhere']);
+    });
+
+    test('inboxSyncEnabled = false: no automatic sync either', () async {
+      await setUp0(
+        announceNode: false,
+        config: const LxmRouterConfig(
+          processInterval: Duration(milliseconds: 100),
+          propagationSyncInterval: Duration(milliseconds: 200),
+          autoSyncMinGap: Duration(milliseconds: 10),
+        ),
+      );
+      router.inboxSyncEnabled = false;
+      await stored('mine to forward');
+      final heard = router.propagationUpdates.first;
+      await fake.announce();
+      await heard.timeout(const Duration(seconds: 5));
+      await Future<void>.delayed(const Duration(seconds: 1));
+      expect(fake.listCalls, 0);
+      expect(fake.messages, hasLength(1));
+      router.inboxSyncEnabled = true;
+      final got = router.incoming.first;
+      expect(
+          (await got.timeout(const Duration(seconds: 10)))
+              .message
+              .contentAsString,
+          'mine to forward');
+    });
+
     test('no node known / disabled / multi-device hook', () async {
       await setUp0(announceNode: false);
       expect((await router.syncInbox()).error, LxmSyncError.noNode);
@@ -441,7 +501,8 @@ void main() {
       expect(router.activeNode, auto);
     });
 
-    test('default node: used when heard, even if a nearer one exists', () async {
+    test('default node: used when heard, even if a nearer one exists',
+        () async {
       await setUp0();
       final heard = router.propagationNodes.single.hash;
       router.setDefaultNode(heard);

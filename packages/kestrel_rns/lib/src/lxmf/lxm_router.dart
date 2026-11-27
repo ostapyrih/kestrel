@@ -492,7 +492,14 @@ class LxmRouter {
     destination.defaultAppData = _announceData();
   }
 
-  /// Announces the delivery destination (LXMRouter.announce).
+  /// Device-group hook: a silent router never announces and never answers
+  /// path requests (only the elected announcer is audible). Inbound traffic
+  /// that reaches it is still delivered.
+  bool get silent => destination.silent;
+  set silent(bool v) => destination.silent = v;
+
+  /// Announces the delivery destination (LXMRouter.announce). Returns false
+  /// without sending when [silent].
   Future<bool> announce() =>
       rns.announce(destination, appData: _announceData());
 

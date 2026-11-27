@@ -70,9 +70,11 @@ class Reticulum {
   List<RnsInterface> get interfaces => List.unmodifiable(transport.interfaces);
 
   Future<void> addInterface(RnsInterface i) async {
-    _ifaceSubs.add(i.stateChanges.listen((s) {
-      if (!_ifaceEvents.isClosed) _ifaceEvents.add(InterfaceEvent(i, s));
-    }));
+    _ifaceSubs.add(
+      i.stateChanges.listen((s) {
+        if (!_ifaceEvents.isClosed) _ifaceEvents.add(InterfaceEvent(i, s));
+      }),
+    );
     await transport.addInterface(i);
   }
 
@@ -129,9 +131,14 @@ class Reticulum {
       for (final e in (stored?['ratchets'] as List<Object?>? ?? const []))
         base64.decode(e! as String),
     ];
-    d.enableRatchets(list);
+    final times = <int>[
+      for (final e in (stored?['times'] as List<Object?>? ?? const []))
+        (e as num).toInt(),
+    ];
+    d.enableRatchets(list, times);
     d.onRatchetsChanged = (r) => storage.write(key, {
           'ratchets': [for (final x in r) base64.encode(x)],
+          'times': d.ratchetCreationTimes,
         });
   }
 

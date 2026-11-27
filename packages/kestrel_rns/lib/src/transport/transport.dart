@@ -131,6 +131,11 @@ class Transport {
   final TransportConfig config;
   final RandomBytes _random;
 
+  /// Wall clock in unix seconds used for announce emission times (tests and
+  /// clock-skew simulations replace it).
+  int Function() clockSeconds =
+      () => DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
   /// This instance's transport id, sent in path requests (Transport.identity).
   late final Uint8List instanceHash;
   late final Destination pathRequestDestination;
@@ -467,9 +472,17 @@ class Transport {
     if (destination.direction != DestinationDirection.inbound) {
       throw ArgumentError('Only IN destination types can be announced');
     }
+    // A silent destination (device group, not the announcer) is never
+    // announced, path responses included.
+    if (destination.silent) return false;
     Uint8List? ratchet;
-    if (destination.ratchets != null) {
-      ratchet = await destination.rotateRatchets();
+    final rs = destination.ratchets;
+    if (rs != null) {
+      if (rs.isEmpty && !destination.ratchetRotationAllowed) {
+        ratchet = null;
+      } else {
+        ratchet = await destination.rotateRatchets(nowSeconds: clockSeconds());
+      }
     }
     final app = appData ?? destination.defaultAppData;
     Uint8List? stamp;
@@ -481,6 +494,9 @@ class Transport {
       destination,
       appData: app,
       ratchetPublic: ratchet,
+      timestamp:
+          destination.announceTimebase?.next(nowSeconds: clockSeconds()) ??
+              clockSeconds(),
       pathResponse: pathResponse,
       stamp: stamp,
       linkCost: destination.linkCost,
@@ -530,6 +546,45 @@ class Transport {
             Future<void>.delayed(Duration.zero, () => _stampJobs.remove(key)));
       }
     });
+  }
+
+  /// The destination's announce stamp if one exists (in memory or persisted)
+  /// and is valid for the configured target; never generates one. The stamp
+  /// material is `hash + public_key + name_hash`, so the stamp is identical on
+  /// every device holding the same identity and can be copied instead of
+  /// regenerated (device group, docs/spikes/device-group.md section 8).
+  Future<Uint8List?> exportStamp(Destination d) async {
+    final wb = Stamps.destinationMaterial(
+        d.hash, d.identity!.publicKey, d.nameHash);
+    final target = config.announceStampValue;
+    final cached = d.stamp;
+    if (cached != null && Stamps.isValid(cached, target, wb)) return cached;
+    final stored = await storage.read('stamp/${_hex(d.hash)}');
+    final s = _b64(stored?['stamp']);
+    if (s != null &&
+        s.length == Stamps.stampLength &&
+        Stamps.isValid(s, target, wb)) {
+      return s;
+    }
+    return null;
+  }
+
+  /// Adopts a stamp copied from a sibling device. Returns false (and changes
+  /// nothing) if it is not a valid stamp for [d] at the configured target.
+  Future<bool> importStamp(Destination d, List<int> stamp) async {
+    if (stamp.length != Stamps.stampLength) return false;
+    final wb = Stamps.destinationMaterial(
+        d.hash, d.identity!.publicKey, d.nameHash);
+    final s = Uint8List.fromList(stamp);
+    if (!Stamps.isValid(s, config.announceStampValue, wb)) return false;
+    d.stamp = s;
+    d.stampValue = Stamps.value(wb, s);
+    await storage.write('stamp/${_hex(d.hash)}', {
+      'v': 1,
+      'stamp': _b64e(s),
+      'value': d.stampValue,
+    });
+    return true;
   }
 
   // ------------------------------------------------------------ path requests
@@ -605,6 +660,7 @@ class Transport {
     if (_prTags.length > 4096) _prTags.clear();
     final local = _destinations[_hex(dest)];
     if (local != null &&
+        !local.silent &&
         local.type == DestinationType.single &&
         local.direction == DestinationDirection.inbound) {
       unawaited(announce(

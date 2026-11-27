@@ -3,6 +3,7 @@
 library;
 
 export 'src/announce.dart';
+export 'src/announce_timebase.dart';
 export 'src/crypto/hashes.dart'
     show constantTimeEquals, hkdf, hmacSha256, sha256, sha512, truncatedHash;
 export 'src/crypto/random.dart' show RandomBytes, secureRandomBytes;
