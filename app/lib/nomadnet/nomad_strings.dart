@@ -50,6 +50,10 @@ const _uk = <String, String>{
   'nn_bookmark_add': 'Додати в закладки',
   'nn_bookmark_remove': 'Прибрати із закладок',
   'nn_copy_address': 'Копіювати адресу',
+  'nn_wrap_lines': 'Переносити довгі рядки',
+  'nn_zoom_in': 'Збільшити текст',
+  'nn_zoom_out': 'Зменшити текст',
+  'nn_zoom_reset': 'Підібрати за шириною',
   'nn_identify': 'Представлятися цьому вузлу',
   'nn_identify_warn':
       'Вузол побачить ідентичність цього пристрою (B) і зможе пов\'язувати ваші візити. Вимкнено за замовчуванням.',
@@ -116,6 +120,10 @@ const _en = <String, String>{
   'nn_bookmark_add': 'Add bookmark',
   'nn_bookmark_remove': 'Remove bookmark',
   'nn_copy_address': 'Copy address',
+  'nn_wrap_lines': 'Wrap long lines',
+  'nn_zoom_in': 'Larger text',
+  'nn_zoom_out': 'Smaller text',
+  'nn_zoom_reset': 'Fit to width',
   'nn_identify': 'Identify to this node',
   'nn_identify_warn':
       'The node will see this device\'s identity (B) and can link your visits. Off by default.',

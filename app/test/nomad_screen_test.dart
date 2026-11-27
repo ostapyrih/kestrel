@@ -235,6 +235,34 @@ void main() {
     await tester.pumpAndSettle();
     expect(copied, '$hB:/page/index.mu');
   });
+
+  testWidgets('menu: wrap long lines and zoom are saved per node', (
+    tester,
+  ) async {
+    await show(tester, size: const Size(1200, 800));
+    await tester.tap(find.text('Beta Node'));
+    await settle(tester);
+    requests.single.respond('>T
+body');
+    await settle(tester);
+    Future<void> pick(String text) async {
+      await tester.tap(find.byKey(const ValueKey('nn-menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(text));
+      await settle(tester);
+    }
+
+    expect(tester.widget<MicronView>(find.byType(MicronView)).wrapAll, isFalse);
+    await pick('Переносити довгі рядки');
+    expect(tester.widget<MicronView>(find.byType(MicronView)).wrapAll, isTrue);
+    await pick('Збільшити текст');
+    expect(tester.widget<MicronView>(find.byType(MicronView)).zoom, greaterThan(1));
+    final row = await tester.runAsync(() => store.node(hB));
+    expect(row!.wrapAll, isTrue);
+    expect(row.fontScale, greaterThan(1));
+    await pick('Підібрати за шириною');
+    expect(tester.widget<MicronView>(find.byType(MicronView)).zoom, 1);
+  });
 }
 
 /// Lets async work (sqlite on a real isolate, streams) finish.

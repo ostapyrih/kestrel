@@ -21,12 +21,14 @@ import 'screens/chats_screen.dart';
 import 'storage/database.dart';
 import 'storage/repo.dart';
 import 'update/update_bootstrap.dart';
+import 'nomadnet/micron/micron_layout.dart';
 import 'update/update_service.dart';
 import 'update/update_ui.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   initDatabaseFactory();
+  registerMicronFontLicense();
   final dir = await getApplicationSupportDirectory();
   final adb = await AppDatabase.open(p.join(dir.path, 'kestrel.db'));
   final repo = Repo(adb);

@@ -44,6 +44,20 @@ void main() {
     );
   });
 
+  test('view prefs (zoom, wrap) default off and persist per node', () async {
+    await s.upsertAnnounced(h1, name: 'Alpha', hops: 1, nowMs: 1);
+    var n = (await s.node(h1))!;
+    expect(n.fontScale, 1.0);
+    expect(n.wrapAll, isFalse);
+    await s.setViewPrefs(h1, fontScale: 1.5);
+    await s.setViewPrefs(h1, wrapAll: true);
+    n = (await s.node(h1))!;
+    expect(n.fontScale, 1.5);
+    expect(n.wrapAll, isTrue);
+    await s.setViewPrefs(h1, fontScale: 1.0);
+    expect((await s.node(h1))!.wrapAll, isTrue);
+  });
+
   group('nodes', () {
     test('announce inserts, then updates keeping flags and old name', () async {
       await s.upsertAnnounced(h1, name: 'Alpha', hops: 3, nowMs: 1000);
