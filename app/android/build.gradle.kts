@@ -15,6 +15,17 @@ subprojects {
     val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
     project.layout.buildDirectory.value(newSubprojectBuildDir)
 }
+// flutter_blue_plus 1.x still compiles against API 33 while its androidx
+// dependencies need 34+; raise it for that plugin only.
+subprojects {
+    if (project.name == "flutter_blue_plus") {
+        afterEvaluate {
+            extensions.configure<com.android.build.gradle.BaseExtension> {
+                compileSdkVersion(36)
+            }
+        }
+    }
+}
 subprojects {
     project.evaluationDependsOn(":app")
 }
