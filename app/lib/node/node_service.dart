@@ -3,10 +3,15 @@ import 'dart:typed_data';
 
 import 'package:kestrel_rns/kestrel_rns.dart';
 
+import '../bridge/bridge_connection.dart';
 import '../bridge/bridge_service.dart';
 import '../storage/chat_target.dart';
 import '../storage/database.dart';
 import '../storage/repo.dart';
+import '../group/group_runtime.dart';
+import '../group/group_service.dart';
+import '../nomadnet/browser_sync.dart';
+import '../platform.dart';
 import 'identity_store.dart';
 import 'sqlite_lxm_store.dart';
 
@@ -106,7 +111,7 @@ RnsInterface defaultInterfaceFactory(String host, int port) =>
       maxReconnectDelay: const Duration(seconds: 30),
     );
 
-/// Runs Reticulum + the LXMF router for identity B (Standalone mode), and
+/// Runs Reticulum + the LXMF router for the group identity G ("my address"), and
 /// mirrors everything that happens into SQLite: incoming messages, outgoing
 /// messages and every delivery state transition (`messages` + `delivery_log`).
 ///
@@ -119,8 +124,11 @@ class NodeService {
     this.transportConfig = const TransportConfig(),
     this.routerConfig = const LxmRouterConfig(),
     this.announceOnConnect = true,
+    this.groupSync = true,
     KestrelStorage? rnsStorage,
-  }) : _rnsStorage = rnsStorage ?? MemoryStorage();
+  }) : _rnsStorage = rnsStorage ?? MemoryStorage() {
+    group = GroupService(repo: repo, secrets: secrets);
+  }
 
   final Repo repo;
   final SecretStore secrets;
@@ -131,7 +139,15 @@ class NodeService {
   /// Announce when the connection comes up. A short background check runs
   /// with this off: the foreground instance announces.
   final bool announceOnConnect;
+
+  /// Runs the device sync and announcer election (off in the short
+  /// background check: the foreground instance owns the group role, so the
+  /// background one stays silent and does not touch G's propagation inbox).
+  final bool groupSync;
   final KestrelStorage _rnsStorage;
+
+  /// The device group: keys of G and of this device, device list, key chain.
+  late final GroupService group;
 
   BridgeService? _bridge;
 
@@ -141,6 +157,40 @@ class NodeService {
     _bridge = b;
     // another device's `delete_chat` may remove queued messages of ours
     b?.vault.cancelOutbound = cancelOutboundHashes;
+    _bridgeStatusSub?.cancel();
+    _bridgeStatusSub = b?.statusChanges.listen((st) {
+      if (st.state == BridgeState.connected) {
+        unawaited(migrateBridgeKeyIfNeeded());
+      }
+    });
+  }
+
+  StreamSubscription<BridgeStatus>? _bridgeStatusSub;
+  bool _migratingBridgeKey = false;
+
+  /// Moves this device's bridge registration from the legacy identity B to
+  /// the hidden device key once the bridge is connected (see
+  /// [BridgeService.migrateToDeviceKey]). Retried at the next connection if
+  /// it fails.
+  Future<void> migrateBridgeKeyIfNeeded() async {
+    final b = _bridge;
+    if (b == null || group.legacyIdentity == null || _migratingBridgeKey) {
+      return;
+    }
+    _migratingBridgeKey = true;
+    try {
+      await b.migrateToDeviceKey(
+        newKey: group.deviceIdentity,
+        switchKey: () async {
+          await group.bridgeMigrated();
+          await b.reconnect();
+        },
+      );
+    } on Object {
+      // retried on the next connection
+    } finally {
+      _migratingBridgeKey = false;
+    }
   }
 
   Reticulum? _rns;
@@ -163,25 +213,38 @@ class NodeService {
   Stream<NodeConnection> get connectionChanges => _connection.stream;
 
   Reticulum get rns => _rns!;
+
+  /// The group identity G: the only identity used for chats.
   Identity get identity => _identity!;
+
+  /// The hidden device key (never shown, never used for chats).
+  Identity get deviceIdentity => group.deviceIdentity;
+
+  /// The key this device authenticates to the bridge with: the old identity B
+  /// until the bridge registration moved to the device key, then the device
+  /// key.
+  Identity get bridgeIdentity => group.legacyIdentity ?? group.deviceIdentity;
   LxmRouter get router => _router!;
   bool get isRunning => _router != null;
 
   /// Our LXMF address (destination hash), lower-case hex.
   String get addressHex => toHex(router.address);
 
-  /// Identity B public key (64 bytes), hex: what the bridge whitelists.
+  /// Public key of G (64 bytes), hex.
   String get publicKeyHex => toHex(identity.publicKey);
 
   Future<void> start() async {
     try {
-      _identity = await IdentityStore(secrets).loadOrCreate();
+      await group.init();
+      _identity = group.groupIdentity;
       final host =
           await repo.getSetting(SettingKeys.serverHost) ?? defaultServerHost;
       final port =
           int.tryParse(await repo.getSetting(SettingKeys.serverPort) ?? '') ??
           defaultServerPort;
-      final name = await repo.getSetting(SettingKeys.displayName);
+      final name = group.displayName.isNotEmpty
+          ? group.displayName
+          : await repo.getSetting(SettingKeys.displayName);
       _intervalMinutes = await _intervalSetting();
 
       final iface = interfaceFactory(host, port);
@@ -193,39 +256,134 @@ class NodeService {
           transport: transportConfig,
         ),
       );
-      _router = await LxmRouter.start(
-        _rns!,
-        _identity!,
-        displayName: (name == null || name.isEmpty) ? null : name,
-        config: routerConfig,
-        store: SqliteLxmStore(repo),
-      );
-      await repo.setAccountAddress(
-        'B',
-        addressHash: addressHex,
-        displayName: name,
-      );
-
-      await _applyPropagationSettings();
-      // Persisted by the router before it counts a message as handled: a
-      // propagation node only deletes its copy after this has returned.
-      _router!.inboundPersister = _persistIncoming;
-      _subs
-        ..add(
-          _router!.outboundEvents.listen(
-            (e) => _chain(() => _onOutboundEvent(e)),
-          ),
-        )
-        ..add(_router!.peerUpdates.listen((p) => _chain(() => _onPeer(p))));
-      for (final p in _router!.knownPeers) {
-        _chain(() => _onPeer(p));
-      }
+      await _startRouter(_identity!, name);
+      await startGroupRuntimeIfNeeded();
       _watchInterface(iface);
       if (!_ready.isCompleted) _ready.complete();
     } on Object catch (e, st) {
       if (!_ready.isCompleted) _ready.completeError(e, st);
       rethrow;
     }
+  }
+
+  final List<StreamSubscription<Object?>> _routerSubs = [];
+
+  GroupRuntime? _runtime;
+
+  /// The running device sync (null for a single-device install).
+  GroupRuntime? get groupRuntime => _runtime;
+
+  /// Starts the device sync when the group has more than one device.
+  Future<void> startGroupRuntimeIfNeeded() async {
+    if (!groupSync ||
+        _runtime != null ||
+        !group.isGroup ||
+        _router == null ||
+        _rns == null) {
+      return;
+    }
+    final rt = GroupRuntime(
+      rns: _rns!,
+      repo: repo,
+      group: group,
+      groupRouter: _router!,
+      storage: _rnsStorage,
+      routerConfig: routerConfig,
+      internet: () => _current == NodeConnection.online,
+      onRole: setAnnouncer,
+      onName: (n) {
+        _router?.setDisplayName(n);
+        unawaited(repo.setAccountAddress('B', displayName: n));
+      },
+      browser: BrowserSyncStore(repo.adb),
+    );
+    _runtime = rt;
+    // silent until the election says otherwise
+    setAnnouncer(false);
+    await rt.start();
+  }
+
+  Future<void> _stopRuntime() async {
+    final rt = _runtime;
+    _runtime = null;
+    await rt?.stop();
+  }
+
+  /// Tells the siblings that [chatId] was read here.
+  Future<void> publishRead(int chatId) async {
+    final rt = _runtime;
+    if (rt == null) return;
+    final c = await repo.chat(chatId);
+    if (c?.peerHash != null && c!.accountIdentity == 'B') {
+      await rt.publishRead(c.peerHash!);
+    }
+  }
+
+  /// Creates the LXMF router for [id] and wires it to the database.
+  Future<void> _startRouter(Identity id, String? name) async {
+    _router = await LxmRouter.start(
+      _rns!,
+      id,
+      displayName: (name == null || name.isEmpty) ? null : name,
+      config: routerConfig,
+      store: SqliteLxmStore(repo),
+    );
+    // group-wide monotonic announce time (shared via the group state)
+    _router!.destination.announceTimebase = AnnounceTimebase(
+      lastEmitted: group.state.timebase,
+      onChanged: (t) {
+        if (group.state.mergeTimebase(t)) unawaited(group.persist());
+      },
+    );
+    await repo.setAccountAddress(
+      'B',
+      addressHash: addressHex,
+      displayName: name,
+    );
+    await _applyPropagationSettings();
+    // Persisted by the router before it counts a message as handled: a
+    // propagation node only deletes its copy after this has returned.
+    _router!.inboundPersister = _persistIncoming;
+    _routerSubs
+      ..add(
+        _router!.outboundEvents.listen(
+          (e) => _chain(() => _onOutboundEvent(e)),
+        ),
+      )
+      ..add(_router!.peerUpdates.listen((p) => _chain(() => _onPeer(p))));
+    for (final p in _router!.knownPeers) {
+      _chain(() => _onPeer(p));
+    }
+    applyAnnouncerRole();
+  }
+
+  /// A single device always announces; in a group the election
+  /// ([GroupAnnouncer]) decides once [startGroupRuntimeIfNeeded] ran.
+  void applyAnnouncerRole() {
+    if (_runtime == null) setAnnouncer(groupSync || !group.isGroup);
+  }
+
+  /// Makes this device the announcer of G (or silent). The announcer alone
+  /// announces, answers path requests and syncs the propagation inbox.
+  void setAnnouncer(bool on) {
+    final r = _router;
+    if (r == null) return;
+    r.silent = !on;
+    r.destination.ratchetRotationAllowed = on;
+    r.inboxSyncEnabled = on;
+  }
+
+  Future<void> _stopRouter() async {
+    for (final s in _routerSubs) {
+      await s.cancel();
+    }
+    _routerSubs.clear();
+    final r = _router;
+    if (r != null) {
+      _rns?.transport.deregisterDestination(r.destination);
+      await r.stop();
+    }
+    _router = null;
   }
 
   void _watchInterface(RnsInterface iface) {
@@ -258,7 +416,13 @@ class NodeService {
   Future<void> announce() async {
     await ready;
     try {
-      await router.announce();
+      final rt = _runtime;
+      if (rt != null) {
+        if (rt.isAnnouncer) await rt.sync.announceGroup(router);
+        unawaited(rt.announceDevice());
+      } else {
+        await router.announce();
+      }
     } on Object {
       // announce is best effort
     }
@@ -391,7 +555,7 @@ class NodeService {
   /// Changes the display name and re-announces.
   Future<void> setDisplayName(String name) async {
     final n = name.trim();
-    await repo.setSetting(SettingKeys.displayName, n);
+    await group.setDisplayName(n);
     await repo.setAccountAddress('B', displayName: n);
     await ready;
     router.setDisplayName(n);
@@ -445,6 +609,166 @@ class NodeService {
       i is RNodeInterface ? 'lora' : 'tcp';
 
   bool get _anyExtraOnline => _extra.any((i) => i.online);
+
+  // -------------------------------------------------------------- device group
+
+  /// Opens a pairing window: the returned host exposes the QR text
+  /// (`invite.encode()`); [confirm] shows the code and asks the user.
+  Future<PairingHost> startPairing({
+    required Future<bool> Function(PairingRequest) confirm,
+    void Function(GroupDevice)? onPaired,
+  }) async {
+    await ready;
+    final host = await group.startPairing(
+      rns,
+      groupDestination: router.destination,
+      confirm: confirm,
+      onPaired: (d) {
+        unawaited(() async {
+          await startGroupRuntimeIfNeeded();
+          _runtime?.sync.rememberSiblings();
+          await _runtime?.sync.publishDevices();
+        }());
+        onPaired?.call(d);
+      },
+    );
+    unawaited(host.announce().catchError((Object _) => false));
+    return host;
+  }
+
+  /// Joins the group of the device that shows [invite]. On success this
+  /// device uses the group identity G from now on: its old chats become
+  /// read-only history labelled with this device's name, the old identity B
+  /// is retired (kept only as the legacy bridge key until the bridge knows
+  /// the device key).
+  Future<void> joinGroup(
+    PairingInvite invite, {
+    required void Function(String code) onCode,
+    required Future<bool> Function(String code) confirm,
+  }) async {
+    await ready;
+    final result = await PairingClient.join(
+      rns,
+      group.deviceIdentity,
+      invite,
+      name: group.self.name,
+      platform: platformId(),
+      onCode: onCode,
+      confirm: confirm,
+    );
+    await _adoptGroup(result.bundle);
+  }
+
+  Future<void> _adoptGroup(PairingBundle b) async {
+    // unsent messages of the old identity cannot be sent as G
+    final own = await repo.chats(accountIdentity: 'B');
+    for (final c in own) {
+      if (c.peerHash != null) {
+        await cancelOutboundHashes(
+          await repo.unsentHashes(c.peerHash!, 1 << 52),
+        );
+      }
+    }
+    final oldId = toHex(identity.hash);
+    final bridgePaired =
+        (await repo.getSetting(SettingKeys.bridgePubkey))?.isNotEmpty ?? false;
+    await repo.retireOwnHistory(oldId, group.self.name);
+    await group.applyJoin(b, bridgePaired: bridgePaired);
+    await _swapIdentity(
+      group.groupIdentity,
+      ratchets: b.ratchets,
+      stamp: b.stamp,
+    );
+  }
+
+  /// Replaces the running router by one for [id].
+  Future<void> _swapIdentity(
+    Identity id, {
+    List<RatchetEntry> ratchets = const [],
+    Uint8List? stamp,
+  }) async {
+    await _stopRuntime();
+    await _stopRouter();
+    _identity = id;
+    await _startRouter(
+      id,
+      group.displayName.isEmpty ? null : group.displayName,
+    );
+    if (ratchets.isNotEmpty) {
+      await router.destination.mergeRatchets(ratchets);
+    }
+    if (stamp != null) {
+      await rns.transport.importStamp(router.destination, stamp);
+    }
+    final b = bridge;
+    if (b != null) {
+      // the connection holds the old router: reconnect with the new one
+      try {
+        await b.stop();
+        await b.start();
+      } on Object {
+        // the bridge reconnects on its own schedule
+      }
+    }
+    await startGroupRuntimeIfNeeded();
+    unawaited(announce());
+  }
+
+  /// Removes another device from the group: it stops receiving syncs and the
+  /// sync key rotates. It still holds G; offer [changeAddress] afterwards.
+  Future<GroupDevice?> removeDevice(String id) async {
+    final rt = _runtime;
+    if (rt != null) {
+      final d = await rt.sync.removeDevice(id);
+      if (d != null) await group.persist();
+      return d;
+    }
+    return group.removeDevice(id);
+  }
+
+  /// "Change address": a new group identity G, announced, with an LXMF notice
+  /// ("my new address is ...") from the old G to recent contacts. Old chats
+  /// stay. Returns how many contacts were notified (delivery or hand-over to
+  /// the network within [noticeTimeout]).
+  Future<int> changeAddress({
+    int maxContacts = 50,
+    Duration noticeTimeout = const Duration(seconds: 30),
+  }) async {
+    await ready;
+    final fresh = await Identity.generate();
+    final newHex = toHex(LXMessage.deliveryHash(fresh));
+    final chats = [...await repo.chats(accountIdentity: 'B')]
+      ..sort((a, b) => (b.lastTs ?? 0).compareTo(a.lastTs ?? 0));
+    final text = addressChangeNotice(newHex, name: group.displayName);
+    final sent = <LxmOutbound>[];
+    for (final c in chats) {
+      final p = c.peerHash;
+      if (p == null || c.kind != 'lxmf') continue;
+      if (sent.length >= maxContacts) break;
+      sent.add(
+        await router.send(
+          destinationHash: fromHex(p),
+          content: text,
+          method: LxmfMethod.opportunistic,
+        ),
+      );
+    }
+    var ok = 0;
+    await Future.wait([
+      for (final o in sent)
+        o.done
+            .timeout(noticeTimeout)
+            .then((h) {
+              if (h.state == LxmState.delivered || h.state == LxmState.sent) {
+                ok++;
+              }
+            })
+            .catchError((Object _) {}),
+    ]);
+    await group.replaceGroupIdentity(fresh);
+    await _swapIdentity(fresh);
+    return ok;
+  }
 
   // ------------------------------------------------------------------ chats
 
@@ -519,7 +843,12 @@ class NodeService {
     var remote = false;
     for (final id in chatIds) {
       if (isRemoteId(id)) {
-        remote = true;
+        final c = await repo.remoteChat(id);
+        // histories of this very device (retired identity B) need no vault
+        if (c?.remoteDeviceId == null ||
+            !await repo.isLegacyDevice(c!.remoteDeviceId!)) {
+          remote = true;
+        }
       } else if ((await repo.chat(id))?.accountIdentity == 'A') {
         a = true;
       }
@@ -568,14 +897,26 @@ class NodeService {
         );
       }
     }
-    await repo.deleteChats(own);
+    final deleted = await repo.deleteChats(own);
+    for (final d in deleted) {
+      if (d.peerHash != null) {
+        unawaited(
+          _runtime?.publishDelete(
+                d.peerHash!,
+                d.lastTsMs ?? DateTime.now().millisecondsSinceEpoch,
+              ) ??
+              Future<void>.value(),
+        );
+      }
+    }
     for (final id in remote) {
       final c = await repo.remoteChat(id);
       if (c?.remoteDeviceId == null || c?.peerHash == null) continue;
+      final legacy = await repo.isLegacyDevice(c!.remoteDeviceId!);
       await repo.removeVaultHistory(
-        c!.remoteDeviceId!,
+        c.remoteDeviceId!,
         c.peerHash!,
-        uploadDelete: true,
+        uploadDelete: !legacy || (bridge?.vault.canDeleteRemote ?? false),
       );
     }
     Object? failure;
@@ -655,6 +996,18 @@ class NodeService {
       lxmfHash: toHex(o.hash),
       route: _routeName(o.method),
     );
+    unawaited(
+      _runtime?.publishMessage(
+            hash: toHex(o.hash),
+            peer: peer,
+            incoming: false,
+            text: text,
+            tsMs: DateTime.now().millisecondsSinceEpoch,
+            route: _routeName(o.method),
+            state: MsgStatus.sent,
+          ) ??
+          Future<void>.value(),
+    );
     return (messageId: ids.messageId, chatId: ids.chatId);
   }
 
@@ -696,6 +1049,23 @@ class NodeService {
       transport: transportOf(r.interface),
       signatureValid: m.signatureValidated,
     );
+    // forward to the siblings (the receiver dedupes by message hash)
+    final rt = _runtime;
+    if (rt != null) {
+      final ts =
+          ((m.timestamp ?? DateTime.now().millisecondsSinceEpoch / 1000) * 1000)
+              .round();
+      await rt.publishMessage(
+        hash: hash,
+        peer: peerHex,
+        peerName: peer?.displayName,
+        incoming: true,
+        text: m.contentAsString,
+        title: m.title.isEmpty ? null : m.titleAsString,
+        tsMs: ts,
+        route: _routeName(r.method),
+      );
+    }
   }
 
   Future<void> _onPeer(LxmPeer p) => repo.upsertPeer(
@@ -729,6 +1099,23 @@ class NodeService {
       transport: onWire ? transportOf(e.interface) : null,
       error: e.error,
     );
+    if (_runtime != null &&
+        (status == MsgStatus.delivered || status == MsgStatus.failed)) {
+      final msg = await repo.message(ob.messageId);
+      final chat = msg == null ? null : await repo.chat(msg.chatId);
+      if (msg != null && chat?.peerHash != null) {
+        unawaited(
+          _runtime!.publishMessage(
+            hash: toHex(e.hash),
+            peer: chat!.peerHash!,
+            incoming: false,
+            text: msg.text,
+            tsMs: msg.ts,
+            state: status,
+          ),
+        );
+      }
+    }
     // The creation of the outbox row already logged "queued".
     if (e.stage != 'queued') {
       await repo.addLog(ob.messageId, e.stage, detail: e.error, at: e.at);
@@ -740,13 +1127,15 @@ class NodeService {
   Future<void> stop() async {
     if (_stopped) return;
     _stopped = true;
+    await _bridgeStatusSub?.cancel();
     await _ifaceSub?.cancel();
     for (final s in _extraSubs.values) {
       await s.cancel();
     }
-    for (final s in _subs) {
+    for (final s in [..._subs, ..._routerSubs]) {
       await s.cancel();
     }
+    await _stopRuntime();
     await _router?.stop();
     await _rns?.stop();
     await _connection.close();

@@ -15,6 +15,7 @@ import 'bridge_widgets.dart';
 import '../update/update_ui.dart';
 import '../desktop/desktop_settings.dart';
 import 'devices_screen.dart';
+import 'group_screens.dart';
 import 'propagation_widgets.dart';
 import 'vault_widgets.dart';
 
@@ -173,6 +174,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
           const Divider(height: 32),
           const LoraSettingsTile(),
+          const Divider(height: 32),
+          ListTile(
+            key: const ValueKey('group-devices'),
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.devices_other),
+            title: Text(s.t('group_devices')),
+            subtitle: Text(s.t('group_devices_hint')),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const MyDevicesScreen()),
+            ),
+          ),
           const Divider(height: 32),
           Text(
             bridge ? s.t('identity') : s.t('identity_plain'),

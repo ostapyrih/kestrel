@@ -42,16 +42,17 @@ class NodeBackgroundSession implements BackgroundSession {
       secrets: secrets,
       rnsStorage: JsonFileStorage(rnsDir),
       announceOnConnect: false,
+      groupSync: false,
     );
     final bridge = BridgeService(
       repo: repo,
-      ownDeviceId: () => toHex(node.identity.hash),
-      identity: () => node.identity,
+      ownDeviceId: () => toHex(node.bridgeIdentity.hash),
+      identity: () => node.bridgeIdentity,
       sendAsB: node.sendMessage,
       secrets: secrets,
       apiFactory: (key, allowFallback) => BridgeConnection(
         rns: node.rns,
-        identity: node.identity,
+        identity: node.bridgeIdentity,
         bridgePublicKey: key,
         router: node.router,
         allowFallback: allowFallback,

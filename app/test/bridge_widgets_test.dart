@@ -7,7 +7,6 @@ import 'package:kestrel/bridge/bridge_connection.dart';
 import 'package:kestrel/bridge/codec.dart';
 import 'package:kestrel/bridge/vault_service.dart';
 import 'package:kestrel/node/node_service.dart';
-import 'package:kestrel/platform.dart';
 import 'package:kestrel/main.dart';
 import 'package:kestrel/screens/add_device_screen.dart';
 import 'package:kestrel/screens/chat_screen.dart';
@@ -67,13 +66,13 @@ void main() {
     ) async {
       await show(tester, const ChatScreen(chatId: 2));
       expect(find.byKey(const ValueKey('badge-A')), findsOneWidget);
-      expect(find.text('Від: A (через міст)'), findsOneWidget);
+      expect(find.text('Від: MeshChatX (через міст)'), findsOneWidget);
       // from this account via a known device: "A · from iPhone · direct"
-      expect(meta(tester, 12).data, 'A (міст) · від iPhone · direct · TCP');
+      expect(meta(tester, 12).data, 'MeshChatX · від iPhone · direct · TCP');
       // typed in the MeshChatX web UI (origin_device null)
-      expect(meta(tester, 13).data, 'A (міст) · з MeshChatX · direct · TCP');
+      expect(meta(tester, 13).data, 'MeshChatX · з MeshChatX · direct · TCP');
       // incoming messages carry no origin
-      expect(meta(tester, 11).data, 'A (міст) · direct · TCP');
+      expect(meta(tester, 11).data, 'MeshChatX · direct · TCP');
       // not accepted by the bridge yet: via bridge
       expect(meta(tester, 14).data, contains('через міст'));
     });
@@ -110,8 +109,8 @@ void main() {
       );
       await tester.pump();
       await tester.pump();
-      expect(find.text('From: A (via bridge)'), findsOneWidget);
-      expect(meta(tester, 12).data, 'A (bridge) · from iPhone · direct · TCP');
+      expect(find.text('From: MeshChatX (via bridge)'), findsOneWidget);
+      expect(meta(tester, 12).data, 'MeshChatX · from iPhone · direct · TCP');
     });
 
     testWidgets(
@@ -148,7 +147,7 @@ void main() {
 
     testWidgets('B chats show no origin label', (tester) async {
       await show(tester, const ChatScreen(chatId: 1));
-      expect(meta(tester, 2).data, 'B · ${defaultDeviceName()} · direct · TCP');
+      expect(meta(tester, 2).data, 'direct · TCP');
     });
   });
 
@@ -271,7 +270,7 @@ void main() {
       }
       expect(find.byKey(const ValueKey('badge-A')), findsNothing);
       expect(find.byKey(const ValueKey('badge-B')), findsNothing);
-      expect(find.textContaining('A (міст)'), findsNothing);
+      expect(find.textContaining('MeshChatX'), findsNothing);
       expect(find.textContaining('B ·'), findsNothing);
     });
 
@@ -331,10 +330,7 @@ void main() {
     testWidgets('bridge on keeps the labels', (tester) async {
       await show(tester, const ChatScreen(chatId: 1), enabled: true);
       expect(find.byKey(const ValueKey('composer-from')), findsOneWidget);
-      expect(
-        meta(tester, 1).data,
-        'B · ${defaultDeviceName()} · opportunistic · TCP',
-      );
+      expect(meta(tester, 1).data, 'opportunistic · TCP');
     });
   });
 

@@ -3,6 +3,7 @@
 library;
 
 export 'src/announce.dart';
+export 'src/announce_timebase.dart';
 export 'src/crypto/hashes.dart'
     show constantTimeEquals, hkdf, hmacSha256, sha256, sha512, truncatedHash;
 export 'src/crypto/random.dart' show RandomBytes, secureRandomBytes;
@@ -10,6 +11,11 @@ export 'src/crypto/token.dart';
 export 'src/destination.dart';
 export 'src/framing/hdlc.dart';
 export 'src/framing/kiss.dart';
+export 'src/group/announcer.dart';
+export 'src/group/device_sync.dart';
+export 'src/group/group_models.dart';
+export 'src/group/group_state.dart';
+export 'src/group/pairing.dart';
 export 'src/identity.dart';
 export 'src/interfaces/interface.dart';
 export 'src/interfaces/rnode.dart';

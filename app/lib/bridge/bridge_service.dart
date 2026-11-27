@@ -1019,6 +1019,47 @@ class BridgeService {
     }
   }
 
+  /// Re-attaches the bridge connection (new identity or new router).
+  Future<void> reconnect() async {
+    await _detach();
+    await start();
+  }
+
+  /// Device groups (phase S): the bridge knows this device by the old
+  /// identity B, which is now the shared group identity G. This device
+  /// approves its own hidden device key (signed by the key the bridge
+  /// trusts), [switchKey] then makes the app use the device key and
+  /// reconnects, and the old registration is revoked so that no other device
+  /// holding G stays trusted by the bridge. A revoke that fails (offline)
+  /// leaves the old entry visible in "My devices" to remove by hand.
+  Future<void> migrateToDeviceKey({
+    required Identity newKey,
+    required Future<void> Function() switchKey,
+    Duration linkWait = const Duration(seconds: 20),
+  }) async {
+    final name = await deviceName();
+    final payload = PairingPayload(
+      pubkey: newKey.publicKey,
+      name: name,
+      platform: platformId(),
+      nonce: secureRandomBytes(16),
+      ts: DateTime.now().millisecondsSinceEpoch / 1000,
+    );
+    final d = decodePairingQr(encodePairingQr(payload));
+    final oldId = ownDeviceId();
+    await approveDevice(d, name: name);
+    await switchKey();
+    final end = DateTime.now().add(linkWait);
+    while (!(_api?.linkUp ?? false) && DateTime.now().isBefore(end)) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    try {
+      await revokeDevice(oldId, reason: 'migrated to device key');
+    } on Object {
+      // stays listed; the user can remove it
+    }
+  }
+
   // ----------------------------------------------------------------- pairing
 
   /// The code this (new) device shows. Regenerate before it expires.

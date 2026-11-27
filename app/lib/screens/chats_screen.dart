@@ -235,7 +235,7 @@ class AccountSwitcher extends ConsumerWidget {
               ChoiceChip(
                 key: const ValueKey('chip-B'),
                 label: Text(
-                  s.account('B', device: ref.watch(ownDeviceNameProvider)),
+                  s.account('B'),
                 ),
                 selected: sel == 'B',
                 onSelected: (_) => notifier.select('B'),
@@ -348,7 +348,7 @@ class ChatTile extends ConsumerWidget {
                 key: const ValueKey('badge-remote'),
                 label: s.account('B', device: chat.remoteDeviceName),
               )
-            else
+            else if (chat.accountIdentity == 'A')
               IdentityBadge(chat.accountIdentity),
           ],
         ],

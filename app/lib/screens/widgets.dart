@@ -23,7 +23,8 @@ class IdentityBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
-        label ?? identity,
+        label ??
+            (identity == 'A' ? Strings.of(context).account('A') : identity),
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
           fontWeight: FontWeight.bold,
           color: isB ? cs.onPrimaryContainer : cs.onTertiaryContainer,
