@@ -142,6 +142,7 @@ Switching modes changes only `settings.bridge_enabled`; no DELETEs on data.
 | X | Chat deletion (owner request 2026-11-27) | delete own B chats, account A chats (in MeshChatX, all devices) and other devices' chats (everywhere, via vault tombstones); no resurrection on resync | ✅ app 0.8.0 + bridge 0.7.0 (PR #26) |
 | 5 | Propagation sync + offline queue | `B` fetches messages from a propagation node | ⬜ |
 | 6 | RNode: BLE on mobile, USB serial on desktop | KISS + radio config (parameters = those of the LoRa gateway), `LoRa` transport badge | ⬜ |
+| V | Voice: LXST calls + voice messages (decided 2026-11-27) | Live calls over LXST (compatible with Sideband / MeshChatX Telephone) only on fast transports (TCP/internet), Opus; from identity B, never through the bridge. On LoRa: **voice messages only** (no live calls) — record, compress with Codec2 (low bitrate), send as an LXMF audio field compatible with Sideband, play back. Call UI, ringing, earpiece/speaker, echo cancellation; incoming calls in the background tie in with phase 7 (CallKit on iOS). Scheduled after 6 and 5 | ⬜ |
 | 7 | iOS build on Mac + background notifications | `flutter build ios`, push without content | ⬜ |
 | D | Desktop builds (Windows/macOS/Linux) + USB RNode on desktop | PR #9 merged: Windows .zip, macOS .dmg, Linux tar.gz + AppImage (all unsigned) in releases; two-pane layout ≥ 900 px; device name setting; Windows/Linux CI. Remaining: USB RNode (Phase 6), verify unsigned macOS keychain on a real Mac | 🟡 builds done |
 
