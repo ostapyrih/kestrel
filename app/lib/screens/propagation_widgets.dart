@@ -5,6 +5,7 @@ import 'package:kestrel_rns/kestrel_rns.dart';
 import '../l10n/strings.dart';
 import '../node/node_service.dart';
 import '../providers.dart';
+import 'propagation_nodes_screen.dart';
 
 /// Strings of the "Mail via node" feature (Ukrainian default, English
 /// fallback), kept apart from the main table like the updater strings.
@@ -73,6 +74,18 @@ const _uk = <String, String>{
   'mail_err_disabled': 'на цьому пристрої перевірку вимкнено',
   'mail_err_stopped': 'зупинено',
   'send_via_node': 'Надіслати через вузол',
+  'mail_change': 'Змінити',
+  'mail_nodes_title': 'Вузол розсилки',
+  'mail_search': 'Пошук за назвою або хешем',
+  'mail_search_none': 'Нічого не знайдено',
+  'mail_node_default': 'типовий',
+  'mail_node_current_badge': 'зараз',
+  'mail_node_reset': 'Скинути до типового',
+  'mail_node_current_default': 'Зараз: {node} (типовий)',
+  'mail_node_default_down': 'Типовий вузол недоступний, використовуємо {node}',
+  'mail_node_default_down_none': 'Типовий вузол недоступний',
+  'mail_node_not_heard': 'ще не чути',
+  'mail_node_heard': 'чутно {t}',
 };
 
 const _en = <String, String>{
@@ -122,6 +135,18 @@ const _en = <String, String>{
   'mail_err_disabled': 'checking is turned off on this device',
   'mail_err_stopped': 'stopped',
   'send_via_node': 'Send via node',
+  'mail_change': 'Change',
+  'mail_nodes_title': 'Propagation node',
+  'mail_search': 'Search by name or hash',
+  'mail_search_none': 'Nothing found',
+  'mail_node_default': 'default',
+  'mail_node_current_badge': 'current',
+  'mail_node_reset': 'Reset to default',
+  'mail_node_current_default': 'Using: {node} (default)',
+  'mail_node_default_down': 'Default node unreachable, using {node}',
+  'mail_node_default_down_none': 'Default node unreachable',
+  'mail_node_not_heard': 'not heard yet',
+  'mail_node_heard': 'heard {t}',
 };
 
 /// One-line description of a sync result, e.g. `new messages: 2`.
@@ -151,12 +176,12 @@ String syncPhaseText(BuildContext context, LxmSyncProgress p) =>
       _ => pt(context, 'mail_checking'),
     };
 
-String _short(String hex) =>
+String nodeShortHash(String hex) =>
     hex.length <= 12 ? hex : '${hex.substring(0, 8)}...';
 
-String _nodeLabel(LxmPropagationNode n) => n.name ?? _short(n.hashHex);
+String nodeLabel(LxmPropagationNode n) => n.name ?? nodeShortHash(n.hashHex);
 
-String _ago(BuildContext context, DateTime t) {
+String agoText(BuildContext context, DateTime t) {
   final d = DateTime.now().difference(t);
   final en = Strings.of(context).lang == 'en';
   if (d.inMinutes < 1) return en ? 'just now' : 'щойно';
@@ -177,8 +202,9 @@ final propagationProvider = StreamProvider<PropagationView>((ref) async* {
 
 const _intervals = [0, 5, 15, 30, 60];
 
-/// Settings -> "Mail via node": automatic/pinned node, known nodes, interval,
-/// fallback toggle, "Check mail now" and the last result.
+/// Settings -> "Mail via node": the current node, the last sync result,
+/// "Check mail now", interval, fallback toggle and a "Change" button that opens
+/// the full node list ([PropagationNodesScreen]).
 class PropagationSettingsSection extends ConsumerWidget {
   const PropagationSettingsSection({super.key});
 
@@ -199,69 +225,21 @@ class PropagationSettingsSection extends ConsumerWidget {
         if (v == null)
           Text(Strings.of(context).t('starting'))
         else ...[
-          _CurrentNode(view: v),
-          RadioGroup<String>(
-            groupValue: v.pinned == null ? '' : toHex(v.pinned!),
-            onChanged: (h) =>
-                node.setPropagationNode((h ?? '').isEmpty ? null : h),
-            child: Column(
-              children: [
-                RadioListTile<String>(
-                  key: const ValueKey('mail-node-auto'),
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  value: '',
-                  title: Text(pt(context, 'mail_node_auto')),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: _CurrentNode(view: v)),
+              const SizedBox(width: 8),
+              OutlinedButton(
+                key: const ValueKey('mail-change'),
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const PropagationNodesScreen(),
+                  ),
                 ),
-                if (v.nodes.isEmpty && v.pinned == null)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Text(
-                      pt(context, 'mail_nodes_empty'),
-                      key: const ValueKey('mail-nodes-empty'),
-                      style: text.bodySmall,
-                    ),
-                  ),
-                for (final n in v.nodes)
-                  RadioListTile<String>(
-                    key: ValueKey('mail-node-${n.hashHex}'),
-                    contentPadding: EdgeInsets.zero,
-                    dense: true,
-                    value: n.hashHex,
-                    title: Text(_nodeLabel(n)),
-                    subtitle: Text(
-                      [
-                        pt(context, 'mail_node_hops', {'n': '${n.hops}'}),
-                        if (!n.enabled) pt(context, 'mail_node_disabled'),
-                        pt(context, 'mail_node_cost', {
-                          'c': n.data.stampCost.toStringAsFixed(
-                            n.data.stampCost.truncateToDouble() ==
-                                    n.data.stampCost
-                                ? 0
-                                : 1,
-                          ),
-                        }),
-                        pt(context, 'mail_node_seen', {
-                          't': _ago(context, n.lastSeen),
-                        }),
-                      ].join(' · '),
-                    ),
-                  ),
-                if (v.pinned != null &&
-                    !v.nodes.any((n) => n.hashHex == toHex(v.pinned!)))
-                  RadioListTile<String>(
-                    key: ValueKey('mail-node-${toHex(v.pinned!)}'),
-                    contentPadding: EdgeInsets.zero,
-                    dense: true,
-                    value: toHex(v.pinned!),
-                    title: Text(
-                      pt(context, 'mail_node_unknown', {
-                        'h': _short(toHex(v.pinned!)),
-                      }),
-                    ),
-                  ),
-              ],
-            ),
+                child: Text(pt(context, 'mail_change')),
+              ),
+            ],
           ),
           const SizedBox(height: 4),
           Row(
@@ -325,6 +303,13 @@ class PropagationSettingsSection extends ConsumerWidget {
   }
 }
 
+/// "Hops, last heard" detail line of a node.
+String nodeDetail(BuildContext context, LxmPropagationNode n) => [
+  pt(context, 'mail_node_hops', {'n': '${n.hops}'}),
+  if (!n.enabled) pt(context, 'mail_node_disabled'),
+  pt(context, 'mail_node_heard', {'t': agoText(context, n.lastSeen)}),
+].join(' · ');
+
 class _CurrentNode extends StatelessWidget {
   const _CurrentNode({required this.view});
 
@@ -332,22 +317,58 @@ class _CurrentNode extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme;
     final n = view.activeNode;
     final label = n != null
-        ? _nodeLabel(n)
-        : (view.active != null ? _short(toHex(view.active!)) : null);
+        ? nodeLabel(n)
+        : (view.active != null ? nodeShortHash(toHex(view.active!)) : null);
+    final defaultDown =
+        view.choice == PropagationChoice.defaultNode && view.defaultUnreachable;
+    final String title;
+    if (label == null) {
+      title = pt(
+        context,
+        defaultDown ? 'mail_node_default_down_none' : 'mail_node_none',
+      );
+    } else if (defaultDown) {
+      title = pt(context, 'mail_node_default_down', {'node': label});
+    } else {
+      title = switch (view.choice) {
+        PropagationChoice.pinned => pt(context, 'mail_node_current', {
+          'node': '$label (${pt(context, 'mail_node_pinned')})',
+        }),
+        PropagationChoice.defaultNode => pt(
+          context,
+          'mail_node_current_default',
+          {'node': label},
+        ),
+        PropagationChoice.automatic => pt(context, 'mail_node_current', {
+          'node': label,
+        }),
+      };
+    }
+    final detail = label == null
+        ? null
+        : (n != null
+              ? nodeDetail(context, n)
+              : pt(context, 'mail_node_not_heard'));
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
-      child: Text(
-        label == null
-            ? pt(context, 'mail_node_none')
-            : pt(context, 'mail_node_current', {
-                'node': view.pinned != null
-                    ? '$label (${pt(context, 'mail_node_pinned')})'
-                    : label,
-              }),
-        key: const ValueKey('mail-current-node'),
-        style: Theme.of(context).textTheme.bodyMedium,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            key: const ValueKey('mail-current-node'),
+            style: style.bodyMedium,
+          ),
+          if (detail != null)
+            Text(
+              detail,
+              key: const ValueKey('mail-current-detail'),
+              style: style.bodySmall,
+            ),
+        ],
       ),
     );
   }
@@ -379,7 +400,7 @@ class _SyncStatus extends StatelessWidget {
     final failed = !r.ok;
     return Text(
       pt(context, 'mail_last', {
-        't': _ago(context, r.at),
+        't': agoText(context, r.at),
         'r': syncResultText(context, r),
       }),
       key: const ValueKey('mail-last'),

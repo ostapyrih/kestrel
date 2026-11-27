@@ -35,7 +35,13 @@ PropagationView _view({
   LxmSyncResult? last,
   bool fallback = true,
   int interval = 15,
+  Uint8List? defaultNode,
+  bool usingDefault = false,
+  bool defaultDown = false,
 }) => PropagationView(
+  defaultNode: defaultNode,
+  usingDefault: usingDefault,
+  defaultUnreachable: defaultDown,
   nodes: nodes,
   active: active,
   pinned: pinned,
@@ -88,17 +94,7 @@ void main() {
   }
 
   group('Settings: mail via node', () {
-    testWidgets('empty: no node heard yet, automatic selected', (tester) async {
-      final node = FakeNode();
-      await show(tester, const SettingsScreen(), node: node);
-      await reveal(tester, 'mail-section');
-      expect(find.text('Пошта через вузол'), findsOneWidget);
-      expect(find.byKey(const ValueKey('mail-nodes-empty')), findsOneWidget);
-      expect(find.text('Вузол ще не знайдено'), findsOneWidget);
-      expect(find.text('Пошту ще не перевіряли'), findsOneWidget);
-    });
-
-    testWidgets('lists known nodes; picking one pins it, auto unpins', (
+    testWidgets('compact: current node, details, Change; no node list', (
       tester,
     ) async {
       final a = _node(1, name: 'Near node', hops: 1);
@@ -106,38 +102,191 @@ void main() {
       final node = FakeNode()..view = _view(nodes: [a, b], active: a.hash);
       await show(tester, const SettingsScreen(), node: node);
       await reveal(tester, 'mail-section');
-      expect(find.text('Near node'), findsWidgets);
       expect(find.text('Зараз: Near node'), findsOneWidget);
-      expect(find.textContaining('стрибків: 5'), findsOneWidget);
-      expect(find.textContaining('вартість штампа 16'), findsWidgets);
+      expect(find.textContaining('стрибків: 1'), findsOneWidget);
+      expect(find.textContaining('Far node'), findsNothing);
+      expect(find.byKey(const ValueKey('mail-change')), findsOneWidget);
+      expect(find.text('Змінити'), findsOneWidget);
+      expect(find.text('Пошту ще не перевіряли'), findsOneWidget);
+    });
 
-      await tester.ensureVisible(
-        find.byKey(ValueKey('mail-node-${b.hashHex}')),
+    testWidgets('no node found yet', (tester) async {
+      await show(tester, const SettingsScreen(), node: FakeNode());
+      await reveal(tester, 'mail-section');
+      expect(find.text('Вузол ще не знайдено'), findsOneWidget);
+    });
+
+    testWidgets('default node: labelled, unheard and unreachable states', (
+      tester,
+    ) async {
+      final def = Uint8List.fromList(List.filled(16, 0xBC));
+      final node = FakeNode()
+        ..view = _view(active: def, defaultNode: def, usingDefault: true);
+      await show(tester, const SettingsScreen(), node: node);
+      await reveal(tester, 'mail-section');
+      expect(find.textContaining('(типовий)'), findsOneWidget);
+      expect(find.text('ще не чути'), findsOneWidget);
+
+      final near = _node(1, name: 'Near node', hops: 1);
+      node.view = _view(
+        nodes: [near],
+        active: near.hash,
+        defaultNode: def,
+        usingDefault: true,
+        defaultDown: true,
       );
-      await tester.tap(find.byKey(ValueKey('mail-node-${b.hashHex}')));
-      await tester.pump();
-      expect(node.pinnedCalls, [b.hashHex]);
-
-      // pinned view: current node shows the pin, auto unpins
-      node.view = _view(nodes: [a, b], active: b.hash, pinned: b.hash);
       node.viewChanges.add(node.view);
       await tester.pump();
       await tester.pump();
-      expect(find.text('Зараз: Far node (закріплений)'), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('mail-node-auto')));
-      await tester.pump();
-      expect(node.pinnedCalls.last, isNull);
+      expect(
+        find.text('Типовий вузол недоступний, використовуємо Near node'),
+        findsOneWidget,
+      );
     });
 
-    testWidgets('a pinned node nobody has heard is still listed', (
-      tester,
-    ) async {
-      final p = Uint8List.fromList(List.filled(16, 0xAB));
-      final node = FakeNode()..view = _view(pinned: p, active: p);
+    testWidgets('pinned shows the pin', (tester) async {
+      final b = _node(2, name: 'Far node', hops: 5);
+      final node = FakeNode()
+        ..view = _view(nodes: [b], active: b.hash, pinned: b.hash);
       await show(tester, const SettingsScreen(), node: node);
       await reveal(tester, 'mail-section');
-      expect(find.byKey(ValueKey('mail-node-${toHex(p)}')), findsOneWidget);
-      expect(find.textContaining('Невідомий вузол'), findsOneWidget);
+      expect(find.text('Зараз: Far node (закріплений)'), findsOneWidget);
+    });
+
+    group('Change screen', () {
+      final a = _node(1, name: 'Near node', hops: 1);
+      final b = _node(2, name: 'Far node', hops: 5);
+      final def = _node(3, name: 'Owner node', hops: 3);
+
+      Future<FakeNode> open(
+        WidgetTester tester, {
+        Uint8List? pinned,
+        bool usingDefault = true,
+      }) async {
+        final node = FakeNode()
+          ..view = _view(
+            nodes: [b, def, a],
+            active: def.hash,
+            pinned: pinned,
+            defaultNode: def.hash,
+            usingDefault: usingDefault,
+          );
+        await show(tester, const SettingsScreen(), node: node);
+        await reveal(tester, 'mail-change');
+        await tester.ensureVisible(find.byKey(const ValueKey('mail-change')));
+        await tester.tap(find.byKey(const ValueKey('mail-change')));
+        await tester.pumpAndSettle();
+        return node;
+      }
+
+      testWidgets('sorted by hops, marks current and default', (tester) async {
+        await open(tester);
+        expect(find.text('Вузол розсилки'), findsOneWidget);
+        final ys = [
+          for (final n in [a, def, b])
+            tester
+                .getTopLeft(find.byKey(ValueKey('mail-node-${n.hashHex}')))
+                .dy,
+        ];
+        expect(ys, orderedEquals([...ys]..sort()));
+        expect(find.textContaining('зараз · типовий'), findsOneWidget);
+      });
+
+      testWidgets('search by name and by hash', (tester) async {
+        await open(tester);
+        await tester.enterText(
+          find.byKey(const ValueKey('mail-search')),
+          'far',
+        );
+        await tester.pump();
+        expect(find.text('Far node'), findsOneWidget);
+        expect(find.text('Near node'), findsNothing);
+        await tester.enterText(
+          find.byKey(const ValueKey('mail-search')),
+          a.hashHex.substring(0, 6),
+        );
+        await tester.pump();
+        expect(find.text('Near node'), findsOneWidget);
+        expect(find.text('Far node'), findsNothing);
+        await tester.enterText(
+          find.byKey(const ValueKey('mail-search')),
+          'zzz',
+        );
+        await tester.pump();
+        expect(find.text('Нічого не знайдено'), findsOneWidget);
+      });
+
+      testWidgets('picking a node pins it and returns', (tester) async {
+        final node = await open(tester);
+        await tester.tap(find.byKey(ValueKey('mail-node-${b.hashHex}')));
+        await tester.pumpAndSettle();
+        expect(node.pinnedCalls, [b.hashHex]);
+        expect(find.byKey(const ValueKey('mail-search')), findsNothing);
+      });
+
+      testWidgets('Automatic unpins', (tester) async {
+        final node = await open(tester);
+        await tester.tap(find.byKey(const ValueKey('mail-node-auto')));
+        await tester.pumpAndSettle();
+        expect(node.pinnedCalls, [null]);
+      });
+
+      testWidgets('Reset to default', (tester) async {
+        final node = await open(tester, pinned: b.hash, usingDefault: false);
+        await tester.tap(find.byKey(const ValueKey('mail-node-reset')));
+        await tester.pumpAndSettle();
+        expect(node.resetCalls, 1);
+        expect(node.pinnedCalls, isEmpty);
+      });
+
+      testWidgets('picking the default node resets to it', (tester) async {
+        final node = await open(tester, pinned: b.hash, usingDefault: false);
+        await tester.tap(find.byKey(ValueKey('mail-node-${def.hashHex}')));
+        await tester.pumpAndSettle();
+        expect(node.resetCalls, 1);
+        expect(node.pinnedCalls, isEmpty);
+      });
+
+      testWidgets('an unheard default and an unheard pin are listed', (
+        tester,
+      ) async {
+        final p = Uint8List.fromList(List.filled(16, 0xAB));
+        final d = Uint8List.fromList(List.filled(16, 0xBC));
+        final node = FakeNode()
+          ..view = _view(pinned: p, active: p, defaultNode: d);
+        await show(tester, const SettingsScreen(), node: node);
+        await reveal(tester, 'mail-change');
+        await tester.ensureVisible(find.byKey(const ValueKey('mail-change')));
+        await tester.tap(find.byKey(const ValueKey('mail-change')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(ValueKey('mail-node-${toHex(p)}')), findsOneWidget);
+        expect(find.byKey(ValueKey('mail-node-${toHex(d)}')), findsOneWidget);
+        expect(find.textContaining('Невідомий вузол'), findsNWidgets(2));
+      });
+
+      testWidgets('English strings', (tester) async {
+        final node = FakeNode()
+          ..view = _view(
+            nodes: [a],
+            active: a.hash,
+            defaultNode: a.hash,
+            usingDefault: true,
+          );
+        await show(
+          tester,
+          const SettingsScreen(),
+          node: node,
+          locale: const Locale('en'),
+        );
+        await reveal(tester, 'mail-change');
+        expect(find.text('Using: Near node (default)'), findsOneWidget);
+        await tester.ensureVisible(find.byKey(const ValueKey('mail-change')));
+        await tester.tap(find.byKey(const ValueKey('mail-change')));
+        await tester.pumpAndSettle();
+        expect(find.text('Reset to default'), findsOneWidget);
+        expect(find.text('Automatic (nearest node)'), findsOneWidget);
+        expect(find.text('Search by name or hash'), findsOneWidget);
+      });
     });
 
     testWidgets('interval and fallback toggle are applied', (tester) async {
@@ -225,7 +374,6 @@ void main() {
       );
       await reveal(tester, 'mail-section');
       expect(find.text('Mail via node'), findsOneWidget);
-      expect(find.text('Automatic (nearest node)'), findsOneWidget);
       expect(find.text('Using: Near node'), findsOneWidget);
       expect(find.text('Check mail now'), findsOneWidget);
       expect(

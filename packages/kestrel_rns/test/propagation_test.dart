@@ -155,6 +155,27 @@ void main() {
       );
     });
 
+    test('a preferred node wins unless unreachable; pin beats it', () {
+      final near = _n(2, hops: 1);
+      final pref = Uint8List.fromList(List.filled(16, 9));
+      final prefHex = toHex(pref);
+      expect(
+        PropagationNodeSelector.select([near], now: now, preferred: pref),
+        pref,
+      );
+      expect(
+        PropagationNodeSelector.select([near],
+            now: now, preferred: pref, unreachable: {prefHex}),
+        near.hash,
+      );
+      final pin = Uint8List.fromList(List.filled(16, 5));
+      expect(
+        PropagationNodeSelector.select([near],
+            now: now, preferred: pref, pinned: pin),
+        pin,
+      );
+    });
+
     test('a pinned node always wins, even if unknown', () {
       final near = _n(2, hops: 1);
       final pinned = Uint8List.fromList(List.filled(16, 9));
@@ -418,6 +439,56 @@ void main() {
       expect(router.pinnedNode, pin);
       router.setPinnedNode(null);
       expect(router.activeNode, auto);
+    });
+
+    test('default node: used when heard, even if a nearer one exists', () async {
+      await setUp0();
+      final heard = router.propagationNodes.single.hash;
+      router.setDefaultNode(heard);
+      expect(router.activeNode, heard);
+      expect(router.defaultNode, heard);
+      expect(router.pinnedNode, isNull);
+    });
+
+    test('default node: used before it is heard; pin and clear override it',
+        () async {
+      await setUp0();
+      final auto = router.activeNode;
+      final dflt = Uint8List.fromList(List.filled(16, 7));
+      router.setDefaultNode(dflt);
+      expect(router.activeNode, dflt, reason: 'unheard default still wins');
+      final pin = Uint8List.fromList(List.filled(16, 3));
+      router.setPinnedNode(pin);
+      expect(router.activeNode, pin);
+      router.setPinnedNode(null);
+      expect(router.activeNode, dflt);
+      router.setDefaultNode(null);
+      expect(router.activeNode, auto);
+    });
+
+    test('failing default falls back to automatic, then is retried', () async {
+      await setUp0(
+        config: const LxmRouterConfig(
+          processInterval: Duration(milliseconds: 100),
+          autoSync: false,
+          propagationSyncInterval: null,
+          nodeUnreachableFor: Duration(seconds: 2),
+          propagationPathWait: Duration(milliseconds: 300),
+        ),
+      );
+      final auto = router.activeNode!;
+      final dflt = Uint8List.fromList(List.filled(16, 7));
+      router.setDefaultNode(dflt);
+      expect(router.activeNode, dflt);
+      for (var i = 0; i < 2; i++) {
+        final r = await router.syncInbox();
+        expect(r.ok, isFalse);
+      }
+      expect(router.isNodeUnreachable(dflt), isTrue);
+      expect(router.activeNode, auto);
+      await Future<void>.delayed(const Duration(milliseconds: 2200));
+      expect(router.isNodeUnreachable(dflt), isFalse);
+      expect(router.activeNode, dflt, reason: 'default retried later');
     });
 
     test('propagated send without any node fails after nodeWait', () async {

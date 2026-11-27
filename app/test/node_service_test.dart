@@ -239,9 +239,160 @@ void main() {
     },
   );
 
+  test('default node: selection, overrides, reset and migration', () async {
+    final def = fromHex(kDefaultPropagationNode);
+    // fresh install: default is selected even though it was never heard
+    expect(node.propagation.choice, PropagationChoice.defaultNode);
+    expect(node.router.activeNode, def);
+    expect(node.propagation.pinned, isNull);
+
+    // explicit pin overrides
+    final pin = 'ab' * 16;
+    await node.setPropagationNode(pin);
+    expect(node.propagation.choice, PropagationChoice.pinned);
+    expect(toHex(node.router.activeNode!), pin);
+    expect(node.router.defaultNode, isNull);
+
+    // explicit automatic overrides (no node heard -> none)
+    await node.setPropagationNode(null);
+    expect(node.propagation.choice, PropagationChoice.automatic);
+    expect(node.router.activeNode, isNull);
+
+    // reset restores the default
+    await node.resetPropagationNode();
+    expect(node.propagation.choice, PropagationChoice.defaultNode);
+    expect(node.router.activeNode, def);
+    expect(await repo.getSetting(SettingKeys.propagationNode), '');
+  });
+
+  test('migration rule: stored value maps to a choice', () {
+    // never chosen, or the old "automatic" empty string -> default
+    expect(
+      NodeService.propagationChoiceOf(null),
+      PropagationChoice.defaultNode,
+    );
+    expect(NodeService.propagationChoiceOf(''), PropagationChoice.defaultNode);
+    expect(
+      NodeService.propagationChoiceOf('garbage'),
+      PropagationChoice.defaultNode,
+    );
+    // existing pins stay, new explicit automatic is kept
+    expect(
+      NodeService.propagationChoiceOf('ab' * 16),
+      PropagationChoice.pinned,
+    );
+    expect(
+      NodeService.propagationChoiceOf('auto'),
+      PropagationChoice.automatic,
+    );
+  });
+
+  test('persisted choices survive a restart; legacy values migrate', () async {
+    Future<NodeService> restart() async {
+      final n = NodeService(
+        repo: repo,
+        secrets: secrets,
+        interfaceFactory: (h, _) => MemoryInterface('again'),
+        transportConfig: _noStamps,
+        routerConfig: _fast,
+      );
+      await n.start();
+      addTearDown(n.stop);
+      return n;
+    }
+
+    await repo.setSetting(SettingKeys.propagationNode, ''); // legacy auto
+    var again = await restart();
+    expect(toHex(again.router.defaultNode!), kDefaultPropagationNode);
+
+    await repo.setSetting(SettingKeys.propagationNode, 'ab' * 16);
+    again = await restart();
+    expect(toHex(again.router.pinnedNode!), 'ab' * 16);
+
+    await node.setPropagationNode(null);
+    again = await restart();
+    expect(again.propagation.choice, PropagationChoice.automatic);
+  });
+
+  test('default node: selection, overrides, reset', () async {
+    final def = fromHex(kDefaultPropagationNode);
+    // fresh install: default is selected even though it was never heard
+    expect(node.propagation.choice, PropagationChoice.defaultNode);
+    expect(node.router.activeNode, def);
+    expect(node.propagation.pinned, isNull);
+
+    // explicit pin overrides
+    final pin = 'ab' * 16;
+    await node.setPropagationNode(pin);
+    expect(node.propagation.choice, PropagationChoice.pinned);
+    expect(toHex(node.router.activeNode!), pin);
+    expect(node.router.defaultNode, isNull);
+
+    // explicit automatic overrides (no node heard -> none)
+    await node.setPropagationNode(null);
+    expect(node.propagation.choice, PropagationChoice.automatic);
+    expect(node.router.activeNode, isNull);
+
+    // reset restores the default
+    await node.resetPropagationNode();
+    expect(node.propagation.choice, PropagationChoice.defaultNode);
+    expect(node.router.activeNode, def);
+    expect(await repo.getSetting(SettingKeys.propagationNode), '');
+  });
+
+  test('migration rule: stored value maps to a choice', () {
+    // never chosen, or the old "automatic" empty string -> default
+    expect(
+      NodeService.propagationChoiceOf(null),
+      PropagationChoice.defaultNode,
+    );
+    expect(NodeService.propagationChoiceOf(''), PropagationChoice.defaultNode);
+    expect(
+      NodeService.propagationChoiceOf('garbage'),
+      PropagationChoice.defaultNode,
+    );
+    // existing pins stay, a new explicit automatic is kept
+    expect(
+      NodeService.propagationChoiceOf('ab' * 16),
+      PropagationChoice.pinned,
+    );
+    expect(
+      NodeService.propagationChoiceOf('auto'),
+      PropagationChoice.automatic,
+    );
+  });
+
+  test('choices survive a restart; legacy values migrate', () async {
+    Future<NodeService> restart() async {
+      final n = NodeService(
+        repo: repo,
+        secrets: secrets,
+        interfaceFactory: (h, _) => MemoryInterface('again'),
+        transportConfig: _noStamps,
+        routerConfig: _fast,
+      );
+      await n.start();
+      addTearDown(n.stop);
+      return n;
+    }
+
+    await repo.setSetting(SettingKeys.propagationNode, ''); // legacy auto
+    var again = await restart();
+    expect(toHex(again.router.defaultNode!), kDefaultPropagationNode);
+
+    await repo.setSetting(SettingKeys.propagationNode, 'ab' * 16);
+    again = await restart();
+    expect(toHex(again.router.pinnedNode!), 'ab' * 16);
+
+    await node.setPropagationNode(null);
+    again = await restart();
+    expect(again.propagation.choice, PropagationChoice.automatic);
+  });
+
   test('mail via node: settings persist and apply to the router', () async {
-    // defaults: automatic node, fallback on, 15 minute interval
+    // defaults: the default node, fallback on, 15 minute interval
     expect(node.router.pinnedNode, isNull);
+    expect(toHex(node.router.defaultNode!), kDefaultPropagationNode);
     expect(node.router.fallbackToPropagation, isTrue);
     expect(node.propagation.intervalMinutes, 15);
 
@@ -258,7 +409,7 @@ void main() {
 
     await node.setPropagationNode(null);
     expect(node.router.pinnedNode, isNull);
-    expect(await repo.getSetting(SettingKeys.propagationNode), '');
+    expect(await repo.getSetting(SettingKeys.propagationNode), 'auto');
 
     // a restarted service picks the settings up again
     await node.setPropagationNode(pin);
