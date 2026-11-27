@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/ostapyrih/kestrel/compare/app-v0.8.3...app-v0.9.0) (2026-11-27)
+
+
+### Features
+
+* **app:** sync NomadNet bookmarks, favourites, history and per-node settings across devices ([#38](https://github.com/ostapyrih/kestrel/issues/38)) ([ba7f661](https://github.com/ostapyrih/kestrel/commit/ba7f6610c19c4522a7f0880e2f3b14088927633b))
+
 ## [0.8.3](https://github.com/ostapyrih/kestrel/compare/app-v0.8.2...app-v0.8.3) (2026-11-27)
 
 
