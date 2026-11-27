@@ -233,6 +233,42 @@ CREATE TABLE vault_pending (
   marks TEXT
 )''',
   ]),
+  // NomadNet browser (Phase N): nodes learned from announces (or visited by
+  // address), bookmarks, visit history and the page cache (#!c= expiry).
+  Migration(5, [
+    '''
+CREATE TABLE nomad_nodes (
+  hash TEXT PRIMARY KEY,
+  name TEXT NOT NULL DEFAULT '',
+  hops INTEGER,
+  first_seen INTEGER NOT NULL,
+  last_seen INTEGER NOT NULL,
+  announced INTEGER NOT NULL DEFAULT 0,
+  favourite INTEGER NOT NULL DEFAULT 0,
+  identify INTEGER NOT NULL DEFAULT 0
+)''',
+    '''
+CREATE TABLE nomad_bookmarks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  url TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL DEFAULT '',
+  created INTEGER NOT NULL
+)''',
+    '''
+CREATE TABLE nomad_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  url TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  ts INTEGER NOT NULL
+)''',
+    'CREATE INDEX nomad_history_ts ON nomad_history(ts)',
+    '''
+CREATE TABLE nomad_cache (
+  url TEXT PRIMARY KEY,
+  data BLOB NOT NULL,
+  expires INTEGER NOT NULL
+)''',
+  ]),
 ];
 
 int get latestSchemaVersion => migrations.last.version;

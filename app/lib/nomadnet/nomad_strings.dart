@@ -1,0 +1,151 @@
+import 'package:material_ui/material_ui.dart';
+
+import '../l10n/strings.dart';
+
+/// NomadNet browser strings (Ukrainian default, English fallback), kept
+/// apart from the main l10n tables like the updater strings.
+String nt(
+  BuildContext context,
+  String key, [
+  Map<String, String> args = const {},
+]) => ntFor(Strings.of(context).lang, key, args);
+
+/// Same as [nt] for a language code (tests, non-widget code).
+String ntFor(String lang, String key, [Map<String, String> args = const {}]) {
+  var s = (lang == 'en' ? _en[key] : _uk[key]) ?? _uk[key] ?? key;
+  args.forEach((k, v) => s = s.replaceAll('{$k}', v));
+  return s;
+}
+
+const _uk = <String, String>{
+  'nn_title': 'Сторінки',
+  'nn_tab_nodes': 'Вузли',
+  'nn_tab_bookmarks': 'Закладки',
+  'nn_tab_history': 'Історія',
+  'nn_search': 'Пошук вузла',
+  'nn_sort': 'Сортування',
+  'nn_sort_seen': 'За останнім анонсом',
+  'nn_sort_name': 'За назвою',
+  'nn_sort_hops': 'За відстанню',
+  'nn_favourites_only': 'Лише обрані',
+  'nn_nodes_empty':
+      'Вузлів ще не знайдено. Вони зʼявляться, коли мережа анонсує їх, або введіть адресу вище.',
+  'nn_bookmarks_empty': 'Закладок немає',
+  'nn_history_empty': 'Історія порожня',
+  'nn_clear_history': 'Очистити історію',
+  'nn_hops': '{n} стрибків',
+  'nn_hops_1': '1 стрибок',
+  'nn_direct': 'прямо',
+  'nn_never_named': 'без назви',
+  'nn_seen': 'анонс {time}',
+  'nn_favourite': 'Обране',
+  'nn_unfavourite': 'Прибрати з обраних',
+  'nn_forget': 'Забути вузол',
+  'nn_address_hint': 'адреса: <хеш>:/page/index.mu',
+  'nn_go': 'Перейти',
+  'nn_back': 'Назад',
+  'nn_forward': 'Вперед',
+  'nn_reload': 'Оновити',
+  'nn_stop': 'Зупинити',
+  'nn_bookmark_add': 'Додати в закладки',
+  'nn_bookmark_remove': 'Прибрати із закладок',
+  'nn_copy_address': 'Копіювати адресу',
+  'nn_identify': 'Представлятися цьому вузлу',
+  'nn_identify_warn':
+      'Вузол побачить ідентичність цього пристрою (B) і зможе пов\'язувати ваші візити. Вимкнено за замовчуванням.',
+  'nn_identify_title': 'Представлятися вузлу?',
+  'nn_enable': 'Увімкнути',
+  'nn_empty_page': 'Оберіть вузол зі списку або введіть адресу',
+  'nn_malformed': 'Некоректна адреса. Формат: 32 hex-символи або <хеш>:/page/x.mu',
+  'nn_unsupported': 'Це посилання не підтримується: {link}',
+  'nn_phase_path': 'Пошук шляху…',
+  'nn_phase_connect': 'Зʼєднання…',
+  'nn_phase_request': 'Запит…',
+  'nn_phase_receive': 'Отримання {pct}%',
+  'nn_phase_reused': 'зʼєднання відкрите',
+  'nn_via': 'через {transport}',
+  'nn_from_cache': 'з кешу',
+  'nn_loaded_in': '{secs} с · {size}',
+  'nn_err_nopath': 'Шлях до вузла не знайдено. Вузол може бути поза мережею.',
+  'nn_err_link': 'Не вдалося встановити зʼєднання з вузлом.',
+  'nn_err_timeout': 'Вузол не відповів вчасно.',
+  'nn_err_request': 'Запит не вдався.',
+  'nn_err_toolarge': 'Відповідь завелика ({limit}), її відхилено.',
+  'nn_err_badresponse':
+      'Вузол не повернув сторінку (сторінки немає або доступ заборонено).',
+  'nn_err_generic': 'Помилка завантаження.',
+  'nn_retry': 'Повторити',
+  'nn_download_ready': 'Файл отримано: {name} ({size})',
+  'nn_save': 'Зберегти',
+  'nn_saved': 'Збережено: {where}',
+  'nn_download_receiving': 'Завантаження файлу…',
+  'nn_node': 'Вузол {name}',
+  'nn_open_chat_failed': 'Не вдалося відкрити чат',
+};
+
+const _en = <String, String>{
+  'nn_title': 'Pages',
+  'nn_tab_nodes': 'Nodes',
+  'nn_tab_bookmarks': 'Bookmarks',
+  'nn_tab_history': 'History',
+  'nn_search': 'Search nodes',
+  'nn_sort': 'Sort',
+  'nn_sort_seen': 'By last announce',
+  'nn_sort_name': 'By name',
+  'nn_sort_hops': 'By distance',
+  'nn_favourites_only': 'Favourites only',
+  'nn_nodes_empty':
+      'No nodes found yet. They appear when the network announces them, or enter an address above.',
+  'nn_bookmarks_empty': 'No bookmarks',
+  'nn_history_empty': 'History is empty',
+  'nn_clear_history': 'Clear history',
+  'nn_hops': '{n} hops',
+  'nn_hops_1': '1 hop',
+  'nn_direct': 'direct',
+  'nn_never_named': 'unnamed',
+  'nn_seen': 'announced {time}',
+  'nn_favourite': 'Favourite',
+  'nn_unfavourite': 'Remove from favourites',
+  'nn_forget': 'Forget node',
+  'nn_address_hint': 'address: <hash>:/page/index.mu',
+  'nn_go': 'Go',
+  'nn_back': 'Back',
+  'nn_forward': 'Forward',
+  'nn_reload': 'Reload',
+  'nn_stop': 'Stop',
+  'nn_bookmark_add': 'Add bookmark',
+  'nn_bookmark_remove': 'Remove bookmark',
+  'nn_copy_address': 'Copy address',
+  'nn_identify': 'Identify to this node',
+  'nn_identify_warn':
+      'The node will see this device\'s identity (B) and can link your visits. Off by default.',
+  'nn_identify_title': 'Identify to the node?',
+  'nn_enable': 'Enable',
+  'nn_empty_page': 'Pick a node from the list or enter an address',
+  'nn_malformed':
+      'Malformed address. Use 32 hex characters or <hash>:/page/x.mu',
+  'nn_unsupported': 'This link type is not supported: {link}',
+  'nn_phase_path': 'Finding path…',
+  'nn_phase_connect': 'Connecting…',
+  'nn_phase_request': 'Requesting…',
+  'nn_phase_receive': 'Receiving {pct}%',
+  'nn_phase_reused': 'link already open',
+  'nn_via': 'via {transport}',
+  'nn_from_cache': 'from cache',
+  'nn_loaded_in': '{secs} s · {size}',
+  'nn_err_nopath': 'No path to the node. It may be out of reach.',
+  'nn_err_link': 'Could not establish a link to the node.',
+  'nn_err_timeout': 'The node did not answer in time.',
+  'nn_err_request': 'The request failed.',
+  'nn_err_toolarge': 'The response is too large ({limit}) and was refused.',
+  'nn_err_badresponse':
+      'The node returned no page (it does not exist, or access is denied).',
+  'nn_err_generic': 'Loading failed.',
+  'nn_retry': 'Retry',
+  'nn_download_ready': 'File received: {name} ({size})',
+  'nn_save': 'Save',
+  'nn_saved': 'Saved: {where}',
+  'nn_download_receiving': 'Downloading file…',
+  'nn_node': 'Node {name}',
+  'nn_open_chat_failed': 'Could not open the chat',
+};
