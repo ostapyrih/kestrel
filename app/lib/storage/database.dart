@@ -317,6 +317,9 @@ abstract final class SettingKeys {
   static const serverPort = 'server_port';
   static const deviceName = 'device_name';
 
+  /// Identity (`A`/`B`) the new-chat screen preselects: the last one used.
+  static const newChatIdentity = 'new_chat_identity';
+
   // Bridge (account A). The public key is the S identity; the cursor and the
   // state id belong together and are reset together.
   static const bridgePubkey = 'bridge_pubkey';
@@ -334,6 +337,7 @@ abstract final class SettingKeys {
   static const vaultLastSeq = 'vault_last_seq';
   static const vaultGen = 'vault_gen';
   static const vaultLastSync = 'vault_last_sync';
+  static const vaultLastError = 'vault_last_error';
   static const vaultUsedBytes = 'vault_used_bytes';
   static const vaultQuotaBytes = 'vault_quota_bytes';
   static const vaultQuotaFull = 'vault_quota_full';
