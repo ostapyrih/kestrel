@@ -56,9 +56,8 @@ dependencies:
   window_manager: ^0.7.1
   tray_manager: ^0.9.1
   nativeapi: ^0.6.2
-  flutter_blue_plus: ^1.34.5
-  flutter_libserialport:
-    path: ../packages/flutter_libserialport
+  flutter_local_notifications: ^23.0.4
+  workmanager: ^0.10.10
   flutter_blue_plus: ^1.34.5
   flutter_libserialport:
     path: ../packages/flutter_libserialport

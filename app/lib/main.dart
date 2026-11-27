@@ -207,19 +207,19 @@ Future<void> main() async {
       }),
     );
   }
-  runApp(
-    ProviderScope(
-      overrides: [
-        repoProvider.overrideWithValue(repo),
-        nodeProvider.overrideWithValue(node),
-        bridgeProvider.overrideWithValue(bridge),
-        nomadServiceProvider.overrideWithValue(nomad),
+  final container = ProviderContainer(
+    overrides: [
+      repoProvider.overrideWithValue(repo),
+      nodeProvider.overrideWithValue(node),
+      bridgeProvider.overrideWithValue(bridge),
+      nomadServiceProvider.overrideWithValue(nomad),
       loraControllerProvider.overrideWithValue(lora),
-        loraControllerProvider.overrideWithValue(lora),
-        updateServiceProvider.overrideWithValue(updates),
-      ],
-      child: const KestrelApp(),
-    ),
+      updateServiceProvider.overrideWithValue(updates),
+      chatFocusProvider.overrideWithValue(focus),
+      notificationSinkProvider.overrideWithValue(sink),
+      backgroundServiceProvider.overrideWithValue(background.service),
+      backgroundModeProvider.overrideWithValue(background),
+    ],
   );
   openChat = (id) {
     if (isDesktop) unawaited(shell.showWindow());
