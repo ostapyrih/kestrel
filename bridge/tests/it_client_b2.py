@@ -12,6 +12,7 @@ import time
 import msgpack
 import RNS
 
+from tests import it_vault as V
 from tests.it_client_b import connect, find_path, out, request, wait
 
 
@@ -38,6 +39,15 @@ def main() -> None:
     out("b2_devices", request(link, "/devices/list", {}))
     out("b2_messages", request(link, "/get_messages", {"peer": peer, "limit": 20}))
     out("b2_subscribe", request(link, "/subscribe", {"topics": ["lxmf", "vault"], "profile": "full"}))
+    # device 1 uploaded a blob for the group: read it with the key wrapped for this identity
+    wait(lambda: (request(link, "/vault/list", {}) or {}).get("result", {}).get("blobs"), 90, "vault blob")
+    lst = request(link, "/vault/list", {})["result"]
+    key = request(link, "/vault/key", {})["result"]
+    chain = V.unwrap_identity(key["wrapped_group_key"], b2)
+    got = request(link, "/vault/get", {"blob_ids": [m["blob_id"] for m in lst["blobs"]]})["result"]
+    plain = V.decrypt_blob(chain, lst["blobs"][0], got["blobs"][0]["ciphertext"])
+    out("b2_vault", {"wrap": key["wrap"], "epoch": key["wrapped_epoch"], "records": plain["data"]["records"],
+                     "sha": lst["blobs"][0]["sha256"], "size": lst["blobs"][0]["size"]})
     out("B2_READY", True)
 
     # B1 revokes this device now: the bridge tells it why (kestrel.reject device_revoked), then closes the Link
@@ -54,6 +64,12 @@ def main() -> None:
         retry.identify(b2)
         wait(lambda: retry_packets, 15, "kestrel.reject on reconnect")
         out("b2_retry_reject", retry_packets)
+        try:
+            out("b2_put_after", request(retry, "/vault/put", {
+                "blob_id": os.urandom(16).hex(), "device_id": b2.hash.hex(), "seq": 1, "key_epoch": 1,
+                "ciphertext": b"x" * 40}, timeout=10))
+        except Exception as e:
+            out("b2_put_after", {"ok": False, "error": {"code": "link_closed", "message": type(e).__name__}})
         try:
             out("b2_after", request(retry, "/hello", {"protocol_version": 2}, timeout=10))
         except Exception as e:      # the Link may already be gone: that is a refusal too

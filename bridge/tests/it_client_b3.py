@@ -12,6 +12,7 @@ import time
 import msgpack
 import RNS
 
+from tests import it_vault as V
 from tests.it_client_b import connect, find_path, out, request, wait
 
 
@@ -49,6 +50,16 @@ def main() -> None:
     out("b3_hello", request(link, "/hello", {"protocol_version": 2, "client": "it-b3", "name": "Invited PC 2",
                                               "platform": "windows"}))
     out("b3_list", request(link, "/devices/list", {}))
+    # the vault is in use: the invite brought the key chain, wrapped to the secret that was only in the QR code
+    with open(os.path.join(os.path.dirname(token_file), "invite.secret")) as f:
+        secret = bytes.fromhex(f.read().strip())
+    key = request(link, "/vault/key", {})["result"]
+    chain = V.unwrap_invite(key["wrapped_group_key"], secret)
+    lst = request(link, "/vault/list", {})["result"]
+    got = request(link, "/vault/get", {"blob_ids": [m["blob_id"] for m in lst["blobs"]]})["result"]
+    plain = V.decrypt_blob(chain, lst["blobs"][0], got["blobs"][0]["ciphertext"])
+    out("b3_vault", {"wrap": key["wrap"], "epoch": key["wrapped_epoch"], "in_use": key["in_use"],
+                     "chain_epochs": sorted(chain), "records": plain["data"]["records"]})
     time.sleep(6.5)      # longer than the reject grace: the redeemed Link must stay up
     out("b3_still_up", link.status == RNS.Link.ACTIVE)
     out("b3_hello_late", request(link, "/hello", {"protocol_version": 2}))
