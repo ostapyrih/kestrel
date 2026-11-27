@@ -119,43 +119,45 @@ void main() {
   });
 
   group('retiring the old identity when joining a group', () {
-    test('own chats become read-only history labelled with the device',
-        () async {
-      final chat = await repo.findOrCreateChat('B', peerA, title: 'Alice');
-      await repo.insertIncoming(
-        identity: 'B',
-        chatId: chat,
-        lxmfHash: 'a1' * 16,
-        text: 'hi',
-        ts: DateTime.fromMillisecondsSinceEpoch(t0),
-        route: 'direct',
-        transport: 'tcp',
-        signatureValid: true,
-      );
-      await repo.insertOutgoing(
-        identity: 'B',
-        chatId: chat,
-        destinationHash: peerA,
-        text: 'queued one',
-        route: 'opportunistic',
-        transport: 'none',
-      );
-      final old = 'cc' * 16;
-      expect(await repo.retireOwnHistory(old, 'Old phone'), 1);
-      expect(await repo.chats(accountIdentity: 'B'), isEmpty);
-      expect(await count('messages'), 0);
-      final remote = await repo.remoteChats();
-      expect(remote.single.remoteDeviceName, 'Old phone');
-      expect(remote.single.peerHash, peerA);
-      final msgs = await repo.messages(remote.single.id);
-      expect(msgs.map((m) => m.text), containsAll(['hi', 'queued one']));
-      expect(
-        msgs.firstWhere((m) => m.text == 'queued one').status,
-        MsgStatus.failed,
-        reason: 'unsent messages become failed history',
-      );
-      expect(await repo.isLegacyDevice(old), isTrue);
-    });
+    test(
+      'own chats become read-only history labelled with the device',
+      () async {
+        final chat = await repo.findOrCreateChat('B', peerA, title: 'Alice');
+        await repo.insertIncoming(
+          identity: 'B',
+          chatId: chat,
+          lxmfHash: 'a1' * 16,
+          text: 'hi',
+          ts: DateTime.fromMillisecondsSinceEpoch(t0),
+          route: 'direct',
+          transport: 'tcp',
+          signatureValid: true,
+        );
+        await repo.insertOutgoing(
+          identity: 'B',
+          chatId: chat,
+          destinationHash: peerA,
+          text: 'queued one',
+          route: 'opportunistic',
+          transport: 'none',
+        );
+        final old = 'cc' * 16;
+        expect(await repo.retireOwnHistory(old, 'Old phone'), 1);
+        expect(await repo.chats(accountIdentity: 'B'), isEmpty);
+        expect(await count('messages'), 0);
+        final remote = await repo.remoteChats();
+        expect(remote.single.remoteDeviceName, 'Old phone');
+        expect(remote.single.peerHash, peerA);
+        final msgs = await repo.messages(remote.single.id);
+        expect(msgs.map((m) => m.text), containsAll(['hi', 'queued one']));
+        expect(
+          msgs.firstWhere((m) => m.text == 'queued one').status,
+          MsgStatus.failed,
+          reason: 'unsent messages become failed history',
+        );
+        expect(await repo.isLegacyDevice(old), isTrue);
+      },
+    );
 
     test('the bridge-off purge keeps retired histories', () async {
       final chat = await repo.findOrCreateChat('B', peerA);
@@ -202,21 +204,23 @@ void main() {
       expect(c.peerHash, peerA);
     });
 
-    test('a message sent on a sibling is outgoing; state moves forward',
-        () async {
-      final h = 'e2' * 16;
-      Future<bool> apply(String state) => repo.applySyncedMessage(
-        rec(h, 'sent there', incoming: false, state: state),
-      );
-      expect(await apply(MsgStatus.sent), isTrue);
-      expect(await apply(MsgStatus.delivered), isTrue);
-      expect(await apply(MsgStatus.sent), isFalse, reason: 'never backwards');
-      final chat = (await repo.chats(accountIdentity: 'B')).single;
-      final m = (await repo.messages(chat.id)).single;
-      expect(m.status, MsgStatus.delivered);
-      expect(m.outgoing, isTrue);
-      expect(await count('outbox'), 0, reason: 'nothing is sent again');
-    });
+    test(
+      'a message sent on a sibling is outgoing; state moves forward',
+      () async {
+        final h = 'e2' * 16;
+        Future<bool> apply(String state) => repo.applySyncedMessage(
+          rec(h, 'sent there', incoming: false, state: state),
+        );
+        expect(await apply(MsgStatus.sent), isTrue);
+        expect(await apply(MsgStatus.delivered), isTrue);
+        expect(await apply(MsgStatus.sent), isFalse, reason: 'never backwards');
+        final chat = (await repo.chats(accountIdentity: 'B')).single;
+        final m = (await repo.messages(chat.id)).single;
+        expect(m.status, MsgStatus.delivered);
+        expect(m.outgoing, isTrue);
+        expect(await count('outbox'), 0, reason: 'nothing is sent again');
+      },
+    );
 
     test('a group delete removes the chat and blocks stale records', () async {
       await repo.applySyncedMessage(rec('e3' * 16, 'one'));

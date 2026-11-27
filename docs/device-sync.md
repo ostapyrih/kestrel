@@ -84,7 +84,7 @@ merged-ratchet decrypt of a Python-encrypted message), plus cross-path dedupe an
   the pairing host (rotating to another sibling when it does not answer). Targeted records (seq 0): `backfill_req {p, c}` (phase,
   cursor) answered by `backfill {rp, rc, sp, items, np, nc, total}`. Phases in order: `tomb` (group deletion tombstones, first so
   deleted chats stay deleted), `msg` (messages of the main identity, cursor = local message id, batches of 40 / ~48 kB, upserted by
-  LXMF hash, incoming ones do not raise unread), `read` (unread counters), `bsync` / `bhist` (browser ops and history, as in 9.5).
+  LXMF hash, incoming ones do not raise unread), `read` (the source's unread counters, the only thing that sets unread on the new device; raised, never lowered), `bsync` / `bhist` (browser ops and history, as in 9.5).
   MeshChatX chats are not included (they come from the bridge). The new device persists `(phase, cursor)` after each applied batch
   (restart resumes), ignores answers for positions it has passed, re-asks after 20 s and shows "Syncing history..." on the chat
   list. Batches travel directly when the sibling is online (large ones upgrade to a link/resource), otherwise via the propagation node.

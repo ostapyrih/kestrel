@@ -11,6 +11,7 @@ import 'package:kestrel/screens/chat_screen.dart';
 import 'package:kestrel/screens/chats_screen.dart';
 import 'package:kestrel/screens/new_chat_screen.dart';
 import 'package:kestrel/screens/settings_screen.dart';
+import 'package:kestrel/screens/widgets.dart';
 import 'package:kestrel/storage/repo.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -90,6 +91,46 @@ void main() {
       // the list stays visible next to the open chat
       expect(find.byType(ChatsScreen), findsOneWidget);
       expect(find.text('Marichka'), findsOneWidget);
+    });
+  });
+
+  group('chat tile title (narrow list pane)', () {
+    testWidgets('long badge and long title shrink instead of overflowing', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(240, 600) * 2;
+      tester.view.devicePixelRatio = 2;
+      addTearDown(tester.view.resetPhysicalSize);
+      tester.platformDispatcher.localeTestValue = const Locale('uk');
+      addTearDown(tester.platformDispatcher.clearLocaleTestValue);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 121.5,
+              child: Row(
+                children: [
+                  const Flexible(
+                    child: Text(
+                      'A very long chat title that cannot fit',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: const IdentityBadge(
+                      'B',
+                      label: 'B · MeshChatX on a very long device name',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(tester.takeException(), isNull);
     });
   });
 
@@ -352,6 +393,10 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
+      // scrollUntilVisible stops at the first pixel in the cache extent, which
+      // can still be below the 860 px test surface: bring it fully on screen.
+      await tester.ensureVisible(find.byKey(const ValueKey('bridge-switch')));
+      await tester.pumpAndSettle();
       expect(find.text('потрібен ключ моста'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('bridge-switch')));
       await tester.pumpAndSettle();
@@ -427,6 +472,10 @@ void main() {
         200,
         scrollable: find.byType(Scrollable).first,
       );
+      // scrollUntilVisible stops at the first pixel in the cache extent, which
+      // can still be below the 860 px test surface: bring it fully on screen.
+      await tester.ensureVisible(find.byKey(const ValueKey('bridge-switch')));
+      await tester.pumpAndSettle();
       expect(find.text('Міст: онлайн'), findsOneWidget);
       expect(find.byKey(const ValueKey('my-devices')), findsNothing);
       await tester.tap(find.byKey(const ValueKey('bridge-switch')));
