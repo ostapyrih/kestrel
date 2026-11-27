@@ -108,16 +108,20 @@ class _NomadScreenState extends ConsumerState<NomadScreen> {
   Future<void> _openChat(String hash) async {
     final node = ref.read(nodeProvider);
     try {
-      final id = await node.openChat(hash);
+      final target = await node.openChat(hash);
       if (!mounted) return;
       await Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => ChatScreen(chatId: id)),
+        MaterialPageRoute<void>(
+          builder: (_) => target.isDraft
+              ? ChatScreen(draft: target)
+              : ChatScreen(chatId: target.chatId),
+        ),
       );
     } on Object {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(nt(context, 'nn_open_chat_failed'))));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(nt(context, 'nn_open_chat_failed'))),
+      );
     }
   }
 
@@ -227,9 +231,8 @@ class _NodeListPaneState extends ConsumerState<NodeListPane> {
     if (text.isEmpty) return;
     final u = NomadUrl.tryParse(text);
     if (u == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(nt(context, 'nn_malformed'))));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(nt(context, 'nn_malformed'))));
       return;
     }
     widget.onOpen(u);
@@ -268,7 +271,11 @@ class _NodeListPaneState extends ConsumerState<NodeListPane> {
           ),
           Expanded(
             child: TabBarView(
-              children: [_nodes(context), _bookmarks(context), _history(context)],
+              children: [
+                _nodes(context),
+                _bookmarks(context),
+                _history(context),
+              ],
             ),
           ),
         ],
@@ -511,10 +518,7 @@ class _NodeTile extends ConsumerWidget {
             checked: node.identify,
             child: Text(nt(context, 'nn_identify')),
           ),
-          PopupMenuItem(
-            value: 'forget',
-            child: Text(nt(context, 'nn_forget')),
-          ),
+          PopupMenuItem(value: 'forget', child: Text(nt(context, 'nn_forget'))),
         ],
       ),
       onTap: onOpen,
@@ -635,9 +639,8 @@ class _BrowserPaneState extends ConsumerState<BrowserPane> {
         .setViewPrefs(h, fontScale: zoom, wrapAll: wrapAll);
   }
 
-  void _stepZoom(double factor) => _savePrefs(
-    zoom: (_zoom * factor).clamp(micronMinZoom, micronMaxZoom),
-  );
+  void _stepZoom(double factor) =>
+      _savePrefs(zoom: (_zoom * factor).clamp(micronMinZoom, micronMaxZoom));
 
   Future<void> _toggleIdentify() async {
     final u = c.current ?? c.target;
@@ -676,7 +679,10 @@ class _BrowserPaneState extends ConsumerState<BrowserPane> {
               Align(
                 alignment: Alignment.centerLeft,
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 2,
+                  ),
                   child: Text(
                     status,
                     key: const ValueKey('nn-status'),

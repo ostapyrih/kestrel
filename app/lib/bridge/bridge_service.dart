@@ -6,6 +6,7 @@ import 'package:kestrel_rns/kestrel_rns.dart';
 
 import '../node/identity_store.dart';
 import '../platform.dart';
+import '../storage/chat_target.dart';
 import '../storage/database.dart';
 import '../storage/repo.dart';
 import 'bridge_connection.dart';
@@ -557,11 +558,19 @@ class BridgeService {
   /// up with an error (never an endless wait).
   static const deleteTimeout = Duration(seconds: 20);
 
-  /// Starts a chat as account A with [peerHash]: the local chat row only; the
-  /// first message goes through the outbox (queued while the bridge or
+  /// Opens the conversation with [peerHash] as account A. Stores nothing: a
+  /// draft when no chat exists yet. The first message ([sendToPeer]) creates
+  /// the chat and goes through the outbox (queued while the bridge or
   /// MeshChatX is not available, sent when it is back).
-  Future<int> openAChat(String peerHash, {String? name}) =>
-      store.ensureChat(peerHash.trim().toLowerCase(), name: name);
+  Future<ChatTarget> openAChat(String peerHash, {String? name}) async {
+    final p = peerHash.trim().toLowerCase();
+    return ChatTarget(
+      chatId: await store.chatIdForPeer(p),
+      identity: 'A',
+      peer: p,
+      name: name,
+    );
+  }
 
   /// "Delete for all devices and in MeshChatX": asks the bridge to delete the
   /// conversation (MeshChatX), then removes the chat, its messages and its
@@ -699,10 +708,29 @@ class BridgeService {
     final chat = await repo.chat(chatId);
     if (chat == null || chat.peerHash == null) throw StateError('unknown chat');
     if (chat.accountIdentity != 'A') throw StateError('not an A chat');
+    return (await _queue(chatId, chat.peerHash!, text)).messageId;
+  }
+
+  /// Queues [text] as A to [peer]; the first message of a draft creates the
+  /// chat row in the same transaction as the message and outbox row. Returns
+  /// the chat and message ids.
+  Future<({int chatId, int messageId})> sendToPeer(
+    String peer,
+    String text, {
+    String? name,
+  }) => _queue(null, peer.trim().toLowerCase(), text, name: name);
+
+  Future<({int chatId, int messageId})> _queue(
+    int? chatId,
+    String peer,
+    String text, {
+    String? name,
+  }) async {
     final ids = await repo.insertOutgoing(
       identity: 'A',
       chatId: chatId,
-      destinationHash: chat.peerHash!,
+      newChatTitle: name,
+      destinationHash: peer,
       text: text,
       route: 'via_bridge',
       transport: 'none',
@@ -713,7 +741,7 @@ class BridgeService {
       await repo.addLog(ids.messageId, 'bridge_unreachable');
     }
     unawaited(_flush());
-    return ids.messageId;
+    return (messageId: ids.messageId, chatId: ids.chatId);
   }
 
   /// Sends everything queued for the bridge, in order.

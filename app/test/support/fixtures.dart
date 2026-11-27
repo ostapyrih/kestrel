@@ -9,6 +9,7 @@ import 'package:kestrel/bridge/vault_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kestrel/node/node_service.dart';
 import 'package:kestrel/providers.dart';
+import 'package:kestrel/storage/chat_target.dart';
 import 'package:kestrel/storage/repo.dart';
 
 final fakeAddress = '0123456789abcdef' * 2;
@@ -45,14 +46,32 @@ class FakeNode extends Fake implements NodeService {
   }
 
   @override
-  Future<int> openChat(
+  Future<ChatTarget> openChat(
     String peerHashHex, {
     String? name,
     String identity = 'B',
   }) async {
     opened.add(peerHashHex);
     openedAs.add(identity);
-    return 1;
+    return ChatTarget(
+      chatId: draft ? null : 1,
+      identity: identity,
+      peer: peerHashHex,
+      name: name,
+    );
+  }
+
+  /// Opened conversations are drafts (no chat row yet) when true.
+  bool draft = false;
+  final draftSends = <(String, String)>[];
+
+  @override
+  Future<({int chatId, int messageId})> sendToPeer(
+    ChatTarget t,
+    String text,
+  ) async {
+    draftSends.add((t.peer, text));
+    return (chatId: 1, messageId: 1);
   }
 
   @override
@@ -174,6 +193,14 @@ final fixtureLog = [
 
 /// Records bridge actions instead of touching the network.
 class FakeBridge extends Fake implements BridgeService {
+  final List<String> openedA = [];
+
+  @override
+  Future<ChatTarget> openAChat(String peerHash, {String? name}) async {
+    openedA.add(peerHash);
+    return ChatTarget(identity: 'A', peer: peerHash, name: name);
+  }
+
   final List<int> cancelled = [];
   final List<int> sentFromB = [];
   final List<String> renamed = [];

@@ -44,6 +44,26 @@ final selectedChatProvider = NotifierProvider<SelectedChat, int?>(
   SelectedChat.new,
 );
 
+/// Composer text of draft conversations that was typed but not sent. Kept in
+/// memory for the session only (key: `ChatTarget.draftKey`); never stored.
+class DraftTexts extends Notifier<Map<String, String>> {
+  @override
+  Map<String, String> build() => {};
+
+  void set(String key, String text) {
+    // nobody watches the texts, so the map is mutated in place
+    if (text.isEmpty) {
+      state.remove(key);
+    } else {
+      state[key] = text;
+    }
+  }
+}
+
+final draftTextsProvider = NotifierProvider<DraftTexts, Map<String, String>>(
+  DraftTexts.new,
+);
+
 final chatsProvider = StreamProvider<List<ChatRow>>((ref) {
   final repo = ref.watch(repoProvider);
   final f = ref.watch(accountFilterProvider);

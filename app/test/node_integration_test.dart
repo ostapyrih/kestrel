@@ -78,8 +78,10 @@ void main() {
     );
 
     // Dart -> Python
-    final chat = await node.openChat(peer.destHash, name: 'Python Peer');
-    final mid = await node.sendMessage(chat, 'hello from the app');
+    final target = await node.openChat(peer.destHash, name: 'Python Peer');
+    final sent = await node.sendToPeer(target, 'hello from the app');
+    final chat = sent.chatId;
+    final mid = sent.messageId;
     final r = await peer.waitFor('received');
     expect(r['content'], 'hello from the app');
     expect(r['source'], node.addressHex);

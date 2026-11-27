@@ -113,9 +113,12 @@ void main() {
 
   test('send: message, outbox row and every transition are recorded', () async {
     await exchangeAnnounces();
-    final chat = await node.openChat(toHex(peer.address), name: 'Peer');
+    final target = await node.openChat(toHex(peer.address), name: 'Peer');
+    expect(target.isDraft, isTrue); // nothing stored before the first send
+    expect(await repo.chats(), isEmpty);
     final got = peer.incoming.first.timeout(const Duration(seconds: 15));
-    final mid = await node.sendMessage(chat, 'hello peer');
+    final sent = await node.sendToPeer(target, 'hello peer');
+    final mid = sent.messageId;
     final r = await got;
     expect(r.message.contentAsString, 'hello peer');
 
@@ -167,9 +170,9 @@ void main() {
 
   test('large message goes direct and the route is recorded', () async {
     await exchangeAnnounces();
-    final chat = await node.openChat(toHex(peer.address));
+    final target = await node.openChat(toHex(peer.address));
     final got = peer.incoming.first.timeout(const Duration(seconds: 20));
-    final mid = await node.sendMessage(chat, 'z' * 900);
+    final mid = (await node.sendToPeer(target, 'z' * 900)).messageId;
     await got;
     await until(
       () async => (await repo.message(mid))!.status == MsgStatus.delivered,
@@ -186,9 +189,9 @@ void main() {
     'offline: message waits in the queue, transport "none", then goes out',
     () async {
       await exchangeAnnounces();
-      final chat = await node.openChat(toHex(peer.address));
+      final target = await node.openChat(toHex(peer.address));
       appIface.dropFilter = (_) => true;
-      final mid = await node.sendMessage(chat, 'later');
+      final mid = (await node.sendToPeer(target, 'later')).messageId;
       await Future<void>.delayed(const Duration(milliseconds: 400));
       expect((await repo.message(mid))!.status, isNot(MsgStatus.delivered));
       final got = peer.incoming.first.timeout(const Duration(seconds: 20));
@@ -204,8 +207,8 @@ void main() {
     'bridge toggle does not touch chats while the node is running',
     () async {
       await exchangeAnnounces();
-      final chat = await node.openChat(toHex(peer.address));
-      await node.sendMessage(chat, 'one');
+      final target = await node.openChat(toHex(peer.address));
+      final chat = (await node.sendToPeer(target, 'one')).chatId;
       await until(() async => (await repo.messages(chat)).isNotEmpty);
       final before = await adb.db.query('messages');
       await repo.setBridgeEnabled(true);

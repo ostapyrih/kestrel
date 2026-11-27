@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:kestrel_rns/kestrel_rns.dart';
 
 import '../bridge/bridge_service.dart';
+import '../storage/chat_target.dart';
 import '../storage/database.dart';
 import '../storage/repo.dart';
 import 'identity_store.dart';
@@ -212,10 +213,11 @@ class NodeService {
 
   // ------------------------------------------------------------------ chats
 
-  /// Opens (or creates) the chat with [peerHashHex] under account B, or under
-  /// account A when [identity] is `'A'` (bridge mode only; the first A message
-  /// queues in the outbox while the bridge or MeshChatX is unavailable).
-  Future<int> openChat(
+  /// Resolves the conversation with [peerHashHex] under account B, or under
+  /// account A when [identity] is `'A'` (bridge mode only). Never stores
+  /// anything: when no chat exists yet the result is a draft (see
+  /// [ChatTarget.isDraft]); the first [sendToPeer] creates the chat.
+  Future<ChatTarget> openChat(
     String peerHashHex, {
     String? name,
     String identity = 'B',
@@ -226,7 +228,34 @@ class NodeService {
       if (b == null) throw StateError('bridge is not available');
       return b.openAChat(h, name: name);
     }
-    return repo.findOrCreateChat('B', h, title: name);
+    return ChatTarget(
+      chatId: await repo.findChatId('B', h),
+      identity: 'B',
+      peer: h,
+      name: name,
+    );
+  }
+
+  /// Sends the first (or any) message to [t]'s peer. For a draft the chat row,
+  /// the message and its outbox entry are created in one transaction. Returns
+  /// chat and message ids.
+  Future<({int chatId, int messageId})> sendToPeer(
+    ChatTarget t,
+    String text,
+  ) async {
+    await ready;
+    if (t.identity == 'A') {
+      final b = bridge;
+      if (b == null) throw StateError('bridge is not available');
+      return b.sendToPeer(t.peer, text, name: t.name);
+    }
+    final ids = await _sendB(
+      chatId: t.chatId,
+      peer: t.peer,
+      title: t.name,
+      text: text,
+    );
+    return ids;
   }
 
   /// Cancels queued messages in the LXMF router (no-op while it is down).
@@ -344,16 +373,30 @@ class NodeService {
       if (b == null) throw StateError('bridge is not available');
       return b.sendMessage(chatId, text);
     }
+    return (await _sendB(
+      chatId: chatId,
+      peer: chat.peerHash!,
+      text: text,
+    )).messageId;
+  }
+
+  Future<({int messageId, int chatId})> _sendB({
+    int? chatId,
+    required String peer,
+    String? title,
+    required String text,
+  }) async {
     final ids = await repo.insertOutgoing(
       identity: 'B',
       chatId: chatId,
-      destinationHash: chat.peerHash!,
+      newChatTitle: title,
+      destinationHash: peer,
       text: text,
       route: 'opportunistic',
       transport: _current == NodeConnection.online ? 'tcp' : 'none',
     );
     final o = await router.send(
-      destinationHash: fromHex(chat.peerHash!),
+      destinationHash: fromHex(peer),
       content: text,
       method: LxmfMethod.opportunistic,
       tag: '${ids.outboxId}',
@@ -363,7 +406,7 @@ class NodeService {
       lxmfHash: toHex(o.hash),
       route: _routeName(o.method),
     );
-    return ids.messageId;
+    return (messageId: ids.messageId, chatId: ids.chatId);
   }
 
   static String _routeName(int method) => switch (method) {
