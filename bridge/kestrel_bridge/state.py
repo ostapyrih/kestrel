@@ -13,7 +13,7 @@ import time
 # ``meta.schema_version`` holds the version. A database without that row but with a ``meta`` table is
 # a protocol-v1 database (version 1). Every migration runs in one transaction; an existing database is
 # copied to ``<path>.v<from>.bak`` (sqlite backup API) before the first migration.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _V1 = [
     "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)",
@@ -87,7 +87,12 @@ def _migrate_2(db) -> None:
     db.execute("INSERT OR IGNORE INTO meta(k, v) VALUES('vault_keys_epoch', '0')")
 
 
-MIGRATIONS = {1: _migrate_1, 2: _migrate_2}
+def _migrate_3(db) -> None:
+    # how the wrapped group key of a device was wrapped: 'identity' (to its public key) or 'invite' (to an invite secret)
+    db.execute("ALTER TABLE device_keys ADD COLUMN kind TEXT NOT NULL DEFAULT 'identity'")
+
+
+MIGRATIONS = {1: _migrate_1, 2: _migrate_2, 3: _migrate_3}
 
 
 class SchemaTooNew(Exception):

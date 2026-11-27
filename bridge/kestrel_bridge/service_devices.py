@@ -98,7 +98,7 @@ class DeviceMixin:
     def _devices_invite(self, args: dict, ctx) -> dict:
         if self.registry.trusted(ctx.device_id) is None:
             raise BridgeError(errors.DEVICE_REVOKED, "the inviting device is not trusted")
-        return self.invites.create(ctx.device_id)
+        return self.invites.create(ctx.device_id, args)
 
     def _devices_redeem_trusted(self, args: dict, ctx) -> dict:
         raise BridgeError(errors.DEVICE_EXISTS, "this device is already paired", device_id=ctx.device_id)

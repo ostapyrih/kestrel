@@ -61,10 +61,11 @@ class Vault:
         return self.keys_epoch() >= 1
 
     def key_of(self, device_id: str) -> dict:
-        rows = self.state.query("SELECT epoch, wrapped FROM device_keys WHERE device_id=?", (device_id,))
+        rows = self.state.query("SELECT epoch, wrapped, kind FROM device_keys WHERE device_id=?", (device_id,))
         return {"key_epoch": self.epoch(), "in_use": self.in_use(),
                 "wrapped_epoch": rows[0][0] if rows else None,
-                "wrapped_group_key": bytes(rows[0][1]) if rows else None}
+                "wrapped_group_key": bytes(rows[0][1]) if rows else None,
+                "wrap": rows[0][2] if rows else None}
 
     def _check_wrapped(self, wrapped, expected_ids: set[str]) -> dict[str, bytes]:
         if not isinstance(wrapped, dict):
@@ -122,9 +123,22 @@ class Vault:
             self.state.meta_set("vault_keys_epoch", str(epoch))
         return {"key_epoch": epoch}
 
-    def store_device_key(self, device_id: str, wrapped: bytes) -> None:
-        self.state.execute("INSERT OR REPLACE INTO device_keys(device_id, epoch, wrapped, updated_at) VALUES(?,?,?,?)",
-                           (device_id, self.epoch(), wrapped, self._clock()))
+    def store_device_key(self, device_id: str, wrapped: bytes, kind: str = "identity") -> None:
+        self.state.execute("INSERT OR REPLACE INTO device_keys(device_id, epoch, wrapped, updated_at, kind) "
+                           "VALUES(?,?,?,?,?)", (device_id, self.epoch(), wrapped, self._clock(), kind))
+
+    def check_invite_key(self, args: dict) -> tuple[int, bytes] | None:
+        """``/devices/invite`` while the vault is in use: the chain wrapped to the invite secret (required);
+        while it is not in use the fields MUST be omitted. Returns (epoch, wrapped) or None."""
+        wrapped = args.get("wrapped_group_key")
+        if not self.in_use():
+            if wrapped is not None or args.get("key_epoch") is not None:
+                raise BridgeError(errors.BAD_REQUEST,
+                                  "the vault is not in use: omit 'key_epoch' and 'wrapped_group_key'")
+            return None
+        if _int(args, "key_epoch", 1) != self.epoch():
+            raise BridgeError(errors.KEY_EPOCH_STALE, "'key_epoch' is not the current epoch", key_epoch=self.epoch())
+        return self.epoch(), _bytes(args, "wrapped_group_key", WRAPPED_MAX_BYTES)
 
     def check_approve_key(self, args: dict) -> bytes | None:
         """The wrapped group key an approving device supplies for the new device."""

@@ -103,15 +103,73 @@ class InviteTest(ServiceBase):
         self.clock.advance(self.cfg.limits.invite_ttl + 1)                         # expired invites do not count
         self.assertTrue((await self.call("/devices/invite", {}, self.inviter))["ok"])
 
-    async def test_vault_in_use_refuses_invites(self):
+    async def activate_vault(self):
+        keys = {d.device_id: b"wrapped-" + d.device_id.encode()[:6] for d in self.registry.trusted_devices()}
+        r = await self.call("/vault/set_keys", {"key_epoch": 1, "wrapped_group_keys": keys}, self.inviter)
+        self.assertTrue(r["ok"], r)
+
+    async def test_invite_without_vault_refuses_key_fields(self):
+        for extra in ({"wrapped_group_key": b"k"}, {"key_epoch": 1}, {"key_epoch": 1, "wrapped_group_key": b"k"}):
+            r = await self.call("/devices/invite", extra, self.inviter)
+            self.assertEqual(r["error"]["code"], errors.BAD_REQUEST, extra)
+        self.assertEqual(self.svc.invites.open_count(PHONE_ID), 0)
         inv = await self.invite()
-        self.svc.vault.in_use = lambda: True
-        r = await self.call("/devices/invite", {}, self.inviter)
+        self.assertTrue((await self.redeem(inv["token"]))["ok"])
+        k = (await self.call("/vault/key", {}, Ctx(device_id=self.new.device_id, transport="link")))["result"]
+        self.assertEqual((k["wrapped_group_key"], k["wrap"]), (None, None))
+
+    async def test_invite_with_vault_requires_epoch_and_wrapped_key(self):
+        await self.activate_vault()
+        for args in ({}, {"key_epoch": 1}, {"wrapped_group_key": b"w"}, {"key_epoch": 1, "wrapped_group_key": b""}):
+            r = await self.call("/devices/invite", args, self.inviter)
+            self.assertEqual(r["error"]["code"], errors.BAD_REQUEST, args)
+        r = await self.call("/devices/invite", {"key_epoch": 5, "wrapped_group_key": b"w"}, self.inviter)
+        self.assertEqual(r["error"]["code"], errors.KEY_EPOCH_STALE)
+        self.assertEqual(r["error"]["details"]["key_epoch"], 1)
+        self.assertEqual(self.svc.invites.open_count(PHONE_ID), 0)
+
+    async def test_redeem_stores_the_invite_wrapped_key(self):
+        await self.activate_vault()
+        r = await self.call("/devices/invite", {"key_epoch": 1, "wrapped_group_key": b"chain-for-invite"}, self.inviter)
+        self.assertTrue(r["ok"], r)
+        self.assertNotIn(b"chain-for-invite", str(r).encode())
+        r = await self.redeem(r["result"]["token"])
+        self.assertTrue(r["ok"], r)
+        k = (await self.call("/vault/key", {}, Ctx(device_id=self.new.device_id, transport="link")))["result"]
+        self.assertEqual((k["wrapped_epoch"], k["wrapped_group_key"], k["wrap"], k["in_use"]),
+                         (1, b"chain-for-invite", "invite", True))
+        k = (await self.call("/vault/key", {}, self.inviter))["result"]
+        self.assertEqual(k["wrap"], "identity")
+
+    async def test_vault_activated_after_the_invite_was_made(self):
+        inv = await self.invite()
+        await self.activate_vault()
+        r = await self.redeem(inv["token"])
         self.assertEqual(r["error"]["code"], errors.VAULT_IN_USE)
-        r = await self.redeem(inv["token"])                    # an invite made before the vault was activated
-        self.assertEqual(r["error"]["code"], errors.VAULT_IN_USE)
-        self.svc.vault.in_use = lambda: False
-        self.assertTrue((await self.redeem(inv["token"]))["ok"])                   # nothing was consumed
+        self.assertIsNone(self.registry.get(self.new.device_id))
+
+    async def test_revocation_invalidates_open_vault_invites(self):
+        await self.activate_vault()
+        victim = RealDevice()
+        self.registry.add(victim.public_key, "old", "ios", [], PHONE_ID)
+        self.svc.vault.store_device_key(victim.device_id, b"w")
+        r = await self.call("/devices/invite", {"key_epoch": 1, "wrapped_group_key": b"chain"}, self.inviter)
+        token = r["result"]["token"]
+        r = await self.call("/devices/revoke", {"device_id": victim.device_id, "key_epoch": 2,
+                                                "wrapped_group_keys": {PHONE_ID: b"n"}}, self.inviter)
+        self.assertTrue(r["ok"], r)
+        r = await self.redeem(token)
+        self.assertEqual(r["error"]["code"], errors.KEY_EPOCH_STALE)
+        self.assertEqual(r["error"]["details"]["key_epoch"], 2)
+        self.assertIsNone(self.registry.get(self.new.device_id))
+        r = await self.redeem(token)
+        self.assertEqual(r["error"]["code"], errors.PAIRING_INVALID)
+        r = await self.call("/devices/invite", {"key_epoch": 2, "wrapped_group_key": b"chain2"}, self.inviter)
+        self.assertTrue((await self.redeem(r["result"]["token"]))["ok"])
+
+    async def test_hello_announces_vault_invite(self):
+        r = await self.call("/hello", {"protocol_version": 2}, self.inviter)
+        self.assertIn("vault_invite", r["result"]["capabilities"])
 
     async def test_trusted_and_unknown_callers_through_dispatch(self):
         inv = await self.invite()
