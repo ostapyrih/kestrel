@@ -21,6 +21,22 @@ class FakeNode extends Fake implements NodeService {
   final List<String> names = [];
   final List<(String, int)> servers = [];
 
+  /// Scripted answers for the chat deletion flow.
+  String? deleteReason;
+  int unsent = 0;
+  final List<List<int>> deleted = [];
+
+  @override
+  Future<String?> deleteBlockReason(Iterable<int> chatIds) async =>
+      deleteReason;
+
+  @override
+  Future<int> unsentCount(Iterable<int> chatIds) async => unsent;
+
+  @override
+  Future<void> deleteChats(Iterable<int> chatIds) async =>
+      deleted.add(chatIds.toList());
+
   @override
   Future<int> sendMessage(int chatId, String text) async {
     sent.add((chatId, text));
