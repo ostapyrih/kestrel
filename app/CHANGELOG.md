@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.9.1](https://github.com/ostapyrih/kestrel/compare/app-v0.9.0...app-v0.9.1) (2026-11-27)
+
+
+### Features
+
+* **app:** desktop apps hide to the tray on close; single instance ([#40](https://github.com/ostapyrih/kestrel/issues/40)) ([4077c49](https://github.com/ostapyrih/kestrel/commit/4077c4912aeec8961379e5a7f5ec5ff4a801c1ee))
+* **app:** Enter sends, Shift+Enter inserts a new line ([#41](https://github.com/ostapyrih/kestrel/issues/41)) ([a12dd68](https://github.com/ostapyrih/kestrel/commit/a12dd685be74d57630d53a69ebc9a4b195a519bb))
+* LXMF propagation (offline mail via a propagation node, Phase 5) ([#43](https://github.com/ostapyrih/kestrel/issues/43)) ([87509a6](https://github.com/ostapyrih/kestrel/commit/87509a62c2f1ee28eef9388ffec300ddaec217c9))
+
 ## [0.9.0](https://github.com/ostapyrih/kestrel/compare/app-v0.8.3...app-v0.9.0) (2026-11-27)
 
 
