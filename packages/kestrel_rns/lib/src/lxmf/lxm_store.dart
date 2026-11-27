@@ -22,8 +22,9 @@ class LxmOutboundRecord {
   final Uint8List destinationHash;
   Uint8List packed;
 
-  /// `LxmfMethod` chosen by the caller (before size based upgrades).
-  final int desiredMethod;
+  /// `LxmfMethod` chosen by the caller (before size based upgrades; becomes
+  /// `propagated` when delivery falls back to a propagation node).
+  int desiredMethod;
   final DateTime createdAt;
   int attempts;
 
@@ -52,6 +53,11 @@ abstract class LxmStore {
   /// Atomically records an inbound message hash. Returns false if it was
   /// already seen (a duplicate that must not be delivered again).
   Future<bool> claimInbound(Uint8List hash);
+
+  /// Undoes [claimInbound] when the message could not be persisted, so a
+  /// later copy (e.g. still on a propagation node) is not treated as a
+  /// duplicate and lost.
+  Future<void> releaseInbound(Uint8List hash);
 }
 
 /// Non-persistent [LxmStore].
@@ -73,4 +79,8 @@ class MemoryLxmStore implements LxmStore {
 
   @override
   Future<bool> claimInbound(Uint8List hash) async => inbound.add(toHex(hash));
+
+  @override
+  Future<void> releaseInbound(Uint8List hash) async =>
+      inbound.remove(toHex(hash));
 }

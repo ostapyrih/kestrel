@@ -275,6 +275,10 @@ class Transport {
   KnownDestination? recall(List<int> destinationHash) =>
       _known[_hex(destinationHash)];
 
+  /// Latest ratchet public key announced by [destinationHash] (null if none).
+  Uint8List? recallRatchet(List<int> destinationHash) =>
+      _known[_hex(destinationHash)]?.ratchet;
+
   /// Recalls the app_data of the last announce.
   Uint8List? recallAppData(List<int> destinationHash) =>
       _known[_hex(destinationHash)]?.appData;

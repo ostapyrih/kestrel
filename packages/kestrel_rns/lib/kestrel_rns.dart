@@ -17,6 +17,7 @@ export 'src/link/link.dart';
 export 'src/link/resource.dart';
 export 'src/lxmf/lx_message.dart';
 export 'src/lxmf/lxm_app_data.dart';
+export 'src/lxmf/lxm_propagation.dart';
 export 'src/lxmf/lxm_router.dart';
 export 'src/lxmf/lxm_stamper.dart';
 export 'src/lxmf/lxm_store.dart';

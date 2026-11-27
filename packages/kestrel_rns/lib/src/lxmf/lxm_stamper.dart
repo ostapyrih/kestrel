@@ -14,6 +14,10 @@ import '../stamps.dart';
 /// validation run on a background isolate.
 abstract final class LxmStamper {
   static const int workblockExpandRounds = 3000;
+
+  /// `WORKBLOCK_EXPAND_ROUNDS_PN`: propagation-node stamps use a smaller
+  /// workblock than message stamps.
+  static const int workblockExpandRoundsPn = 1000;
   static const int expandChunk = 256;
   static const int stampSize = 32;
 
@@ -83,4 +87,39 @@ abstract final class LxmStamper {
   /// Ticket stamp (LXMessage.get_stamp with an outbound ticket).
   static Uint8List ticketStamp(List<int> ticket, List<int> messageId) =>
       truncatedHash([...ticket, ...messageId]);
+
+  /// Validity of a propagation-node stamp (`LXStamper.validate_pn_stamp`):
+  /// transient id with the non-expanded workblock first, then 1000 rounds.
+  static double? validatePnSync(
+    List<int> stamp,
+    double cost,
+    List<int> transientId,
+  ) {
+    if (Stamps.isValid(stamp, cost, transientId)) {
+      return Stamps.value(transientId, stamp);
+    }
+    final wb = workblock(transientId, expandRounds: workblockExpandRoundsPn);
+    if (Stamps.isValid(stamp, cost, wb)) return Stamps.value(wb, stamp);
+    return null;
+  }
+
+  /// Synchronous propagation stamp for [transientId] at [cost]
+  /// (`LXMessage.get_propagation_stamp`).
+  static ({Uint8List stamp, double value}) generatePnSync(
+    List<int> transientId,
+    double cost,
+  ) {
+    final wb = workblock(transientId, expandRounds: workblockExpandRoundsPn);
+    final s = Stamps.generate(wb, cost, size: stampSize)!;
+    return (stamp: s, value: Stamps.value(wb, s));
+  }
+
+  /// [generatePnSync] on a background isolate.
+  static Future<({Uint8List stamp, double value})> generatePn(
+    List<int> transientId,
+    double cost,
+  ) {
+    final m = Uint8List.fromList(transientId);
+    return Isolate.run(() => generatePnSync(m, cost));
+  }
 }

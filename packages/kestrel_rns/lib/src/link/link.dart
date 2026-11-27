@@ -978,10 +978,12 @@ class Link {
     void Function(Resource)? callback,
     void Function(Resource)? progressCallback,
     bool autoCompress = true,
+    bool appFlag = false,
   }) =>
       Resource.send(
         this,
         data,
+        appFlag: appFlag,
         callback: callback,
         progressCallback: progressCallback,
         autoCompress: autoCompress,

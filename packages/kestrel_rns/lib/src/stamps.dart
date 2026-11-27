@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart' as c;
 
 import 'crypto/hashes.dart';
 import 'crypto/random.dart';
+import 'crypto/sha256_midstate.dart';
 import 'stamps_table.dart';
 
 /// Proof-of-work stamps as implemented by RNS 1.6.1 (RNS/Stamps.py).
@@ -145,6 +146,11 @@ abstract final class Stamps {
     }
     final target = targetBytes(cost);
     final r = random ?? secureRandomBytes;
+    if (workblock.length >= 64 &&
+        workblock.length % 64 == 0 &&
+        size <= Sha256Midstate.maxTail) {
+      return _generateMidstate(workblock, target, size, maxRounds, r);
+    }
     final buf = Uint8List(workblock.length + size)
       ..setRange(0, workblock.length, workblock);
     final base = workblock.length;
@@ -166,6 +172,51 @@ abstract final class Stamps {
         if (_leq(h, target)) {
           return Uint8List.fromList(buf.sublist(base));
         }
+        rounds++;
+        if (maxRounds != 0 && rounds >= maxRounds) return null;
+      }
+    }
+  }
+
+  /// [generate] for block-aligned workblocks (LXMF's `256 * rounds`): the
+  /// workblock is compressed once and each candidate costs one compression.
+  static Uint8List? _generateMidstate(
+    List<int> workblock,
+    Uint8List target,
+    int size,
+    int maxRounds,
+    RandomBytes r,
+  ) {
+    final mid = Sha256Midstate(workblock);
+    final tw = Uint32List(8);
+    for (var i = 0; i < 8; i++) {
+      tw[i] = (target[i * 4] << 24) |
+          (target[i * 4 + 1] << 16) |
+          (target[i * 4 + 2] << 8) |
+          target[i * 4 + 3];
+    }
+    final out = Uint32List(8);
+    final stamp = Uint8List(size);
+    var rounds = 0;
+    while (true) {
+      stamp.setRange(0, size, r(size));
+      for (var n = 0; n < (1 << 20); n++) {
+        var k = size - 1;
+        final end = max(0, size - 8);
+        while (k >= end) {
+          stamp[k] = (stamp[k] + 1) & 0xFF;
+          if (stamp[k] != 0) break;
+          k--;
+        }
+        mid.finish(stamp, out);
+        var ok = true;
+        for (var i = 0; i < 8; i++) {
+          if (out[i] != tw[i]) {
+            ok = out[i] < tw[i];
+            break;
+          }
+        }
+        if (ok) return Uint8List.fromList(stamp);
         rounds++;
         if (maxRounds != 0 && rounds >= maxRounds) return null;
       }

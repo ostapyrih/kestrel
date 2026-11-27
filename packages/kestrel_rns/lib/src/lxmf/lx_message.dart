@@ -64,6 +64,7 @@ class LxmfPropagationPacked {
     required this.packed,
     required this.transientId,
     required this.lxmfData,
+    required this.timestamp,
   });
 
   /// `msgpack([timestamp, [lxmf_data]])`, the payload sent to a propagation
@@ -73,8 +74,23 @@ class LxmfPropagationPacked {
   /// SHA-256 of `lxmf_data` (before any propagation stamp is appended).
   final Uint8List transientId;
 
-  /// `destination_hash || encrypt(packed[16:])`.
+  /// `destination_hash || encrypt(packed[16:])` (without the stamp).
   final Uint8List lxmfData;
+
+  /// The timestamp inside [packed].
+  final double timestamp;
+
+  /// The payload with [stamp] appended to the message (the transient id and
+  /// the encrypted data stay unchanged).
+  Uint8List withStamp(List<int> stamp) => packb(<Object?>[
+        timestamp,
+        <Object?>[
+          (BytesBuilder(copy: false)
+                ..add(lxmfData)
+                ..add(stamp))
+              .toBytes(),
+        ],
+      ]);
 }
 
 /// An LXMF message (LXMF/LXMessage.py).
@@ -225,6 +241,7 @@ class LXMessage {
     List<int>? ephemeralPrivate,
     List<int>? iv,
     List<int>? ratchet,
+    List<int>? propagationStamp,
   }) async {
     final enc = await recipient.encrypt(
       opportunisticPayload,
@@ -236,13 +253,22 @@ class LXMessage {
           ..add(destinationHash)
           ..add(enc))
         .toBytes();
+    // The transient id never covers the propagation stamp (LXMessage.pack).
+    final transientId = sha256(lxmfData);
+    final stamped = propagationStamp == null
+        ? lxmfData
+        : (BytesBuilder(copy: false)
+              ..add(lxmfData)
+              ..add(propagationStamp))
+            .toBytes();
     return LxmfPropagationPacked(
       packed: packb(<Object?>[
         now,
-        <Object?>[lxmfData],
+        <Object?>[stamped],
       ]),
-      transientId: sha256(lxmfData),
+      transientId: transientId,
       lxmfData: lxmfData,
+      timestamp: now,
     );
   }
 
