@@ -44,8 +44,15 @@ class NodeService {
   final LxmRouterConfig routerConfig;
   final KestrelStorage _rnsStorage;
 
+  BridgeService? _bridge;
+
   /// Account A: set by `main` (null in Standalone-only setups and tests).
-  BridgeService? bridge;
+  BridgeService? get bridge => _bridge;
+  set bridge(BridgeService? b) {
+    _bridge = b;
+    // another device's `delete_chat` may remove queued messages of ours
+    b?.vault.cancelOutbound = cancelOutboundHashes;
+  }
 
   Reticulum? _rns;
   LxmRouter? _router;
@@ -209,6 +216,98 @@ class NodeService {
   Future<int> openChat(String peerHashHex, {String? name}) async {
     final h = peerHashHex.trim().toLowerCase();
     return repo.findOrCreateChat('B', h, title: name);
+  }
+
+  /// Cancels queued messages in the LXMF router (no-op while it is down).
+  Future<void> cancelOutboundHashes(List<String> hashes) async {
+    if (!isRunning) return;
+    for (final h in hashes) {
+      try {
+        await router.cancel(fromHex(h));
+      } on Object {
+        // already gone
+      }
+    }
+  }
+
+  /// Unsent messages that deleting [chatIds] would cancel.
+  Future<int> unsentCount(Iterable<int> chatIds) => repo.unsentCount(chatIds);
+
+  /// Why [chatIds] cannot be deleted right now (`null` = they can):
+  /// `delete_a_offline` / `delete_a_old_bridge` for account A chats,
+  /// `delete_remote_no_vault` for chats of other devices.
+  Future<String?> deleteBlockReason(Iterable<int> chatIds) async {
+    var a = false;
+    var remote = false;
+    for (final id in chatIds) {
+      if (isRemoteId(id)) {
+        remote = true;
+      } else if ((await repo.chat(id))?.accountIdentity == 'A') {
+        a = true;
+      }
+    }
+    final b = bridge;
+    if (a) {
+      if (b == null || !(b.api?.linkUp ?? false)) return 'delete_a_offline';
+      if (!b.canDeleteChat) return 'delete_a_old_bridge';
+    }
+    if (remote && !(b?.vault.canDeleteRemote ?? false)) {
+      return 'delete_remote_no_vault';
+    }
+    return null;
+  }
+
+  /// Deletes chats of every kind (the confirmation was shown by the UI):
+  ///  * B chats of this device: hard delete here, unsent messages cancelled;
+  ///    a `delete_chat` vault blob lets the other devices drop their copy;
+  ///  * A chats: deleted in MeshChatX through the bridge for all devices;
+  ///  * read-only chats of another device: deleted on every device, the
+  ///    owner included (vault blob naming it as `owner_device`).
+  /// Throws before changing anything when [deleteBlockReason] is non-null.
+  Future<void> deleteChats(Iterable<int> chatIds) async {
+    final ids = chatIds.toSet();
+    if (await deleteBlockReason(ids) != null) {
+      throw StateError('chats cannot be deleted now');
+    }
+    final a = <int>[];
+    final own = <int>[];
+    final remote = <int>[];
+    for (final id in ids) {
+      if (isRemoteId(id)) {
+        remote.add(id);
+        continue;
+      }
+      final c = await repo.chat(id);
+      if (c == null || c.kind != 'lxmf') continue;
+      (c.accountIdentity == 'A' ? a : own).add(id);
+    }
+    for (final id in own) {
+      final c = await repo.chat(id);
+      if (c?.peerHash != null && isRunning) {
+        await cancelOutboundHashes(
+          await repo.unsentHashes(c!.peerHash!, 1 << 52),
+        );
+      }
+    }
+    await repo.deleteChats(own);
+    for (final id in remote) {
+      final c = await repo.remoteChat(id);
+      if (c?.remoteDeviceId == null || c?.peerHash == null) continue;
+      await repo.removeVaultHistory(
+        c!.remoteDeviceId!,
+        c.peerHash!,
+        uploadDelete: true,
+      );
+    }
+    Object? failure;
+    for (final id in a) {
+      try {
+        await bridge!.deleteAChat(id);
+      } on Object catch (e) {
+        failure ??= e;
+      }
+    }
+    if (failure != null) throw failure;
   }
 
   static final _hexHash = RegExp(r'^[0-9a-fA-F]{32}$');

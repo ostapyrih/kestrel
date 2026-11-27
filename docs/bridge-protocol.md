@@ -30,7 +30,7 @@ v1 had a flat whitelist of phone keys and one global view. v2 (breaking, no v1 c
 - **Invite pairing** (`/devices/invite`, `/devices/redeem`, capability `pairing_invite`): the trusted device shows a QR code, the new
   device scans it and joins in one step (section 5.4). Additive within v2.
 - **Chat deletion** (`/delete_chat`, push `chat_deleted`, `deleted` in `/sync_chats`, capability `delete_chat`, section 6.7) and the vault blob
-  kind `delete_chat` (9.5). Additive within v2.
+  kind `delete_chat` with optional `owner_device` (9.5). Additive within v2.
 - `/hello` accepts optional `name` and `platform` and updates the caller's own device record (section 6.1).
 - `kestrel.reject` reason packet for rejected/revoked Links (section 2.4; additive).
 - Config: `[[devices]]` replaces `[whitelist]` (the old key is still read as bootstrap devices, with a warning).
@@ -506,11 +506,19 @@ uploading device (account A data is never uploaded): `{"hash": hex32, "peer": he
 Plaintext is kept small enough that the ciphertext stays within `vault_max_blob_bytes`. A device uploads its whole existing history (oldest first) when it
 activates sync, then new records incrementally.
 
-### 9.6 Blob kind `delete_chat` (app layer, informative)
-`kind: "delete_chat"`, `data = {"peer": hex32, "before_ts": float}`. Written by a device that deleted a **Standalone (B)** chat while the vault is in use, so the other devices
-remove their read-only copy of that chat: readers delete the records of the uploading device for that peer with `ts <= before_ts` (and tombstone them so an older blob
-cannot bring them back). Only the uploading device's own records are affected. The uploader never uploads the deleted messages again. Readers that do not know the kind ignore the blob
-(forward compatible; the vault is append-only, so the earlier `messages` blobs stay in the vault as ciphertext).
+Kind `delete_chat`: `data = {"peer": hex32, "owner_device": hex32?, "before_ts": float}`. It deletes a Standalone (B) chat on **every** device. `owner_device` is the
+device whose B chat is deleted; omitted = the uploader's own chat. `before_ts` (Unix seconds) is the newest message time of the chat known to the uploader; messages with
+`ts <= before_ts` are deleted, newer ones survive and the chat continues normally. A device that applies the blob (blobs of other devices only; the uploader acted locally
+when it queued the blob):
+- is the **owner** (`owner_device` equals its own id): hard-deletes its own B messages with that peer and `ts <= before_ts` (including delivery log; unsent outbox entries in
+  that range are cancelled), drops a vault blob that was built from them, and never uploads them again (they are gone);
+- is **any other device**: deletes its read-only copy of the owner's chat for `ts <= before_ts`.
+
+Both record a **tombstone** `(owner, peer, before_ts)` and skip records of the owner that are not newer when `messages` blobs are applied later (a re-download, or a stale record
+uploaded after the deletion), so nothing is resurrected. A tombstone for an unknown or revoked `owner_device` still removes local copies. The uploader's deletion is queued
+durably and uploaded after every earlier blob (readers apply blobs of one device in `seq` order). Cases: (1) a device deletes its own chat: no `owner_device`; (2) a device
+deletes the read-only chat of another device Y: `owner_device = Y`, `before_ts` = newest message of that chat it knows; Y and all other devices delete too. The vault is
+append-only, so earlier `messages` blobs stay as ciphertext; readers that do not know the kind ignore the blob. Deleting a read-only chat needs an active vault (a group key).
 
 ## 10. Rate limits (per device, one-minute sliding window)
 | bucket | config key | default | paths |

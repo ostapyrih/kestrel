@@ -143,6 +143,14 @@ class VaultService {
   final Duration debounce;
   final Duration gapRetry;
 
+  /// Cancels queued B messages in the LXMF router (by hash) before another
+  /// device's `delete_chat` removes them here; wired by `NodeService`.
+  Future<void> Function(List<String> lxmfHashes)? cancelOutbound;
+
+  /// This device may delete a read-only chat of another device: the vault is
+  /// connected and holds the key (the deletion travels as a vault blob).
+  bool get canDeleteRemote => _api != null && keys.chain.isNotEmpty;
+
   BridgeApi? _api;
   HelloResult? _hello;
   VaultState _state = VaultState.off;
@@ -234,7 +242,7 @@ class VaultService {
     _debounce?.cancel();
     _debounce = Timer(debounce, () async {
       try {
-        if ((await store.candidates(1)).isNotEmpty) {
+        if (await store.hasUploadWork()) {
           unawaited(_schedule());
         }
       } on Object {
@@ -499,6 +507,8 @@ class VaultService {
   Future<PendingBlob?> _build(HelloResult h) async {
     final gk = keys.chain[_epoch];
     if (gk == null) return null;
+    final del = await store.nextDelete();
+    if (del != null) return _buildDelete(gk, del);
     final cands = await store.candidates(300);
     if (cands.isEmpty) return null;
     final maxBlob = h.limit('vault_max_blob_bytes', 131072) ~/ _blobShrink;
@@ -557,6 +567,41 @@ class VaultService {
       ciphertext: ct,
       marks: [
         for (final c in used) [c.messageId, c.status, c.error, c.lxmfHash],
+      ],
+    );
+    await store.savePending(p);
+    return p;
+  }
+
+  /// The blob of a deleted B chat (kind `delete_chat`, spec 9.6): the other
+  /// devices remove their read-only copy of the messages up to `before_ts`.
+  Future<PendingBlob> _buildDelete(
+    Uint8List gk,
+    ({int id, String peer, String? owner, int beforeTsMs}) del,
+  ) async {
+    final seq = (await store.lastSeq()) + 1;
+    final blobId = toHex(secureRandomBytes(16));
+    final ct = await VaultCrypto.encryptBlob(
+      groupKey: gk,
+      blobId: blobId,
+      deviceId: ownDeviceId(),
+      seq: seq,
+      keyEpoch: _epoch,
+      kind: 'delete_chat',
+      ts: DateTime.now().millisecondsSinceEpoch / 1000,
+      data: {
+        'peer': del.peer,
+        'owner_device': ?del.owner,
+        'before_ts': del.beforeTsMs / 1000,
+      },
+    );
+    final p = PendingBlob(
+      blobId: blobId,
+      seq: seq,
+      keyEpoch: _epoch,
+      ciphertext: ct,
+      marks: [
+        [deleteMark, del.id],
       ],
     );
     await store.savePending(p);
@@ -709,10 +754,35 @@ class VaultService {
         seq: m.seq,
         keyEpoch: m.keyEpoch,
       );
-      if (plain.kind != 'messages') return; // a kind from a newer app
       final data = plain.data;
-      final records = data is Map ? data['records'] : null;
-      if (records is List) await store.applyRecords(m.deviceId, records);
+      switch (plain.kind) {
+        case 'messages':
+          final records = data is Map ? data['records'] : null;
+          if (records is List) await store.applyRecords(m.deviceId, records);
+        case 'delete_chat':
+          // the uploading device deleted that chat: drop its read-only copy
+          final peer = data is Map ? data['peer'] : null;
+          final before = data is Map ? data['before_ts'] : null;
+          final owner = data is Map && data['owner_device'] is String
+              ? data['owner_device']! as String
+              : m.deviceId;
+          if (peer is String &&
+              peer.isNotEmpty &&
+              peer.length <= 64 &&
+              before is num &&
+              owner.length <= 64) {
+            final ms = (before * 1000).ceil();
+            if (owner == ownDeviceId()) {
+              // another device deleted OUR chat: it goes here too
+              await cancelOutbound?.call(await repo.unsentHashes(peer, ms));
+              await repo.deleteOwnChatBefore(owner, peer, ms);
+            } else {
+              await repo.removeVaultHistory(owner, peer, beforeTsMs: ms);
+            }
+          }
+        default:
+          return; // a kind from a newer app
+      }
     } on VaultCryptoException catch (e) {
       _skipped++;
       debugPrint('vault: blob skipped (${e.message})');

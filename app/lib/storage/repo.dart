@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:sqflite/sqflite.dart';
@@ -163,11 +164,50 @@ class PeerRow {
 String shortHash(String h) =>
     h.length <= 12 ? h : '${h.substring(0, 6)}..${h.substring(h.length - 4)}';
 
+/// A chat removed by [Repo.deleteChats].
+class DeletedChat {
+  DeletedChat({
+    required this.chatId,
+    required this.identity,
+    required this.peerHash,
+    required this.lastTsMs,
+    required this.messages,
+    required this.unsent,
+    required this.uploaded,
+  });
+  final int chatId;
+
+  /// `A` or `B`.
+  final String identity;
+  final String? peerHash;
+
+  /// Time of the newest deleted message (ms), null for an empty chat.
+  final int? lastTsMs;
+  final int messages;
+
+  /// Queued/sending messages that were cancelled by the deletion.
+  final int unsent;
+
+  /// Some of the messages had been uploaded to the vault.
+  final bool uploaded;
+}
+
+class _Deleted {
+  _Deleted(this.messageIds, this.maxTs, this.unsent, this.uploaded);
+  final List<int> messageIds;
+  final int? maxTs;
+  final int unsent;
+  final bool uploaded;
+}
+
 /// All SQL of the app. The only code that deletes chats or messages is
 /// [purgeBridgeAccountData] (account A is a cache of MeshChatX, so turning
 /// the bridge off drops it, together with the downloaded histories of the
-/// other devices) and [resetVaultForNewBridge] (vault caches only); account
-/// B (this device) is never deleted.
+/// other devices), [resetVaultForNewBridge] (vault caches only) and the
+/// user's chat deletion: [deleteChats] / [applyChatDeleted] through
+/// `_deleteChatRows` (scoped by the account of each chat) and
+/// [removeVaultHistory] (scoped by the other device). A mode switch never
+/// deletes account B.
 class Repo {
   Repo(this.adb);
   final AppDatabase adb;
@@ -248,6 +288,305 @@ class Repo {
     adb.notify();
   }
 
+  // ------------------------------------------------------- deleting chats
+
+  /// Messages of [chatIds] that are not on the wire yet (queued in the
+  /// outbox) and would be cancelled by [deleteChats]. Remote ids count 0.
+  Future<int> unsentCount(Iterable<int> chatIds) async {
+    var n = 0;
+    for (final id in chatIds) {
+      if (isRemoteId(id)) continue;
+      final r = await _db.rawQuery(
+        "SELECT COUNT(*) AS c FROM messages WHERE chat_id = ? "
+        "AND direction = 'out' AND status IN ('queued', 'sending')",
+        [id],
+      );
+      n += (r.first['c']! as int);
+    }
+    return n;
+  }
+
+  /// Hard-deletes whole chats of this device (account B or the cached
+  /// account A) with their messages, delivery log and outbox rows, in ONE
+  /// transaction. Every statement is scoped by the `account_id` of the chat
+  /// being deleted, so no other account's rows are touched. Read-only
+  /// histories of other devices (negative ids) are ignored: they go through
+  /// [removeVaultHistory].
+  ///
+  /// For B chats whose messages were uploaded to the vault a `delete_chat`
+  /// blob is queued (`vault_delete_out`), and a vault blob that was already
+  /// built from these messages is dropped, so they are never uploaded again.
+  Future<List<DeletedChat>> deleteChats(Iterable<int> chatIds) async {
+    final out = <DeletedChat>[];
+    final gone = <int>{};
+    await _db.transaction((txn) async {
+      for (final id in chatIds.toSet()) {
+        if (isRemoteId(id)) continue;
+        final r = await txn.rawQuery(
+          'SELECT c.id, c.account_id, c.peer_hash, a.identity FROM chats c '
+          "JOIN accounts a ON a.id = c.account_id WHERE c.id = ? AND c.kind = 'lxmf'",
+          [id],
+        );
+        if (r.isEmpty) continue;
+        final accId = r.first['account_id']! as int;
+        final identity = r.first['identity']! as String;
+        final peer = r.first['peer_hash'] as String?;
+        final d = await _deleteChatRows(txn, id, accId, null);
+        gone.addAll(d.messageIds);
+        out.add(
+          DeletedChat(
+            chatId: id,
+            identity: identity,
+            peerHash: peer,
+            lastTsMs: d.maxTs,
+            messages: d.messageIds.length,
+            unsent: d.unsent,
+            uploaded: d.uploaded,
+          ),
+        );
+        if (identity == 'B' && peer != null && d.uploaded) {
+          await txn.insert('vault_delete_out', {
+            'peer_hash': peer,
+            'before_ts': d.maxTs ?? DateTime.now().millisecondsSinceEpoch,
+          });
+        }
+      }
+      await _dropPendingBlobOf(txn, gone);
+    });
+    adb.notify();
+    return out;
+  }
+
+  /// `chat_deleted` from the bridge (account A only): removes the messages
+  /// of the chat with [peerHash] that were synced from MeshChatX and are not
+  /// newer than [beforeTs] (Unix seconds), and the chat if nothing is left.
+  /// Unsent local messages stay. Returns true if anything was removed.
+  Future<bool> applyChatDeleted(String peerHash, double beforeTs) async {
+    final a = await accountId('A');
+    var removed = false;
+    await _db.transaction((txn) async {
+      final r = await txn.query(
+        'chats',
+        columns: ['id'],
+        where: "account_id = ? AND kind = 'lxmf' AND peer_hash = ?",
+        whereArgs: [a, peerHash],
+      );
+      if (r.isEmpty) return;
+      final d = await _deleteChatRows(
+        txn,
+        r.first['id']! as int,
+        a,
+        (beforeTs * 1000).ceil(),
+        keepUnsent: true,
+      );
+      removed = d.messageIds.isNotEmpty;
+    });
+    if (removed) adb.notify();
+    return removed;
+  }
+
+  /// LXMF hashes of this device's B messages with [peerHash] up to
+  /// [beforeTsMs] that are not on the wire yet (to cancel them in the router
+  /// before [deleteOwnChatBefore]).
+  Future<List<String>> unsentHashes(String peerHash, int beforeTsMs) async {
+    final b = await accountId('B');
+    final r = await _db.rawQuery(
+      'SELECT m.lxmf_hash FROM messages m JOIN chats c ON c.id = m.chat_id '
+      "WHERE m.account_id = ? AND c.peer_hash = ? AND c.kind = 'lxmf' "
+      "AND m.direction = 'out' AND m.status IN ('queued', 'sending') "
+      'AND m.ts <= ? AND m.lxmf_hash IS NOT NULL',
+      [b, peerHash, beforeTsMs],
+    );
+    return [for (final m in r) m['lxmf_hash']! as String];
+  }
+
+  /// A `delete_chat` blob from another device names this device as the owner
+  /// of the chat (`owner_device`): hard-deletes this device's own B messages
+  /// with [peerHash] up to [beforeTsMs] (delivery log and unsent outbox rows
+  /// included; the chat if nothing newer is left), drops a vault blob built
+  /// from them and records the tombstone under [ownDeviceId]. Own B rows of
+  /// that chat only; nothing is queued for upload.
+  Future<bool> deleteOwnChatBefore(
+    String ownDeviceId,
+    String peerHash,
+    int beforeTsMs,
+  ) async {
+    final b = await accountId('B');
+    var removed = false;
+    await _db.transaction((txn) async {
+      final r = await txn.query(
+        'chats',
+        columns: ['id'],
+        where: "account_id = ? AND kind = 'lxmf' AND peer_hash = ?",
+        whereArgs: [b, peerHash],
+      );
+      if (r.isNotEmpty) {
+        final d = await _deleteChatRows(
+          txn,
+          r.first['id']! as int,
+          b,
+          beforeTsMs,
+        );
+        removed = d.messageIds.isNotEmpty;
+        await _dropPendingBlobOf(txn, d.messageIds.toSet());
+      }
+      await _upsertTombstone(txn, ownDeviceId, peerHash, beforeTsMs);
+    });
+    adb.notify();
+    return removed;
+  }
+
+  Future<void> _upsertTombstone(
+    DatabaseExecutor txn,
+    String deviceId,
+    String peer,
+    int before,
+  ) => txn.rawInsert(
+    'INSERT INTO vault_tombstones(device_id, peer_hash, before_ts) '
+    'VALUES (?, ?, ?) ON CONFLICT(device_id, peer_hash) DO UPDATE SET '
+    'before_ts = MAX(before_ts, excluded.before_ts)',
+    [deviceId, peer, before],
+  );
+
+  /// The one place that deletes chat rows. [beforeTsMs] null = everything of
+  /// the chat, else only bridge-synced messages with `ts <= beforeTsMs`.
+  Future<_Deleted> _deleteChatRows(
+    DatabaseExecutor txn,
+    int chatId,
+    int accountId,
+    int? beforeTsMs, {
+    bool keepUnsent = false,
+  }) async {
+    final cond = beforeTsMs == null
+        ? ''
+        : keepUnsent
+        ? ' AND ts <= ? AND (bridge_id IS NOT NULL OR lxmf_hash IS NOT NULL)'
+        : ' AND ts <= ?';
+    final a = <Object?>[chatId, accountId, ?beforeTsMs];
+    final ids = [
+      for (final m in await txn.rawQuery(
+        'SELECT id, ts, direction, status FROM messages '
+        'WHERE chat_id = ? AND account_id = ?$cond',
+        a,
+      ))
+        m['id']! as int,
+    ];
+    final stat = await txn.rawQuery(
+      'SELECT MAX(ts) AS m, SUM(direction = \'out\' AND status IN '
+      '(\'queued\', \'sending\')) AS u FROM messages '
+      'WHERE chat_id = ? AND account_id = ?$cond',
+      a,
+    );
+    final up = await txn.rawQuery(
+      'SELECT 1 FROM vault_upload WHERE message_id IN '
+      '(SELECT id FROM messages WHERE chat_id = ? AND account_id = ?$cond) '
+      'LIMIT 1',
+      a,
+    );
+    await txn.rawDelete(
+      'DELETE FROM delivery_log WHERE message_id IN '
+      '(SELECT id FROM messages WHERE chat_id = ? AND account_id = ?$cond)',
+      a,
+    );
+    await txn.rawDelete(
+      'DELETE FROM outbox WHERE account_id = ? AND message_id IN '
+      '(SELECT id FROM messages WHERE chat_id = ? AND account_id = ?$cond)',
+      [accountId, ...a],
+    );
+    await txn.rawDelete(
+      'DELETE FROM messages WHERE chat_id = ? AND account_id = ?$cond',
+      a,
+    );
+    await txn.rawDelete(
+      'DELETE FROM chats WHERE id = ? AND account_id = ? AND NOT EXISTS '
+      '(SELECT 1 FROM messages WHERE chat_id = chats.id)',
+      [chatId, accountId],
+    );
+    await txn.rawDelete(
+      'DELETE FROM vault_upload WHERE message_id NOT IN '
+      '(SELECT id FROM messages)',
+    );
+    return _Deleted(
+      ids,
+      stat.first['m'] as int?,
+      (stat.first['u'] as int?) ?? 0,
+      up.isNotEmpty,
+    );
+  }
+
+  /// A vault blob that was built (but maybe not stored by the bridge) from
+  /// messages that were just deleted must not be sent.
+  Future<void> _dropPendingBlobOf(DatabaseExecutor txn, Set<int> gone) async {
+    if (gone.isEmpty) return;
+    final p = await txn.query('vault_pending', where: 'id = 1');
+    if (p.isEmpty || p.first['marks'] == null) return;
+    try {
+      final marks = json.decode(p.first['marks']! as String) as List<Object?>;
+      final hit = marks.any(
+        (m) => m is List && m.isNotEmpty && m.first is int && gone.contains(m.first),
+      );
+      if (hit) await txn.delete('vault_pending');
+    } on FormatException {
+      await txn.delete('vault_pending');
+    }
+  }
+
+  /// Removes a read-only history of ANOTHER device from this device and
+  /// remembers it (`vault_tombstones`): messages of [deviceId] with [peerHash]
+  /// up to [beforeTsMs] (null = all of them now) are deleted and a later vault
+  /// download skips records that old; newer messages still arrive. Used when
+  /// a `delete_chat` blob arrives and, with [uploadDelete], when the user
+  /// deletes that chat here: a `delete_chat` blob naming [deviceId] as the
+  /// owner is queued, so the owner and the other devices delete it too. Only
+  /// rows of [deviceId] are touched; this device's own data never is.
+  Future<void> removeVaultHistory(
+    String deviceId,
+    String peerHash, {
+    int? beforeTsMs,
+    bool uploadDelete = false,
+  }) async {
+    await _db.transaction((txn) async {
+      final chat = await txn.query(
+        'vault_chats',
+        columns: ['id'],
+        where: 'device_id = ? AND peer_hash = ?',
+        whereArgs: [deviceId, peerHash],
+      );
+      var before = beforeTsMs;
+      if (chat.isNotEmpty) {
+        final cid = chat.first['id']! as int;
+        if (before == null) {
+          final m = await txn.rawQuery(
+            'SELECT MAX(ts) AS m FROM vault_messages '
+            'WHERE chat_id = ? AND device_id = ?',
+            [cid, deviceId],
+          );
+          before = m.first['m'] as int?;
+        }
+        await txn.rawDelete(
+          'DELETE FROM vault_messages WHERE chat_id = ? AND device_id = ? '
+          'AND ts <= ?',
+          [cid, deviceId, before ?? 0],
+        );
+        await txn.rawDelete(
+          'DELETE FROM vault_chats WHERE id = ? AND device_id = ? AND NOT '
+          'EXISTS (SELECT 1 FROM vault_messages WHERE chat_id = vault_chats.id)',
+          [cid, deviceId],
+        );
+      }
+      if (before == null) return;
+      await _upsertTombstone(txn, deviceId, peerHash, before);
+      if (uploadDelete) {
+        await txn.insert('vault_delete_out', {
+          'peer_hash': peerHash,
+          'owner_device': deviceId,
+          'before_ts': before,
+        });
+      }
+    });
+    adb.notify();
+  }
+
   /// The bridge database was recreated (new `state_id`): its vault is empty.
   /// Drops the downloaded histories and the download/upload positions and
   /// bumps the upload generation, so everything is uploaded again. Own B
@@ -257,6 +596,7 @@ class Repo {
         (int.tryParse(await getSetting(SettingKeys.vaultGen) ?? '') ?? 0) + 1;
     await _db.transaction((txn) async {
       await txn.rawDelete('DELETE FROM vault_pending');
+      await txn.rawDelete('DELETE FROM vault_delete_out');
       await txn.rawDelete('DELETE FROM vault_seen');
       await txn.rawDelete('DELETE FROM vault_messages');
       await txn.rawDelete('DELETE FROM vault_chats');

@@ -56,6 +56,10 @@ class PendingBlob {
   final List<List<Object?>> marks;
 }
 
+/// First element of a pending blob mark that stands for a queued `delete_chat`
+/// ([PendingBlob.marks]); the second is the `vault_delete_out` id.
+const deleteMark = 'delete_chat';
+
 /// SQL of the vault sync. Everything here only ever writes the vault
 /// tables; the user's own chats and messages are read, never changed.
 class VaultStore {
@@ -155,6 +159,24 @@ LIMIT ?''',
     ];
   }
 
+  /// The oldest `delete_chat` still to upload (a B chat of this device was
+  /// deleted after its messages had been uploaded), or null.
+  Future<({int id, String peer, String? owner, int beforeTsMs})?>
+  nextDelete() async {
+    final r = await _db.query('vault_delete_out', orderBy: 'id ASC', limit: 1);
+    if (r.isEmpty) return null;
+    return (
+      id: r.first['id']! as int,
+      peer: r.first['peer_hash']! as String,
+      owner: r.first['owner_device'] as String?,
+      beforeTsMs: r.first['before_ts']! as int,
+    );
+  }
+
+  /// Anything to upload: messages or queued chat deletions.
+  Future<bool> hasUploadWork() async =>
+      (await candidates(1)).isNotEmpty || (await nextDelete()) != null;
+
   Future<PendingBlob?> pending() async {
     final r = await _db.query('vault_pending', where: 'id = 1');
     if (r.isEmpty || r.first['blob_id'] == null) return null;
@@ -188,6 +210,14 @@ LIMIT ?''',
     final g = await gen();
     await _db.transaction((txn) async {
       for (final m in p.marks) {
+        if (m[0] == deleteMark) {
+          await txn.delete(
+            'vault_delete_out',
+            where: 'id = ?',
+            whereArgs: [m[1]],
+          );
+          continue;
+        }
         await txn.insert('vault_upload', {
           'message_id': m[0],
           'gen': g,
@@ -239,6 +269,18 @@ LIMIT ?''',
   Future<int> applyRecords(String deviceId, List<Object?> records) async {
     var n = 0;
     await _db.transaction((txn) async {
+      final tomb = <String, int?>{};
+      Future<int?> tombstone(String peer) async {
+        if (tomb.containsKey(peer)) return tomb[peer];
+        final t = await txn.query(
+          'vault_tombstones',
+          columns: ['before_ts'],
+          where: 'device_id = ? AND peer_hash = ?',
+          whereArgs: [deviceId, peer],
+        );
+        return tomb[peer] = t.isEmpty ? null : t.first['before_ts']! as int;
+      }
+
       for (final r in records) {
         if (r is! Map) continue;
         final hash = r['hash'];
@@ -258,6 +300,9 @@ LIMIT ?''',
         final rtsRaw = r['rts'];
         final rts = rtsRaw is num ? rtsRaw.toDouble() : ts.toDouble();
         final tsMs = (ts * 1000).round();
+        // removed here, or deleted by that device: older records stay away
+        final cut = await tombstone(peer);
+        if (cut != null && tsMs <= cut) continue;
         final peerName =
             r['peer_name'] is String && (r['peer_name'] as String).isNotEmpty
             ? r['peer_name'] as String

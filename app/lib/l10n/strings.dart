@@ -242,6 +242,29 @@ class Strings {
     'vault_readonly': "Історія з {device} · лише читання",
     'vault_reply': "Відповісти з цього пристрою",
     'vault_reply_title': "Відповісти від імені",
+    // видалення чатів
+    'delete_chat': 'Видалити чат',
+    'delete_title': 'Видалити чат «{name}»?',
+    'delete_title_n': 'Видалити чатів: {n}?',
+    'delete_confirm': 'Видалити',
+    'delete_irreversible': 'Це неможливо скасувати.',
+    'delete_b_body':
+        'Чат, його повідомлення та журнал доставки буде видалено з цього пристрою.',
+    'delete_b_vault':
+        'Інші ваші пристрої теж приберуть свою копію цього чату (лише читання).',
+    'delete_a_body':
+        'Видалити на всіх пристроях і в MeshChatX: розмову буде видалено в MeshChatX і на всіх ваших пристроях.',
+    'delete_remote_body':
+        'Видалити цей чат на всіх пристроях, зокрема на «{device}». Повідомлення до цього моменту буде видалено і там; новіші залишаться.',
+    'delete_unsent': 'Невідправлені повідомлення ({n}) буде скасовано.',
+    'delete_a_offline':
+        'Міст не підключено, тому чати акаунта A зараз не можна видалити.',
+    'delete_a_old_bridge':
+        'Цей міст застарів і не вміє видаляти чати. Оновіть міст.',
+    'delete_remote_no_vault':
+        'Щоб видалити чат іншого пристрою, синхронізація історії має бути активна.',
+    'select': 'Вибрати',
+    'selected_n': 'Вибрано: {n}',
   };
 
   static const _en = <String, String>{
@@ -445,6 +468,29 @@ class Strings {
     'vault_readonly': "History from {device} · read only",
     'vault_reply': "Reply from this device",
     'vault_reply_title': "Reply as",
+    // chat deletion
+    'delete_chat': 'Delete chat',
+    'delete_title': 'Delete chat "{name}"?',
+    'delete_title_n': 'Delete {n} chats?',
+    'delete_confirm': 'Delete',
+    'delete_irreversible': 'This cannot be undone.',
+    'delete_b_body':
+        'The chat, its messages and delivery log are deleted from this device.',
+    'delete_b_vault':
+        'Your other devices remove their read-only copy of this chat too.',
+    'delete_a_body':
+        'Delete for all devices and in MeshChatX: the conversation is deleted in MeshChatX and on all your devices.',
+    'delete_remote_body':
+        'Delete this chat on all devices, including {device}. Messages up to now are removed there too; newer ones stay.',
+    'delete_unsent': '{n} unsent message(s) will be cancelled.',
+    'delete_a_offline':
+        'The bridge is not connected, so chats of account A cannot be deleted now.',
+    'delete_a_old_bridge':
+        'This bridge is too old to delete chats. Update the bridge.',
+    'delete_remote_no_vault':
+        'Deleting a chat of another device needs the history sync to be active.',
+    'select': 'Select',
+    'selected_n': 'Selected: {n}',
   };
 }
 

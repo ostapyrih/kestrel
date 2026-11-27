@@ -16,7 +16,10 @@ class Migration {
 ///  * Switching bridge mode changes `settings.bridge_enabled`. Turning the
 ///    bridge off additionally drops account A (a cache of MeshChatX) through
 ///    the one method `Repo.purgeBridgeAccountData`; account B (this device)
-///    is never deleted by anything.
+///    is never deleted by a mode switch. Only the user can delete chats, via
+///    `Repo.deleteChats` (rows of the chats' own account), the bridge's
+///    `chat_deleted` via `Repo.applyChatDeleted` (account A) and
+///    `Repo.removeVaultHistory` (read-only histories of other devices).
 ///  * `outbox.sender_identity` and `outbox.route` are frozen when the row is
 ///    created (enforced by triggers).
 const List<Migration> migrations = [
@@ -231,6 +234,29 @@ CREATE TABLE vault_pending (
   key_epoch INTEGER,
   ciphertext BLOB,
   marks TEXT
+)''',
+  ]),
+  // Chat deletion (docs/bridge-protocol.md 9.5, kind `delete_chat`).
+  // `vault_tombstones` persists an applied deletion "the history of device
+  // `device_id` with this peer is gone up to `before_ts`" (also for this
+  // device's own chat): a vault re-download skips records that old. It
+  // survives turning the bridge off. `vault_delete_out` queues `delete_chat`
+  // blobs to upload (`owner_device` null = this device's own chat, else the
+  // read-only chat of that other device); the uploader sends them in order.
+  Migration(5, [
+    '''
+CREATE TABLE vault_tombstones (
+  device_id TEXT NOT NULL,
+  peer_hash TEXT NOT NULL,
+  before_ts INTEGER NOT NULL,
+  PRIMARY KEY (device_id, peer_hash)
+)''',
+    '''
+CREATE TABLE vault_delete_out (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  peer_hash TEXT NOT NULL,
+  owner_device TEXT,
+  before_ts INTEGER NOT NULL
 )''',
   ]),
 ];
