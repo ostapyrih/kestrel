@@ -12,6 +12,7 @@ export 'src/destination.dart';
 export 'src/framing/hdlc.dart';
 export 'src/framing/kiss.dart';
 export 'src/group/announcer.dart';
+export 'src/group/backfill.dart';
 export 'src/group/device_sync.dart';
 export 'src/group/group_models.dart';
 export 'src/group/group_state.dart';

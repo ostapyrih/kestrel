@@ -295,6 +295,11 @@ class NodeService {
         _router?.setDisplayName(n);
         unawaited(repo.setAccountAddress('B', displayName: n));
       },
+      onIdentity: (c) async {
+        // switching restarts the runtime that delivered the record: do it
+        // after this record has been fully handled
+        unawaited(Future<void>(() => _adoptIdentity(c)));
+      },
       browser: BrowserSyncStore(repo.adb),
     );
     _runtime = rt;
@@ -657,6 +662,17 @@ class NodeService {
       confirm: confirm,
     );
     await _adoptGroup(result.bundle);
+    // the new device receives the group's existing history from the host
+    await _runtime?.backfill.start(from: result.host?.id);
+  }
+
+  /// A sibling changed the address: this device moves to the new G, keeps the
+  /// old chats as history and stops answering for the old G. The announcer
+  /// re-announces the new G once the election ran again.
+  Future<void> _adoptIdentity(IdentityChange c) async {
+    if (_stopped) return;
+    final fresh = await group.applyIdentity(c);
+    await _swapIdentity(fresh, ratchets: c.ratchets, stamp: c.stamp);
   }
 
   Future<void> _adoptGroup(PairingBundle b) async {
@@ -736,6 +752,7 @@ class NodeService {
   }) async {
     await ready;
     final fresh = await Identity.generate();
+    final oldHash = toHex(identity.hash);
     final newHex = toHex(LXMessage.deliveryHash(fresh));
     final chats = [...await repo.chats(accountIdentity: 'B')]
       ..sort((a, b) => (b.lastTs ?? 0).compareTo(a.lastTs ?? 0));
@@ -766,7 +783,26 @@ class NodeService {
             .catchError((Object _) {}),
     ]);
     await group.replaceGroupIdentity(fresh);
+    final ratchets = <RatchetEntry>[];
     await _swapIdentity(fresh);
+    // move the other devices: the new key, name, ratchets and stamp (sent by
+    // this device only; the notice above also went out once, from the old G)
+    final rt = _runtime;
+    if (rt != null) {
+      ratchets.addAll(router.destination.exportRatchets());
+      await rt.sync.publishIdentity(
+        IdentityChange(
+          privateKey: fresh.privateKey!,
+          gen: group.state.identityGen,
+          replaces: oldHash,
+          name: group.displayName,
+          nameRev: group.state.nameRev,
+          ratchets: ratchets,
+          stamp: await rns.transport.exportStamp(router.destination),
+          timebase: group.state.timebase,
+        ),
+      );
+    }
     return ok;
   }
 

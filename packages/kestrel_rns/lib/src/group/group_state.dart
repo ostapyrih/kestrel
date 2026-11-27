@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import '../crypto/random.dart';
 import '../destination.dart';
+import '../identity.dart';
 import '../msgpack/msgpack.dart';
 import '../util.dart';
 import '../vault_crypto.dart';
@@ -24,6 +25,8 @@ class GroupState {
     this.displayName = '',
     this.nameRev = 0,
     this.timebase = 0,
+    this.identityGen = 0,
+    this.identityHash = '',
   }) : chain = {...chain};
 
   /// A brand new group with this device as the only member.
@@ -56,6 +59,31 @@ class GroupState {
 
   /// Last announce emission time used by the group (monotonic timebase).
   int timebase;
+
+  /// Generation of the group identity G: 0 until the first "Change address",
+  /// then +1 for every change (an `identity` sync record carries it).
+  int identityGen;
+
+  /// Hex hash of the identity of generation [identityGen] ('' = unknown, the
+  /// initial G of an old install).
+  String identityHash;
+
+  /// Whether an identity change of generation [gen] to [hash] supersedes the
+  /// current one: higher generation wins, at equal generations the larger hash
+  /// (deterministic, so two devices that changed at once converge). The same
+  /// change twice is not newer.
+  bool isNewerIdentity(int gen, String hash) =>
+      gen > identityGen ||
+      (gen == identityGen && hash.compareTo(identityHash) > 0);
+
+  /// Records [gen]/[hash] as the current identity if it is newer; true if it
+  /// was adopted.
+  bool adoptIdentity(int gen, String hash) {
+    if (!isNewerIdentity(gen, hash)) return false;
+    identityGen = gen;
+    identityHash = hash;
+    return true;
+  }
 
   Uint8List get currentKey => chain[epoch]!;
 
@@ -122,6 +150,8 @@ class GroupState {
         'name': displayName,
         'name_rev': nameRev,
         'timebase': timebase,
+        'id_gen': identityGen,
+        'id_hash': identityHash,
       };
 
   Uint8List encode() => packb(toMap());
@@ -147,6 +177,8 @@ class GroupState {
       displayName: o['name'] is String ? o['name']! as String : '',
       nameRev: o['name_rev'] is int ? o['name_rev']! as int : 0,
       timebase: o['timebase'] is int ? o['timebase']! as int : 0,
+      identityGen: o['id_gen'] is int ? o['id_gen']! as int : 0,
+      identityHash: o['id_hash'] is String ? o['id_hash']! as String : '',
     );
   }
 
@@ -209,5 +241,92 @@ class PairingBundle {
     } on Object {
       return null;
     }
+  }
+}
+
+/// The `identity` sync record: the whole group moves to a new main identity
+/// G' ("Change address"). Travels like every record (encrypted with
+/// `VaultCrypto.encryptBlob`); the private key never leaves the group.
+class IdentityChange {
+  IdentityChange({
+    required this.privateKey,
+    required this.gen,
+    required this.replaces,
+    this.name = '',
+    this.nameRev = 0,
+    this.ratchets = const [],
+    this.stamp,
+    this.timebase = 0,
+  });
+
+  /// Version of the record layout.
+  static const version = 1;
+
+  /// G' private key (64 bytes, `Identity.privateKey`).
+  final Uint8List privateKey;
+
+  /// Monotonic generation; the highest wins.
+  final int gen;
+
+  /// Hex hash of the identity this one replaces.
+  final String replaces;
+  final String name;
+  final int nameRev;
+
+  /// Fresh ratchet list of G' (newest first).
+  final List<RatchetEntry> ratchets;
+
+  /// Announce stamp of G', if the sender already has it.
+  final Uint8List? stamp;
+
+  /// Announce stamp time base ("announce stamp" of the group).
+  final int timebase;
+
+  /// Hex hash of the new identity (what [GroupState.identityHash] holds).
+  Future<String> newHash() async =>
+      toHex((await Identity.fromPrivateKey(privateKey)).hash);
+
+  Map<String, Object?> toMap() => {
+        'v': version,
+        'priv': privateKey,
+        'gen': gen,
+        'replaces': replaces,
+        'name': name,
+        'name_rev': nameRev,
+        'ratchets': [
+          for (final r in ratchets) {'k': r.key, 't': r.createdAt}
+        ],
+        if (stamp != null) 'stamp': stamp,
+        'tb': timebase,
+      };
+
+  static IdentityChange? fromMap(Object? o) {
+    if (o is! Map || o['v'] != version) return null;
+    final priv = o['priv'];
+    final gen = o['gen'];
+    final replaces = o['replaces'];
+    if (priv is! Uint8List ||
+        priv.length != 64 ||
+        gen is! int ||
+        gen < 1 ||
+        replaces is! String) {
+      return null;
+    }
+    final rs = <RatchetEntry>[];
+    for (final e in (o['ratchets'] as List? ?? const [])) {
+      if (e is Map && e['k'] is Uint8List && e['t'] is int) {
+        rs.add(RatchetEntry(e['k']! as Uint8List, e['t']! as int));
+      }
+    }
+    return IdentityChange(
+      privateKey: priv,
+      gen: gen,
+      replaces: replaces,
+      name: o['name'] is String ? o['name']! as String : '',
+      nameRev: o['name_rev'] is int ? o['name_rev']! as int : 0,
+      ratchets: rs,
+      stamp: o['stamp'] is Uint8List ? o['stamp']! as Uint8List : null,
+      timebase: o['tb'] is int ? o['tb']! as int : 0,
+    );
   }
 }

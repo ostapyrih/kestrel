@@ -37,6 +37,8 @@ abstract final class SyncKind {
   static const deleteChat = 'delete_chat';
   static const browser = 'browser';
   static const read = 'read';
+  static const backfillRequest = 'backfill_req';
+  static const backfill = 'backfill';
 }
 
 /// One applied sync record (decrypted, in per-device `seq` order).
@@ -143,6 +145,7 @@ class DeviceSync {
     required this.store,
     this.group,
     this.onStateChanged,
+    this.onIdentity,
     this.gapDelay = const Duration(seconds: 3),
     RandomBytes? random,
   }) : _random = random ?? secureRandomBytes;
@@ -155,8 +158,16 @@ class DeviceSync {
   final GroupState state;
   final SyncStore store;
 
-  /// The group identity's destination (ratchet records merge into it).
-  final Destination? group;
+  /// The group identity's destination (ratchet records merge into it). Set to
+  /// the new destination after an `identity` record switched the router.
+  Destination? group;
+
+  /// Called after an `identity` record from a sibling was adopted (it is newer
+  /// than the current identity, [state] already carries its generation and was
+  /// persisted via [onStateChanged]). The app switches its router/announcer to
+  /// the new G here and retires the old one. Not called for the device that
+  /// published the change.
+  final Future<void> Function(IdentityChange change)? onIdentity;
 
   /// Called after built-in records changed [state] (persist it).
   final void Function()? onStateChanged;
@@ -493,6 +504,17 @@ class DeviceSync {
             ];
             await g.mergeRatchets(list);
           }
+        case SyncKind.identity:
+          final c = IdentityChange.fromMap(r.data);
+          if (c != null) {
+            final hash = await c.newHash();
+            if (state.adoptIdentity(c.gen, hash)) {
+              if (c.name.isNotEmpty) state.mergeName(c.name, c.nameRev);
+              state.mergeTimebase(c.timebase);
+              onStateChanged?.call();
+              await onIdentity?.call(c);
+            }
+          }
         case SyncKind.rekey:
           final d = r.data;
           if (d is Map && d['wrapped'] is Uint8List) {
@@ -532,6 +554,12 @@ class DeviceSync {
         'name': state.displayName,
         'rev': state.nameRev,
       });
+
+  /// Tells every sibling that the group moved to a new main identity (the
+  /// caller already adopted it in [state]). Sent once by the device that
+  /// initiated "Change address".
+  Future<int> publishIdentity(IdentityChange change) =>
+      publish(SyncKind.identity, change.toMap());
 
   /// Sends the newest [limit] ratchets (all if 0) of the group destination.
   Future<void> publishRatchets({int limit = 8}) {
