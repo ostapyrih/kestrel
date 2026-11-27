@@ -410,6 +410,37 @@ class NodeService {
     _watchInterface(i);
   }
 
+  // ------------------------------------------------------- extra interfaces
+
+  final List<RnsInterface> _extra = [];
+  final Map<RnsInterface, StreamSubscription<InterfaceState>> _extraSubs = {};
+
+  /// Attaches another interface (the LoRa RNode) next to the TCP one:
+  /// Transport uses all of them. Announces our address once whenever it
+  /// comes online, so peers in radio range learn us.
+  Future<void> addInterface(RnsInterface i) async {
+    await ready;
+    if (_extra.contains(i)) return;
+    _extra.add(i);
+    await _rns!.addInterface(i);
+    _extraSubs[i] = i.stateChanges.listen((s) {
+      if (s == InterfaceState.online) unawaited(announce());
+    });
+  }
+
+  /// Detaches an interface added with [addInterface] (does not stop it).
+  Future<void> removeInterface(RnsInterface i) async {
+    if (!_extra.remove(i)) return;
+    await _extraSubs.remove(i)?.cancel();
+    await _rns?.transport.removeInterface(i);
+  }
+
+  /// `lora` for traffic over an RNode, `tcp` otherwise.
+  static String transportOf(RnsInterface? i) =>
+      i is RNodeInterface ? 'lora' : 'tcp';
+
+  bool get _anyExtraOnline => _extra.any((i) => i.online);
+
   // ------------------------------------------------------------------ chats
 
   /// Resolves the conversation with [peerHashHex] under account B, or under
@@ -604,7 +635,9 @@ class NodeService {
       destinationHash: peer,
       text: text,
       route: _routeName(method),
-      transport: _current == NodeConnection.online ? 'tcp' : 'none',
+      transport: _current == NodeConnection.online
+          ? 'tcp'
+          : (_anyExtraOnline ? 'lora' : 'none'),
     );
     final o = await router.send(
       destinationHash: fromHex(peer),
@@ -655,7 +688,7 @@ class NodeService {
             .round(),
       ),
       route: _routeName(r.method),
-      transport: 'tcp',
+      transport: transportOf(r.interface),
       signatureValid: m.signatureValidated,
     );
   }
@@ -688,7 +721,7 @@ class NodeService {
       lxmfHash: toHex(e.hash),
       status: status,
       route: _routeName(e.method),
-      transport: onWire ? 'tcp' : null,
+      transport: onWire ? transportOf(e.interface) : null,
       error: e.error,
     );
     // The creation of the outbox row already logged "queued".
@@ -703,6 +736,9 @@ class NodeService {
     if (_stopped) return;
     _stopped = true;
     await _ifaceSub?.cancel();
+    for (final s in _extraSubs.values) {
+      await s.cancel();
+    }
     for (final s in _subs) {
       await s.cancel();
     }

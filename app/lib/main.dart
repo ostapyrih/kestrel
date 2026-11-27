@@ -13,6 +13,10 @@ import 'package:path_provider/path_provider.dart';
 import 'bridge/bridge_connection.dart';
 import 'bridge/bridge_service.dart';
 import 'l10n/strings.dart';
+import 'lora/lora_model.dart';
+import 'lora/lora_providers.dart';
+import 'lora/lora_service.dart';
+import 'lora/lora_transports.dart';
 import 'node/identity_store.dart';
 import 'node/node_service.dart';
 import 'desktop/desktop_settings.dart';
@@ -63,6 +67,11 @@ Future<void> main() async {
   );
   node.bridge = bridge;
   final nomad = NomadService(node: node, store: NomadStore(adb));
+  final lora = LoraService(
+    store: LoraStore(repo),
+    node: node,
+    transports: PluginLoraTransports(),
+  );
   // Closing the window hides it to the tray; every real exit (tray menu,
   // updater, setting off, Cmd+Q) goes through shutdown() and closes the
   // database cleanly.
@@ -71,6 +80,7 @@ Future<void> main() async {
     for (final step in <Future<void> Function()>[
       bridge.vault.flushHistory,
       bridge.stop,
+      lora.stop, // radio off before the node goes away
       node.stop,
       adb.close,
     ]) {
@@ -113,6 +123,7 @@ Future<void> main() async {
     }),
   );
   unawaited(nomad.start());
+  unawaited(lora.start());
   // browsing history is uploaded in batches; send what is left on the way out
   AppLifecycleListener(
     onHide: () => unawaited(bridge.vault.flushHistory()),
@@ -155,6 +166,7 @@ Future<void> main() async {
         nodeProvider.overrideWithValue(node),
         bridgeProvider.overrideWithValue(bridge),
         nomadServiceProvider.overrideWithValue(nomad),
+        loraControllerProvider.overrideWithValue(lora),
         updateServiceProvider.overrideWithValue(updates),
       ],
       child: const KestrelApp(),

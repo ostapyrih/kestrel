@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../l10n/strings.dart';
+import '../lora/lora_screen.dart';
 import '../platform.dart';
 import '../providers.dart';
 import '../storage/database.dart';
@@ -169,6 +170,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               child: Text(s.t('apply')),
             ),
           ),
+          const Divider(height: 32),
+          const LoraSettingsTile(),
           const Divider(height: 32),
           Text(
             bridge ? s.t('identity') : s.t('identity_plain'),
