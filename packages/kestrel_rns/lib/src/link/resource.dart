@@ -131,13 +131,34 @@ class ResourceAdvertisement {
   }
 }
 
+/// Segments of a multi-segment resource received so far (in memory).
+class SplitBuffer {
+  final BytesBuilder _data = BytesBuilder(copy: false);
+  Object? metadata;
+  int _received = 0;
+
+  /// Index of the segment expected next (1-based).
+  int get next => _received + 1;
+
+  void add(Uint8List segment, Object? meta) {
+    _data.add(Uint8List.fromList(segment));
+    if (_received == 0) metadata = meta;
+    _received++;
+  }
+
+  Uint8List take() => _data.takeBytes();
+}
+
 /// Arbitrary-size reliable transfer over a [Link] (RNS/Resource.py):
 /// sequencing, optional bz2 compression, link encryption, a hashmap of
 /// 4-byte part hashes, windowed part requests and a final proof.
 ///
-/// Supported: single-segment resources (up to [maxEfficientSize], ~1 MiB),
-/// both directions, requests/responses as resources, metadata on receive.
-/// Not supported: multi-segment (split) resources, sending metadata, file
+/// Supported: single-segment resources (up to [maxEfficientSize], ~1 MiB) in
+/// both directions, requests/responses as resources, metadata on receive and
+/// multi-segment (split) resources on RECEIVE (RNS 1.x: a large file arrives
+/// as consecutive ~1 MiB segments that are concatenated in memory, up to
+/// `TransportConfig.maxResourceSize`).
+/// Not supported: sending multi-segment resources, sending metadata, file
 /// handles.
 class Resource {
   Resource._(this.link);
@@ -187,6 +208,10 @@ class Resource {
   bool encrypted = true;
   bool hasMetadata = false;
   bool split = false;
+
+  /// Segment of a multi-segment resource (1-based) and the segment count.
+  int segmentIndex = 1;
+  int totalSegments = 1;
 
   /// Transfer size (encrypted stream) and total data size.
   int size = 0;
@@ -537,11 +562,24 @@ class Resource {
     Uint8List? requestId,
   }) async {
     final maxSize = link.transport.config.maxResourceSize;
-    if (adv.totalSegments > 1 ||
-        adv.dataSize > maxSize ||
-        adv.transferSize > maxSize + 1024 + adv.parts * 64) {
+    if (adv.dataSize > maxSize ||
+        adv.transferSize > maxEfficientSize + 1024 + adv.parts * 64 ||
+        adv.totalSegments < 1 ||
+        adv.totalSegments > maxSize ~/ (maxEfficientSize ~/ 2) + 2 ||
+        adv.segmentIndex < 1 ||
+        adv.segmentIndex > adv.totalSegments) {
       await reject(link, adv);
       return null;
+    }
+    if (adv.totalSegments > 1) {
+      // Segments must arrive in order, each continuing the previous one.
+      final held = link.splitBuffers[toHex(adv.originalHash)];
+      if (adv.segmentIndex == 1) {
+        link.splitBuffers[toHex(adv.originalHash)] = SplitBuffer();
+      } else if (held == null || held.next != adv.segmentIndex) {
+        await reject(link, adv);
+        return null;
+      }
     }
     final res = Resource._(link)
       ..status = ResourceStatus.transferring
@@ -557,7 +595,9 @@ class Resource {
     res.encrypted = adv.encrypted;
     res.compressed = adv.compressed;
     res.hasMetadata = adv.hasMetadata;
-    res.split = adv.split;
+    res.split = adv.totalSegments > 1;
+    res.segmentIndex = adv.segmentIndex;
+    res.totalSegments = adv.totalSegments;
     res._maxSize = maxSize;
     res.sdu = link.mtu - Packet.headerMaxSize - Packet.ifacMinSize;
     res.totalParts = (res.size + res.sdu - 1) ~/ res.sdu;
@@ -781,12 +821,26 @@ class Resource {
         status = ResourceStatus.corrupt;
       } else {
         var out = body;
-        if (hasMetadata) {
+        // metadata only prefixes the first segment (Resource.py:713)
+        if (hasMetadata && segmentIndex == 1) {
           final ml = (body[0] << 16) | (body[1] << 8) | body[2];
           metadata = unpackb(body.sublist(3, 3 + ml));
           out = Uint8List.sublistView(body, 3 + ml);
         }
-        data = Uint8List.fromList(out);
+        if (totalSegments > 1) {
+          final buf = link.splitBuffers[toHex(originalHash)];
+          if (buf == null || buf.next != segmentIndex) {
+            throw StateError('segment out of order');
+          }
+          buf.add(out, metadata);
+          if (segmentIndex == totalSegments) {
+            link.splitBuffers.remove(toHex(originalHash));
+            data = buf.take();
+            metadata = buf.metadata;
+          }
+        } else {
+          data = Uint8List.fromList(out);
+        }
         status = ResourceStatus.complete;
         // proof = SHA256(data_with_metadata || resource_hash)
         final proof = sha256([...body, ...hash]);
@@ -805,8 +859,9 @@ class Resource {
     _watchdog?.cancel();
     link.resourceConcluded(this);
     if (status == ResourceStatus.corrupt) {
+      link.splitBuffers.remove(toHex(originalHash));
       await cancelCorrupt();
-    } else {
+    } else if (segmentIndex == totalSegments) {
       callback?.call(this);
     }
   }

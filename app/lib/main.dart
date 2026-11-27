@@ -12,6 +12,9 @@ import 'bridge/bridge_service.dart';
 import 'l10n/strings.dart';
 import 'node/identity_store.dart';
 import 'node/node_service.dart';
+import 'nomadnet/nomad_providers.dart';
+import 'nomadnet/nomad_service.dart';
+import 'nomadnet/nomad_store.dart';
 import 'platform.dart';
 import 'providers.dart';
 import 'screens/chats_screen.dart';
@@ -50,6 +53,7 @@ Future<void> main() async {
     ),
   );
   node.bridge = bridge;
+  final nomad = NomadService(node: node, store: NomadStore(adb));
   final updates = await createUpdateService(repo)
     ..start();
   // The UI comes up immediately; the node starts in the background and the
@@ -59,12 +63,14 @@ Future<void> main() async {
       debugPrint('node start failed: $e');
     }),
   );
+  unawaited(nomad.start());
   runApp(
     ProviderScope(
       overrides: [
         repoProvider.overrideWithValue(repo),
         nodeProvider.overrideWithValue(node),
         bridgeProvider.overrideWithValue(bridge),
+        nomadServiceProvider.overrideWithValue(nomad),
         updateServiceProvider.overrideWithValue(updates),
       ],
       child: const KestrelApp(),

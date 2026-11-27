@@ -55,6 +55,10 @@ class RequestReceipt {
 
   RequestStatus status = RequestStatus.sent;
   double progress = 0;
+
+  /// True if the response was refused because it exceeds
+  /// [maxResponseSize] or the transport's `maxResourceSize`.
+  bool tooLarge = false;
   Object? response;
   Object? metadata;
   int? responseSize;
@@ -73,6 +77,19 @@ class RequestReceipt {
   /// Round trip of the request (Link.py get_response_time).
   Duration? get responseTime =>
       status == RequestStatus.ready ? concludedAt!.difference(sentAt) : null;
+
+  /// Abandons the request and any response transfer in progress. [done]
+  /// completes with [RequestStatus.failed].
+  Future<void> cancel() async {
+    if (concluded) return;
+    _fail();
+    for (final r in [...link.incomingResources]) {
+      if (r.requestId != null && constantTimeEquals(r.requestId!, requestId)) {
+        link.splitBuffers.remove(toHex(r.originalHash));
+        await r.cancel();
+      }
+    }
+  }
 
   void _startTimer(double seconds) {
     _timer?.cancel();
@@ -115,7 +132,7 @@ class RequestReceipt {
       return;
     }
     status = RequestStatus.receiving;
-    progress = r.progress;
+    progress = ((r.segmentIndex - 1) + r.progress) / r.totalSegments;
     onProgress?.call(this);
   }
 }
@@ -873,7 +890,12 @@ class Link {
   }
 
   void _responseResourceConcluded(Resource r) {
-    if (r.status == ResourceStatus.complete) {
+    if (r.status == ResourceStatus.complete && r.hasMetadata) {
+      // A file response (RNS 1.x): the resource carries the raw file plus
+      // metadata (e.g. `{name: ...}`) instead of a packed `[id, response]`.
+      _handleResponse(r.requestId!, r.data, r.totalSize, r.size,
+          metadata: r.metadata);
+    } else if (r.status == ResourceStatus.complete) {
       final un = unpackb(r.data!)! as List<Object?>;
       _handleResponse(un[0]! as Uint8List, un[1], r.totalSize, r.size);
     } else {
@@ -908,6 +930,11 @@ class Link {
             if (pr.maxResponseSize != null &&
                 adv.dataSize > pr.maxResponseSize!) {
               await Resource.reject(this, adv);
+              pr.tooLarge = true;
+              pr._fail();
+            } else if (adv.dataSize > transport.config.maxResourceSize) {
+              await Resource.reject(this, adv);
+              pr.tooLarge = true;
               pr._fail();
             } else {
               final res = await Resource.accept(
@@ -962,6 +989,9 @@ class Link {
 
   // ----------------------------------------------------------------- resource
 
+  /// Partially received multi-segment resources by original hash (hex).
+  final Map<String, SplitBuffer> splitBuffers = {};
+
   void resourceConcluded(Resource r) {
     incomingResources.remove(r);
     outgoingResources.remove(r);
@@ -1002,6 +1032,7 @@ class Link {
 
   void _closedCleanup() {
     _watchdog?.cancel();
+    splitBuffers.clear();
     for (final r in [...incomingResources]) {
       unawaited(r.cancel());
     }

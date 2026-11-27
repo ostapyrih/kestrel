@@ -2,6 +2,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../l10n/strings.dart';
+import '../nomadnet/nomad_screen.dart';
+import '../nomadnet/nomad_strings.dart';
 import '../node/node_service.dart';
 import '../platform.dart';
 import '../providers.dart';
@@ -119,6 +121,14 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
                 MaterialPageRoute<void>(builder: (_) => const RoomsScreen()),
               ),
             ),
+          IconButton(
+            key: const ValueKey('open-pages'),
+            tooltip: nt(context, 'nn_title'),
+            icon: const Icon(Icons.public),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const NomadScreen()),
+            ),
+          ),
           IconButton(
             tooltip: s.t('settings'),
             icon: const Icon(Icons.settings_outlined),
