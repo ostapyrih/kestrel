@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/ostapyrih/kestrel/compare/app-v0.10.0...app-v0.10.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* **app:** register iOS BGTask launch handler ([61298d5](https://github.com/ostapyrih/kestrel/commit/61298d598d9dfa205d537d1b28a07694991f0bfa))
+
 ## [0.10.0](https://github.com/ostapyrih/kestrel/compare/app-v0.9.1...app-v0.10.0) (2026-11-27)
 
 
