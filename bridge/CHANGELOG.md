@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/ostapyrih/kestrel/compare/bridge-v0.5.0...bridge-v0.6.0) (2026-11-27)
+
+
+### Features
+
+* end-to-end encrypted history sync between devices (vault, Phase 4b) ([#24](https://github.com/ostapyrih/kestrel/issues/24)) ([d268021](https://github.com/ostapyrih/kestrel/commit/d268021dbf28168a2c5dd33285dd8ff5a66549ca))
+
 ## [0.5.0](https://github.com/ostapyrih/kestrel/compare/bridge-v0.4.1...bridge-v0.5.0) (2026-11-26)
 
 
