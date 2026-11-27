@@ -47,8 +47,7 @@ void main() {
     await adb.close();
   });
 
-  Future<void> settle() =>
-      Future<void>.delayed(const Duration(milliseconds: 20));
+  Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 20));
 
   Future<void> load(String url, String markup) async {
     final f = c.open(url);
@@ -177,9 +176,7 @@ void main() {
 
     test('requests with data bypass the cache', () async {
       await load('$hash:/page/f.mu', 'form');
-      unawaited(
-        c.go(NomadUrl.parse('$hash:/page/f.mu'), data: {'field_a': 'b'}),
-      );
+      unawaited(c.go(NomadUrl.parse('$hash:/page/f.mu'), data: {'field_a': 'b'}));
       await settle();
       expect(requests.length, 2);
       expect(requests.last.data, {'field_a': 'b'});
@@ -209,17 +206,15 @@ void main() {
     expect(c.target!.path, '/page/b.mu');
   });
 
-  test(
-    'cancel aborts the request and restores the idle/loaded phase',
-    () async {
-      unawaited(c.open('$hash:/page/a.mu'));
-      await settle();
-      await c.cancel();
-      expect(requests.single.cancelled, isTrue);
-      expect(c.phase, BrowserPhase.idle);
-      expect(c.failure, isNull);
-    },
-  );
+  test('cancel aborts the request and restores the idle/loaded phase',
+      () async {
+    unawaited(c.open('$hash:/page/a.mu'));
+    await settle();
+    await c.cancel();
+    expect(requests.single.cancelled, isTrue);
+    expect(c.phase, BrowserPhase.idle);
+    expect(c.failure, isNull);
+  });
 
   test('a newer navigation cancels the previous request', () async {
     unawaited(c.open('$hash:/page/a.mu'));

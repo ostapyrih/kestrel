@@ -277,9 +277,11 @@ class UpdateService {
     if (Platform.isWindows) {
       await Process.start(path, const [], mode: ProcessStartMode.detached);
     } else {
-      await Process.start(Platform.isMacOS ? 'open' : 'xdg-open', [
-        path,
-      ], mode: ProcessStartMode.detached);
+      await Process.start(
+        Platform.isMacOS ? 'open' : 'xdg-open',
+        [path],
+        mode: ProcessStartMode.detached,
+      );
     }
   }
 

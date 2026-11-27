@@ -23,8 +23,7 @@ String _mapRow(List<String> colours, [List<String>? labels]) => [
 
 final _prose =
     'Це звичайний абзац тексту, який має переноситися по словах на вузькому '
-        'екрані, бо тут немає ні малюнків, ні вирівнювання. ' *
-    2;
+    'екрані, бо тут немає ні малюнків, ні вирівнювання. ' * 2;
 
 final _row1 = _mapRow(
   ['d00', 'd00', '0a0', '0a0', '00d', '00d'],
@@ -73,8 +72,8 @@ Future<GlobalKey<MicronViewState>> pumpPage(
   return key;
 }
 
-RenderParagraph para(WidgetTester tester, Finder f) =>
-    tester.renderObject<RenderParagraph>(
+RenderParagraph para(WidgetTester tester, Finder f) => tester
+    .renderObject<RenderParagraph>(
       find.descendant(of: f, matching: find.byType(RichText)).first,
     );
 
@@ -87,9 +86,7 @@ int lineCount(WidgetTester tester, Finder f) {
   final p = para(tester, f);
   final n = p.text.toPlainText().length;
   final tops = {
-    for (final b in p.getBoxesForSelection(
-      TextSelection(baseOffset: 0, extentOffset: n),
-    ))
+    for (final b in p.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: n)))
       b.top.round(),
   };
   return tops.length;
@@ -133,12 +130,13 @@ void main() {
       final key = await pumpPage(tester, _page);
       final fs = key.currentState!.effectiveFontSize;
       final rows = find.byWidgetPredicate(
-        (w) => w is Text && (w.textSpan?.toPlainText() ?? '').length == 60,
+        (w) =>
+            w is Text &&
+            (w.textSpan?.toPlainText() ?? '').length == 60,
       );
       expect(rows, findsNWidgets(3));
       final rects = [
-        for (final e in rows.evaluate())
-          tester.getRect(find.byWidget(e.widget)),
+        for (final e in rows.evaluate()) tester.getRect(find.byWidget(e.widget)),
       ];
       for (var i = 0; i + 1 < rects.length; i++) {
         expect(rects[i].height, closeTo(fs, 0.01), reason: 'line height 1.0');

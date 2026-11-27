@@ -74,15 +74,13 @@ void main() {
       expect(n.announced, isTrue);
     });
 
-    test(
-      'identify defaults to off, also for nodes visited by address',
-      () async {
-        await s.ensureNode(h2);
-        final n = (await s.node(h2))!;
-        expect(n.identify, isFalse);
-        expect(n.announced, isFalse);
-      },
-    );
+    test('identify defaults to off, also for nodes visited by address',
+        () async {
+      await s.ensureNode(h2);
+      final n = (await s.node(h2))!;
+      expect(n.identify, isFalse);
+      expect(n.announced, isFalse);
+    });
 
     test('search by name or hash, favourites first then recent', () async {
       await s.upsertAnnounced(h1, name: 'Alpha', hops: 1, nowMs: 1);

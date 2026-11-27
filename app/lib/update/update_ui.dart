@@ -42,50 +42,47 @@ class UpdateHost extends ConsumerWidget {
       children: [
         if (failure != null) UpdateFailedBanner(failure: failure),
         if (show)
-          Material(
-            color: scheme.secondaryContainer,
-            child: SafeArea(
-              bottom: false,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 4,
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.system_update_alt,
-                      color: scheme.onSecondaryContainer,
-                      size: 20,
+        Material(
+          color: scheme.secondaryContainer,
+          child: SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.system_update_alt,
+                    color: scheme.onSecondaryContainer,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      key: const ValueKey('update-banner'),
+                      ut(context, 'upd_banner', {'v': '${release.version}'}),
+                      style: TextStyle(color: scheme.onSecondaryContainer),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        key: const ValueKey('update-banner'),
-                        ut(context, 'upd_banner', {'v': '${release.version}'}),
-                        style: TextStyle(color: scheme.onSecondaryContainer),
-                      ),
+                  ),
+                  TextButton(
+                    key: const ValueKey('update-details'),
+                    onPressed: () {
+                      final ctx = navigatorKey.currentContext;
+                      if (ctx != null) showUpdateDialog(ctx);
+                    },
+                    child: Text(ut(context, 'upd_details')),
+                  ),
+                  if (!working)
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 18),
+                      tooltip: ut(context, 'upd_later'),
+                      onPressed: () =>
+                          ref.read(updateServiceProvider).dismiss(),
                     ),
-                    TextButton(
-                      key: const ValueKey('update-details'),
-                      onPressed: () {
-                        final ctx = navigatorKey.currentContext;
-                        if (ctx != null) showUpdateDialog(ctx);
-                      },
-                      child: Text(ut(context, 'upd_details')),
-                    ),
-                    if (!working)
-                      IconButton(
-                        icon: const Icon(Icons.close, size: 18),
-                        tooltip: ut(context, 'upd_later'),
-                        onPressed: () =>
-                            ref.read(updateServiceProvider).dismiss(),
-                      ),
-                  ],
-                ),
+                ],
               ),
             ),
           ),
+        ),
         Expanded(child: child ?? const SizedBox.shrink()),
       ],
     );

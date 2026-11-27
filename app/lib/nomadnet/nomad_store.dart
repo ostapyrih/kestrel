@@ -152,10 +152,7 @@ class NomadStore implements PageCacheStore {
   }
 
   /// Nodes, favourites first, most recently announced next.
-  Future<List<NomadNodeRow>> nodes({
-    String? search,
-    bool? favouritesOnly,
-  }) async {
+  Future<List<NomadNodeRow>> nodes({String? search, bool? favouritesOnly}) async {
     final where = <String>[];
     final args = <Object?>[];
     if (search != null && search.trim().isNotEmpty) {
@@ -290,11 +287,7 @@ class NomadStore implements PageCacheStore {
   }
 
   Future<List<NomadHistoryEntry>> history({int limit = 200}) async {
-    final r = await _db.query(
-      'nomad_history',
-      orderBy: 'id DESC',
-      limit: limit,
-    );
+    final r = await _db.query('nomad_history', orderBy: 'id DESC', limit: limit);
     return [
       for (final m in r)
         NomadHistoryEntry(

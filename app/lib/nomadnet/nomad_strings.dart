@@ -28,7 +28,8 @@ const _uk = <String, String>{
   'nn_sort_name': 'За назвою',
   'nn_sort_hops': 'За відстанню',
   'nn_favourites_only': 'Лише обрані',
-  'nn_nodes_empty': 'Вузлів ще не знайдено. Вони зʼявляться, коли мережа анонсує їх, або введіть адресу вище.',
+  'nn_nodes_empty':
+      'Вузлів ще не знайдено. Вони зʼявляться, коли мережа анонсує їх, або введіть адресу вище.',
   'nn_bookmarks_empty': 'Закладок немає',
   'nn_history_empty': 'Історія порожня',
   'nn_clear_history': 'Очистити історію',
@@ -54,12 +55,12 @@ const _uk = <String, String>{
   'nn_zoom_out': 'Зменшити текст',
   'nn_zoom_reset': 'Підібрати за шириною',
   'nn_identify': 'Представлятися цьому вузлу',
-  'nn_identify_warn': 'Вузол побачить ідентичність цього пристрою (B) і зможе пов\'язувати ваші візити. Вимкнено за замовчуванням.',
+  'nn_identify_warn':
+      'Вузол побачить ідентичність цього пристрою (B) і зможе пов\'язувати ваші візити. Вимкнено за замовчуванням.',
   'nn_identify_title': 'Представлятися вузлу?',
   'nn_enable': 'Увімкнути',
   'nn_empty_page': 'Оберіть вузол зі списку або введіть адресу',
-  'nn_malformed':
-      'Некоректна адреса. Формат: 32 hex-символи або <хеш>:/page/x.mu',
+  'nn_malformed': 'Некоректна адреса. Формат: 32 hex-символи або <хеш>:/page/x.mu',
   'nn_unsupported': 'Це посилання не підтримується: {link}',
   'nn_phase_path': 'Пошук шляху…',
   'nn_phase_connect': 'Зʼєднання…',
@@ -97,7 +98,8 @@ const _en = <String, String>{
   'nn_sort_name': 'By name',
   'nn_sort_hops': 'By distance',
   'nn_favourites_only': 'Favourites only',
-  'nn_nodes_empty': 'No nodes found yet. They appear when the network announces them, or enter an address above.',
+  'nn_nodes_empty':
+      'No nodes found yet. They appear when the network announces them, or enter an address above.',
   'nn_bookmarks_empty': 'No bookmarks',
   'nn_history_empty': 'History is empty',
   'nn_clear_history': 'Clear history',
@@ -123,7 +125,8 @@ const _en = <String, String>{
   'nn_zoom_out': 'Smaller text',
   'nn_zoom_reset': 'Fit to width',
   'nn_identify': 'Identify to this node',
-  'nn_identify_warn': 'The node will see this device\'s identity (B) and can link your visits. Off by default.',
+  'nn_identify_warn':
+      'The node will see this device\'s identity (B) and can link your visits. Off by default.',
   'nn_identify_title': 'Identify to the node?',
   'nn_enable': 'Enable',
   'nn_empty_page': 'Pick a node from the list or enter an address',
