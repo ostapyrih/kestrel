@@ -66,7 +66,10 @@ void main() {
     test('page background colour alone is not a line background', () {
       final doc = parseMicron('#!bg=222\nHello there, ordinary prose here.');
       final b = doc.blocks.firstWhere((b) => b.plainText.startsWith('Hello'));
-      expect(classifyMicronBlock(b, pageBg: doc.background).structural, isFalse);
+      expect(
+        classifyMicronBlock(b, pageBg: doc.background).structural,
+        isFalse,
+      );
     });
   });
 
@@ -102,11 +105,17 @@ void main() {
 
     test('bullet and indented prose', () {
       expect(info('* one item of a list').structural, isFalse);
-      expect(info('  Indented paragraph start, then ordinary words.').structural, isFalse);
+      expect(
+        info('  Indented paragraph start, then ordinary words.').structural,
+        isFalse,
+      );
     });
 
     test('a link in prose', () {
-      expect(info('See `[the guide`abc:/page/guide.mu] for more').structural, isFalse);
+      expect(
+        info('See `[the guide`abc:/page/guide.mu] for more').structural,
+        isFalse,
+      );
     });
 
     test('dividers and headings are not text rows', () {
@@ -128,19 +137,27 @@ void main() {
     });
 
     test('widest structural line ignores prose', () {
-      final doc = parseMicron(
-        '${'x ' * 100}\n${'=' * 30}\n`B00a${' ' * 44}`b',
-      );
+      final doc = parseMicron('${'x ' * 100}\n${'=' * 30}\n`B00a${' ' * 44}`b');
       expect(widestStructuralColumns(doc), 44);
     });
   });
 
   group('fitMicron', () {
     test('scales down to fit, never up', () {
-      final f = fitMicron(viewport: 400, columns: 60, baseFont: 14, padding: 24);
+      final f = fitMicron(
+        viewport: 400,
+        columns: 60,
+        baseFont: 14,
+        padding: 24,
+      );
       expect(f.fontSize, 10); // 10.44 floored to a whole device pixel
       expect(f.scrolls, isFalse);
-      final wide = fitMicron(viewport: 1200, columns: 60, baseFont: 14, padding: 24);
+      final wide = fitMicron(
+        viewport: 1200,
+        columns: 60,
+        baseFont: 14,
+        padding: 24,
+      );
       expect(wide.fontSize, 14);
       expect(wide.scrolls, isFalse);
     });

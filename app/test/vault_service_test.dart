@@ -908,7 +908,9 @@ void main() {
       server.blobs.add(await otherBlob(chain, 1, [rec('c1' * 16, 'one')]));
       server.blobs.add(await otherBlob(chain, 3, [rec('c3' * 16, 'three')]));
       server.blobs.add(
-        await otherBlob(chain, 1, [rec('d1' * 16, 'from third')], device: third),
+        await otherBlob(chain, 1, [
+          rec('d1' * 16, 'from third'),
+        ], device: third),
       );
       for (var i = 0; i < server.blobs.length; i++) {
         server.blobs[i]['vcursor'] = i + 1;
@@ -948,25 +950,30 @@ void main() {
       expect(snap.lastError, 'download: internal');
     });
 
-    test('"sync now" recovers from an error; diagnostics count blobs', () async {
-      final orig = api.handlers['/vault/list']!;
-      var broken = true;
-      api.handlers['/vault/list'] = (a) =>
-          broken ? throw BridgeError('internal', 'x') : orig(a);
-      await addOwn('b1' * 16, 'mine');
-      await connect();
-      expect((await svc.vault.snapshot()).state, VaultState.error);
-      broken = false;
-      server.blobs.add(await otherBlob(chainOf(svc.vault), 1, [rec('c1' * 16, 'x')]));
-      server.blobs.last['vcursor'] = server.blobs.length;
-      await svc.vault.syncNow();
-      await svc.vault.whenIdle();
-      final snap = await svc.vault.snapshot();
-      expect(snap.state, VaultState.idle);
-      expect(snap.lastError, isNull);
-      expect(snap.uploadedBlobs, 1);
-      expect(snap.downloaded, {other: 1});
-    });
+    test(
+      '"sync now" recovers from an error; diagnostics count blobs',
+      () async {
+        final orig = api.handlers['/vault/list']!;
+        var broken = true;
+        api.handlers['/vault/list'] = (a) =>
+            broken ? throw BridgeError('internal', 'x') : orig(a);
+        await addOwn('b1' * 16, 'mine');
+        await connect();
+        expect((await svc.vault.snapshot()).state, VaultState.error);
+        broken = false;
+        server.blobs.add(
+          await otherBlob(chainOf(svc.vault), 1, [rec('c1' * 16, 'x')]),
+        );
+        server.blobs.last['vcursor'] = server.blobs.length;
+        await svc.vault.syncNow();
+        await svc.vault.whenIdle();
+        final snap = await svc.vault.snapshot();
+        expect(snap.state, VaultState.idle);
+        expect(snap.lastError, isNull);
+        expect(snap.uploadedBlobs, 1);
+        expect(snap.downloaded, {other: 1});
+      },
+    );
 
     test('the history sync runs although MeshChatX is down', () async {
       api.handlers['/sync_chats'] = (a) =>
@@ -986,27 +993,33 @@ void main() {
       expect(server.blobs, hasLength(1));
     });
 
-    test('a malformed blob is skipped; later blobs and own uploads go on', () async {
-      await connect();
-      final chain = chainOf(svc.vault);
-      // valid crypto, but records whose fields have the wrong types
-      server.blobs.add(
-        await otherBlob(chain, 1, [
-          {'hash': 5, 'peer': [], 'text': null, 'ts': 'x'},
-          {...rec('c0' * 16, 'x'), 'peer_name': 7, 'title': 3},
-        ]),
-      );
-      server.blobs.add(await otherBlob(chain, 2, [rec('c2' * 16, 'good')]));
-      for (var i = 0; i < server.blobs.length; i++) {
-        server.blobs[i]['vcursor'] = i + 1;
-      }
-      await addOwn('b1' * 16, 'mine');
-      await svc.vault.onBlobPush();
-      final c = (await repo.remoteChats()).single;
-      expect((await repo.messages(c.id)).map((m) => m.text), contains('good'));
-      expect(server.putLog, isNotEmpty);
-      expect((await svc.vault.snapshot()).downloaded[other], 2);
-    });
+    test(
+      'a malformed blob is skipped; later blobs and own uploads go on',
+      () async {
+        await connect();
+        final chain = chainOf(svc.vault);
+        // valid crypto, but records whose fields have the wrong types
+        server.blobs.add(
+          await otherBlob(chain, 1, [
+            {'hash': 5, 'peer': [], 'text': null, 'ts': 'x'},
+            {...rec('c0' * 16, 'x'), 'peer_name': 7, 'title': 3},
+          ]),
+        );
+        server.blobs.add(await otherBlob(chain, 2, [rec('c2' * 16, 'good')]));
+        for (var i = 0; i < server.blobs.length; i++) {
+          server.blobs[i]['vcursor'] = i + 1;
+        }
+        await addOwn('b1' * 16, 'mine');
+        await svc.vault.onBlobPush();
+        final c = (await repo.remoteChats()).single;
+        expect(
+          (await repo.messages(c.id)).map((m) => m.text),
+          contains('good'),
+        );
+        expect(server.putLog, isNotEmpty);
+        expect((await svc.vault.snapshot()).downloaded[other], 2);
+      },
+    );
 
     test('an invite-adopted device (iPhone) downloads a blob pushed later '
         'and shows it as a remote chat', () async {
@@ -1022,7 +1035,9 @@ void main() {
       expect(chainOf(svc.vault).keys.toSet(), {1});
       // the other device uploads AFTER this one connected: only the
       // vault.blob push (topic `vault`) tells it
-      server.blobs.add(await otherBlob(gk, 1, [rec('c1' * 16, 'from windows')]));
+      server.blobs.add(
+        await otherBlob(gk, 1, [rec('c1' * 16, 'from windows')]),
+      );
       api.push('vault.blob', {'blob_id': 'x'});
       await svc.flushEvents();
       await svc.vault.whenIdle();

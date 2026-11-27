@@ -11,6 +11,7 @@ import '../storage/chat_target.dart';
 import '../storage/repo.dart';
 import 'bridge_widgets.dart';
 import 'delete_chat.dart';
+import 'propagation_widgets.dart';
 import 'vault_widgets.dart';
 import 'widgets.dart';
 
@@ -89,20 +90,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     super.dispose();
   }
 
-  Future<void> _send() async {
+  Future<void> _send({bool viaNode = false}) async {
     final t = _text.text.trim();
     if (t.isEmpty) return;
     final id = _chatId;
     if (id != null) {
       _text.clear();
-      await ref.read(nodeProvider).sendMessage(id, t);
+      await ref.read(nodeProvider).sendMessage(id, t, viaNode: viaNode);
       return;
     }
     final d = widget.draft!;
     _text.clear();
     _drafts.set(d.draftKey, '');
     // first message: creates the chat row, message and outbox row at once
-    final sent = await ref.read(nodeProvider).sendToPeer(d, t);
+    final sent = await ref
+        .read(nodeProvider)
+        .sendToPeer(d, t, viaNode: viaNode);
     if (mounted) setState(() => _chatId = sent.chatId);
   }
 
@@ -267,6 +270,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             onSubmitted: (_) => _send(),
                           ),
                         ),
+                        if (!isA &&
+                            ref.watch(propagationProvider).value?.active !=
+                                null)
+                          IconButton(
+                            key: const ValueKey('composer-send-node'),
+                            tooltip: pt(context, 'send_via_node'),
+                            icon: const Icon(Icons.cloud_upload_outlined),
+                            onPressed: () => _send(viaNode: true),
+                          ),
                         IconButton.filled(
                           key: const ValueKey('composer-send'),
                           tooltip: s.t('send'),
@@ -333,8 +345,7 @@ class MessageBubble extends StatelessWidget {
     final meta = [
       if (showAccount) s.account(m.senderIdentity, device: deviceName),
       if (showAccount) ?originLabel,
-      if (m.route != null)
-        m.route == 'via_bridge' ? s.t('route_via_bridge') : m.route!,
+      if (m.route != null) routeLabel(context, m.route!),
       s.t('transport_${m.transport}'),
     ].join(' · ');
     final waitingForBridge =
@@ -478,7 +489,10 @@ class MessageDetails extends ConsumerWidget {
                           shortHash(m.originDevice!)),
                 key: const ValueKey('detail-origin'),
               ),
-            row(s.t('route'), m.route ?? '-'),
+            row(
+              s.t('route'),
+              m.route == null ? '-' : routeLabel(context, m.route!),
+            ),
             row(s.t('transport'), s.t('transport_${m.transport}')),
             row(s.t('status'), s.t('status_${m.status}')),
             if (m.error != null) row(s.t('error'), m.error!),

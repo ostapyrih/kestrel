@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kestrel/node/identity_store.dart';
 import 'package:kestrel/node/node_service.dart';
@@ -234,6 +236,78 @@ void main() {
       await node.setServer('example.invalid', 1234);
       expect(await repo.getSetting(SettingKeys.serverHost), 'example.invalid');
       expect(await repo.getSetting(SettingKeys.serverPort), '1234');
+    },
+  );
+
+  test('mail via node: settings persist and apply to the router', () async {
+    // defaults: automatic node, fallback on, 15 minute interval
+    expect(node.router.pinnedNode, isNull);
+    expect(node.router.fallbackToPropagation, isTrue);
+    expect(node.propagation.intervalMinutes, 15);
+
+    final pin = 'ab' * 16;
+    await node.setPropagationNode(pin);
+    await node.setPropagationFallback(false);
+    await node.setPropagationInterval(30);
+    expect(toHex(node.router.pinnedNode!), pin);
+    expect(node.router.fallbackToPropagation, isFalse);
+    expect(node.propagation.intervalMinutes, 30);
+    expect(await repo.getSetting(SettingKeys.propagationNode), pin);
+    expect(await repo.getSetting(SettingKeys.propagationFallback), '0');
+    expect(await repo.getSetting(SettingKeys.propagationInterval), '30');
+
+    await node.setPropagationNode(null);
+    expect(node.router.pinnedNode, isNull);
+    expect(await repo.getSetting(SettingKeys.propagationNode), '');
+
+    // a restarted service picks the settings up again
+    await node.setPropagationNode(pin);
+    final again = NodeService(
+      repo: repo,
+      secrets: secrets,
+      interfaceFactory: (h, _) => MemoryInterface('again'),
+      transportConfig: _noStamps,
+      routerConfig: _fast,
+    );
+    await again.start();
+    addTearDown(again.stop);
+    expect(toHex(again.router.pinnedNode!), pin);
+    expect(again.router.fallbackToPropagation, isFalse);
+    expect(again.propagation.intervalMinutes, 30);
+  });
+
+  test('send via node stores the message with route propagated', () async {
+    await exchangeAnnounces();
+    final target = await node.openChat(toHex(peer.address), name: 'Peer');
+    final sent = await node.sendToPeer(target, 'later', viaNode: true);
+    final row = (await repo.messages(sent.chatId)).single;
+    expect(row.route, 'propagated');
+    expect(row.text, 'later');
+  });
+
+  test(
+    'incoming messages are persisted before the router acknowledges them',
+    () async {
+      await exchangeAnnounces();
+      expect(node.router.inboundPersister, isNotNull);
+      final r = LxmReceived(
+        message: LXMessage(
+          destinationHash: node.router.address,
+          sourceHash: peer.address,
+          content: 'via node',
+          timestamp: 1700000000,
+        )..hash = Uint8List.fromList(List.filled(32, 7)),
+        method: LxmfMethod.propagated,
+        receivedAt: DateTime.now(),
+      );
+      await node.router.inboundPersister!(r);
+      await node.router.inboundPersister!(r); // same hash: stored once
+      final chats = await repo.chats();
+      expect(chats, hasLength(1));
+      final msgs = await repo.messages(chats.single.id);
+      expect(msgs, hasLength(1));
+      expect(msgs.single.route, 'propagated');
+      expect(msgs.single.text, 'via node');
     },
   );
 
