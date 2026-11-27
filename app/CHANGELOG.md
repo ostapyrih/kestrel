@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/ostapyrih/kestrel/compare/app-v0.8.1...app-v0.8.2) (2026-11-27)
+
+
+### Bug Fixes
+
+* **app:** no empty chats; a chat is created with its first message ([#32](https://github.com/ostapyrih/kestrel/issues/32)) ([4a71966](https://github.com/ostapyrih/kestrel/commit/4a719666bc1587de8ec6cf797f4c1ea0d2d259a1))
+
 ## [0.8.1](https://github.com/ostapyrih/kestrel/compare/app-v0.8.0...app-v0.8.1) (2026-11-27)
 
 
