@@ -19,6 +19,14 @@ import 'desktop/desktop_settings.dart';
 import 'desktop/desktop_shell.dart';
 import 'desktop/desktop_strings.dart';
 import 'desktop/native_desktop.dart';
+import 'notifications/background_entry.dart';
+import 'notifications/background_service.dart';
+import 'notifications/local_notification_sink.dart';
+import 'notifications/notification_host.dart';
+import 'notifications/notification_providers.dart';
+import 'notifications/notification_runtime.dart';
+import 'notifications/notification_strings.dart';
+import 'screens/chat_screen.dart';
 import 'nomadnet/nomad_providers.dart';
 import 'nomadnet/nomad_service.dart';
 import 'nomadnet/nomad_store.dart';
@@ -67,8 +75,10 @@ Future<void> main() async {
   // updater, setting off, Cmd+Q) goes through shutdown() and closes the
   // database cleanly.
   Future<void>? shuttingDown;
+  late final BackgroundModeController background;
   Future<void> shutdown() => shuttingDown ??= () async {
     for (final step in <Future<void> Function()>[
+      () => background.shutdown(),
       bridge.vault.flushHistory,
       bridge.stop,
       node.stop,
@@ -81,6 +91,29 @@ Future<void> main() async {
       }
     }
   }();
+  // Notifications: local ones on every platform (no APNs, no FCM). A tap
+  // opens its chat; a tap that launched the app is handled once the first
+  // frame is up.
+  void Function(int chatId)? openChat;
+  final sink = LocalNotificationSink();
+  final launchChat = await sink.init(onTap: (id) => openChat?.call(id));
+  final focus = ChatFocus()..attach();
+  final notifications = NotificationRuntime(
+    repo: repo,
+    sink: sink,
+    focus: focus,
+    lang: deviceLang,
+    markRead: (id) async {
+      await bridge.markRead(id).catchError((Object _) {});
+      await repo.markRead(id);
+    },
+  )..start();
+  background = BackgroundModeController(
+    service: platformBackgroundService(),
+    isOn: notifications.store.backgroundOn,
+    title: () => notifText(deviceLang(), 'n_fg_title'),
+    text: () => notifText(deviceLang(), 'n_fg_text'),
+  );
   final shell = DesktopShell(
     desktop: isDesktop,
     window: NativeWindowHost(),
@@ -112,10 +145,25 @@ Future<void> main() async {
       debugPrint('node start failed: $e');
     }),
   );
+  // Android: the foreground service keeps all of the above alive in the
+  // background; the toggle in Settings starts and stops it.
+  unawaited(background.apply());
+  unawaited(
+    repo
+        .watch(notifications.store.backgroundOn)
+        .forEach((_) => unawaited(background.apply())),
+  );
+  // iOS: periodic background checks, decided by the system
+  if (Platform.isIOS) {
+    unawaited(scheduleIosInboxCheck());
+  }
   unawaited(nomad.start());
   // browsing history is uploaded in batches; send what is left on the way out
   AppLifecycleListener(
-    onHide: () => unawaited(bridge.vault.flushHistory()),
+    onHide: () {
+      unawaited(bridge.vault.flushHistory());
+      if (Platform.isIOS) unawaited(scheduleIosInboxCheck());
+    },
     onPause: () => unawaited(bridge.vault.flushHistory()),
   );
   if (isDesktop) {
@@ -148,24 +196,44 @@ Future<void> main() async {
       }),
     );
   }
-  runApp(
-    ProviderScope(
-      overrides: [
-        repoProvider.overrideWithValue(repo),
-        nodeProvider.overrideWithValue(node),
-        bridgeProvider.overrideWithValue(bridge),
-        nomadServiceProvider.overrideWithValue(nomad),
-        updateServiceProvider.overrideWithValue(updates),
-      ],
-      child: const KestrelApp(),
-    ),
+  final container = ProviderContainer(
+    overrides: [
+      repoProvider.overrideWithValue(repo),
+      nodeProvider.overrideWithValue(node),
+      bridgeProvider.overrideWithValue(bridge),
+      nomadServiceProvider.overrideWithValue(nomad),
+      updateServiceProvider.overrideWithValue(updates),
+      chatFocusProvider.overrideWithValue(focus),
+      notificationSinkProvider.overrideWithValue(sink),
+      backgroundServiceProvider.overrideWithValue(background.service),
+      backgroundModeProvider.overrideWithValue(background),
+    ],
   );
+  openChat = (id) {
+    if (isDesktop) unawaited(shell.showWindow());
+    container.read(selectedChatProvider.notifier).select(id);
+    final nav = appNavigatorKey.currentState;
+    final ctx = appNavigatorKey.currentContext;
+    if (nav == null || ctx == null) return;
+    if (MediaQuery.sizeOf(ctx).width >= wideLayoutBreakpoint) return;
+    nav.popUntil((r) => r.isFirst);
+    nav.push(MaterialPageRoute<void>(builder: (_) => ChatScreen(chatId: id)));
+  };
+  runApp(
+    UncontrolledProviderScope(container: container, child: const KestrelApp()),
+  );
+  if (launchChat != null) {
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => openChat?.call(launchChat),
+    );
+  }
 }
+
+/// The root navigator (notification taps navigate through it).
+final appNavigatorKey = GlobalKey<NavigatorState>();
 
 class KestrelApp extends StatelessWidget {
   const KestrelApp({super.key, this.home});
-
-  static final _navigatorKey = GlobalKey<NavigatorState>();
 
   /// Overridable for tests and screenshots.
   final Widget? home;
@@ -175,9 +243,11 @@ class KestrelApp extends StatelessWidget {
     return MaterialApp(
       title: 'Kestrel',
       debugShowCheckedModeBanner: false,
-      navigatorKey: _navigatorKey,
-      builder: (context, child) =>
-          UpdateHost(navigatorKey: _navigatorKey, child: child),
+      navigatorKey: appNavigatorKey,
+      builder: (context, child) => NotificationHost(
+        navigatorKey: appNavigatorKey,
+        child: UpdateHost(navigatorKey: appNavigatorKey, child: child),
+      ),
       localizationsDelegates: Strings.delegates,
       supportedLocales: Strings.supportedLocales,
       localeResolutionCallback: Strings.resolve,

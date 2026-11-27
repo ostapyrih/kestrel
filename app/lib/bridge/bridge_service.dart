@@ -681,9 +681,10 @@ class BridgeService {
           (d['peer'] as String?) ?? '',
           name: m.name,
         );
+        // unread first: the notification for the message checks it
+        if (isNew && m.incoming) await store.setChatUnread(chatId, true);
         await store.upsertMessage(chatId, m);
         await store.dropIfEmpty(chatId);
-        if (isNew && m.incoming) await store.setChatUnread(chatId, true);
       case 'lxmf.state':
         final known = await store.applyState(
           hash: d['hash'] as String?,
