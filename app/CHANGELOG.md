@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.1](https://github.com/ostapyrih/kestrel/compare/app-v0.8.0...app-v0.8.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* **app:** keep Micron fixed-width layout on narrow screens ([#31](https://github.com/ostapyrih/kestrel/issues/31)) ([216a649](https://github.com/ostapyrih/kestrel/commit/216a649cb0ac93aaee5b6c755dd50d59366e5ff9))
+* **app:** vault push topic, A/B choice for new chats, robust A delete, deletion catch-up, Windows updater ([#29](https://github.com/ostapyrih/kestrel/issues/29)) ([d438fe9](https://github.com/ostapyrih/kestrel/commit/d438fe9e2e158610fe53e338bf5fa77333830dd5))
+
 ## [0.8.0](https://github.com/ostapyrih/kestrel/compare/app-v0.7.0...app-v0.8.0) (2026-11-27)
 
 
