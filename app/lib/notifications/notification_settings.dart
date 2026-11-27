@@ -16,7 +16,7 @@ class NotificationSettingsSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final prefs = ref.watch(notificationPrefsProvider).value;
-    final store = ref.watch(notificationPrefsStoreProvider);
+    NotificationPrefsStore store() => ref.read(notificationPrefsStoreProvider);
     final on = prefs?.enabled ?? true;
     final text = Theme.of(context).textTheme;
     return Column(
@@ -30,7 +30,7 @@ class NotificationSettingsSection extends ConsumerWidget {
           title: Text(nf(context, 'n_enable')),
           value: on,
           onChanged: (v) async {
-            await store.setFlag(NotifKeys.enabled, v);
+            await store().setFlag(NotifKeys.enabled, v);
             if (v) {
               await ref.read(notificationSinkProvider)?.requestPermission();
             }
@@ -42,14 +42,14 @@ class NotificationSettingsSection extends ConsumerWidget {
           title: Text(nf(context, 'n_content')),
           subtitle: Text(nf(context, 'n_content_hint')),
           value: prefs?.showContent ?? true,
-          onChanged: on ? (v) => store.setFlag(NotifKeys.content, v) : null,
+          onChanged: on ? (v) => store().setFlag(NotifKeys.content, v) : null,
         ),
         SwitchListTile(
           key: const ValueKey('notif-sound'),
           contentPadding: EdgeInsets.zero,
           title: Text(nf(context, 'n_sound')),
           value: prefs?.sound ?? true,
-          onChanged: on ? (v) => store.setFlag(NotifKeys.sound, v) : null,
+          onChanged: on ? (v) => store().setFlag(NotifKeys.sound, v) : null,
         ),
         if (Platform.isAndroid) const _AndroidBackground(),
         if (Platform.isIOS)

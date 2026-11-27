@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kestrel/notifications/background_task.dart';
@@ -47,8 +48,11 @@ void main() {
   late FakeSink sink;
 
   setUp(() async {
+    // a file per test: the in-memory database is shared between opens
+    final dir = Directory.systemTemp.createTempSync('kestrel_bg_');
+    addTearDown(() => dir.deleteSync(recursive: true));
     final adb = await AppDatabase.open(
-      inMemoryDatabasePath,
+      '${dir.path}/t.db',
       factory: databaseFactoryFfi,
     );
     repo = Repo(adb);

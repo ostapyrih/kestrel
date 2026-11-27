@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers.dart';
+import '../storage/repo.dart';
 import 'background_service.dart';
 import 'local_notification_sink.dart';
 import 'notification_models.dart';
@@ -30,16 +31,29 @@ final notificationPrefsStoreProvider = Provider<NotificationPrefsStore>(
   (ref) => NotificationPrefsStore(ref.watch(repoProvider)),
 );
 
-/// The notification settings, live.
-final notificationPrefsProvider = StreamProvider<NotificationPrefs>((ref) {
-  final repo = ref.watch(repoProvider);
-  final store = ref.watch(notificationPrefsStoreProvider);
-  return repo.watch(store.load);
+/// The notification settings, live (defaults while there is no database,
+/// e.g. in widget tests).
+final notificationPrefsProvider = StreamProvider<NotificationPrefs>((
+  ref,
+) async* {
+  final Repo repo;
+  try {
+    repo = ref.watch(repoProvider);
+  } on Object {
+    yield const NotificationPrefs();
+    return;
+  }
+  yield* repo.watch(NotificationPrefsStore(repo).load);
 });
 
 /// "Run in background" (default on).
-final runInBackgroundProvider = StreamProvider<bool>((ref) {
-  final repo = ref.watch(repoProvider);
-  final store = ref.watch(notificationPrefsStoreProvider);
-  return repo.watch(store.backgroundOn);
+final runInBackgroundProvider = StreamProvider<bool>((ref) async* {
+  final Repo repo;
+  try {
+    repo = ref.watch(repoProvider);
+  } on Object {
+    yield true;
+    return;
+  }
+  yield* repo.watch(NotificationPrefsStore(repo).backgroundOn);
 });
