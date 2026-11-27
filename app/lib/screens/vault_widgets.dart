@@ -96,6 +96,14 @@ class VaultSettingsSection extends ConsumerWidget {
           key: const ValueKey('vault-diag-uploaded'),
           style: text.bodySmall,
         ),
+        Text(
+          s.t('vault_diag_browser', {
+            'sent': '${st.browserSent}',
+            'received': '${st.browserReceived}',
+          }),
+          key: const ValueKey('vault-diag-browser'),
+          style: text.bodySmall,
+        ),
         if (st.downloaded.isEmpty)
           Text(
             s.t('vault_diag_none'),

@@ -9,6 +9,7 @@ import '../storage/database.dart';
 import '../storage/repo.dart';
 import 'bridge_connection.dart';
 import 'codec.dart';
+import '../nomadnet/browser_sync.dart';
 import 'vault_store.dart';
 
 /// This device has no vault key (e.g. it was paired by an older app), so it
@@ -43,7 +44,14 @@ class VaultStatus {
     this.uploadedBlobs = 0,
     this.downloaded = const {},
     this.lastError,
+    this.browserSent = 0,
+    this.browserReceived = 0,
   });
+
+  /// Browser data records (bookmarks, favourites, settings, history visits)
+  /// uploaded by this device / merged from other devices.
+  final int browserSent;
+  final int browserReceived;
 
   final VaultState state;
   final DateTime? lastSync;
@@ -148,7 +156,10 @@ class VaultService {
     this.gapRetry = const Duration(seconds: 30),
     this.pollEvery = const Duration(minutes: 5),
     this.errorRetry = const Duration(seconds: 60),
-  }) : store = VaultStore(repo);
+    Duration historyBatch = const Duration(minutes: 3),
+  }) : store = VaultStore(repo) {
+    store.historyBatchMs = historyBatch.inMilliseconds;
+  }
 
   final Repo repo;
   final VaultStore store;
@@ -180,6 +191,7 @@ class VaultService {
   Timer? _debounce;
   Timer? _retry;
   Timer? _poll;
+  Timer? _historyTimer;
   String? _lastError;
   StreamSubscription<void>? _dbSub;
   final List<DateTime> _putTimes = [];
@@ -216,6 +228,7 @@ class VaultService {
     _debounce?.cancel();
     _retry?.cancel();
     _poll?.cancel();
+    _historyTimer?.cancel();
     await _dbSub?.cancel();
     _dbSub = null;
     _api = null;
@@ -263,6 +276,30 @@ class VaultService {
   /// `vault.blob` push: somebody uploaded.
   Future<void> onBlobPush() => _schedule(immediate: true);
 
+  /// Upload the browsing history now (the app goes to the background)
+  /// instead of waiting for the batch interval.
+  Future<void> flushHistory() async {
+    store.flushHistory = true;
+    await _schedule(immediate: true);
+  }
+
+  /// A timer for history visits that are waiting for their batch to be due.
+  Future<void> _armHistoryTimer() async {
+    _historyTimer?.cancel();
+    try {
+      final oldest = await store.browser.oldestUnsyncedHistory();
+      if (oldest == null || _api == null) return;
+      final due = oldest + store.historyBatchMs;
+      final wait = due - DateTime.now().millisecondsSinceEpoch;
+      _historyTimer = Timer(
+        Duration(milliseconds: (wait < 0 ? 0 : wait) + 250),
+        () => unawaited(_schedule()),
+      );
+    } on Object {
+      // database closed
+    }
+  }
+
   /// Keys may have been rotated (`device_revoked` push, epoch change).
   Future<void> onKeysMayHaveChanged() => _schedule(immediate: true);
 
@@ -273,6 +310,8 @@ class VaultService {
       try {
         if (await store.hasUploadWork()) {
           unawaited(_schedule());
+        } else {
+          unawaited(_armHistoryTimer());
         }
       } on Object {
         // database closed
@@ -339,6 +378,9 @@ class VaultService {
         _setState(VaultState.needsKey);
         return;
       }
+      // before anything is downloaded: an existing local item must have its
+      // record, or an older remote tombstone could delete it
+      await store.browser.backfillOnce(repo.getSetting, repo.setSetting);
       try {
         await _download(api, h);
       } on BridgeError catch (e) {
@@ -366,6 +408,8 @@ class VaultService {
         }
       }
       if (_lastError == null) await store.touchLastSync(DateTime.now());
+      store.flushHistory = false;
+      await _armHistoryTimer();
     } on BridgeTransportError {
       _setState(VaultState.off);
     } on BridgeError catch (e) {
@@ -583,6 +627,8 @@ class VaultService {
     if (gk == null) return null;
     final del = await store.nextDelete();
     if (del != null) return _buildDelete(gk, del);
+    final browser = await _buildBrowser(h, gk);
+    if (browser != null) return browser;
     final cands = await store.candidates(300);
     if (cands.isEmpty) return null;
     final maxBlob = h.limit('vault_max_blob_bytes', 131072) ~/ _blobShrink;
@@ -649,6 +695,52 @@ class VaultService {
 
   /// The blob of a deleted B chat (kind `delete_chat`, spec 9.6): the other
   /// devices remove their read-only copy of the messages up to `before_ts`.
+  /// One `browser` blob (docs/bridge-protocol.md 9.5): as many waiting
+  /// records as fit under the blob size limit.
+  Future<PendingBlob?> _buildBrowser(HelloResult h, Uint8List gk) async {
+    final waiting = await store.browserOps(400);
+    if (waiting.isEmpty) return null;
+    final maxBlob = h.limit('vault_max_blob_bytes', 131072) ~/ _blobShrink;
+    final budget = maxBlob - 512;
+    if (budget < 256) return null;
+    final used = <PendingOp>[];
+    var size = 0;
+    for (final w in waiting) {
+      final n = packb(w.op).length + 4;
+      if (used.isNotEmpty && size + n > budget) break;
+      used.add(w);
+      size += n;
+    }
+    final seq = (await store.lastSeq()) + 1;
+    final blobId = toHex(secureRandomBytes(16));
+    Uint8List ct;
+    while (true) {
+      ct = await VaultCrypto.encryptBlob(
+        groupKey: gk,
+        blobId: blobId,
+        deviceId: ownDeviceId(),
+        seq: seq,
+        keyEpoch: _epoch,
+        kind: browserBlobKind,
+        ts: DateTime.now().millisecondsSinceEpoch / 1000,
+        data: {
+          'ops': [for (final u in used) u.op],
+        },
+      );
+      if (ct.length <= maxBlob || used.length <= 1) break;
+      used.removeRange(used.length ~/ 2, used.length);
+    }
+    final p = PendingBlob(
+      blobId: blobId,
+      seq: seq,
+      keyEpoch: _epoch,
+      ciphertext: ct,
+      marks: [for (final u in used) u.mark],
+    );
+    await store.savePending(p);
+    return p;
+  }
+
   Future<PendingBlob> _buildDelete(
     Uint8List gk,
     ({int id, String peer, String? owner, int beforeTsMs}) del,
@@ -821,7 +913,9 @@ class VaultService {
           await store.setSeen(m.deviceId, m.seq);
         }
         cursor = chunk.last.vcursor;
-        await store.saveCursor(holdAt == null || cursor < holdAt ? cursor : holdAt);
+        await store.saveCursor(
+          holdAt == null || cursor < holdAt ? cursor : holdAt,
+        );
       }
       if (r['more'] != true) break;
     }
@@ -846,6 +940,9 @@ class VaultService {
         case 'messages':
           final records = data is Map ? data['records'] : null;
           if (records is List) await store.applyRecords(m.deviceId, records);
+        case browserBlobKind:
+          final ops = data is Map ? data['ops'] : null;
+          if (ops is List) await store.applyBrowser(ops);
         case 'delete_chat':
           // the uploading device deleted that chat: drop its read-only copy
           final peer = data is Map ? data['peer'] : null;
@@ -925,6 +1022,8 @@ class VaultService {
     uploadedBlobs: await store.lastSeq(),
     downloaded: await store.seenAll(),
     lastError: _lastError ?? await store.lastError(),
+    browserSent: (await store.browserCounts()).$1,
+    browserReceived: (await store.browserCounts()).$2,
   );
 
   /// Refreshes the stored usage numbers from `/hello`.

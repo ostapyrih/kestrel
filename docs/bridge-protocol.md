@@ -381,7 +381,8 @@ tombstones are lost, but the deleted conversations are not in MeshChatX either.
 `/sync_chats` cursor and its vault cursor past those events, so after it is updated they never arrive again. Clients therefore keep a local
 `sync_semantics_version` (Kestrel: `kSyncSemanticsVersion`). When the app starts with a higher value than the stored one, the next connection does a one-time
 full catch-up: bridge cursor to 0 (every tombstone is returned in `deleted` again) and a vault replay from cursor 0 (known records are deduplicated by LXMF hash,
-`delete_chat` blobs applied). Bump the constant whenever a change to sync semantics would make stored cursors unsafe. Tombstones MUST be stored durably
+`delete_chat` blobs applied). Version 2 (kind `browser`, 9.5): an older app skips `browser` blobs yet advances its vault cursor, so it would never see another device's
+bookmarks after it is updated; the bump replays the vault once (browser ops are idempotent). Bump the constant whenever a change to sync semantics would make stored cursors unsafe. Tombstones MUST be stored durably
 (also for a chat not present yet) and every later insert of a message with `ts <= before_ts` for that peer (account A: `/get_messages`, snapshots, pushes; vault: records of the
 owning device) MUST be dropped. They survive turning the bridge mode off. A manual "Full resync" runs the same catch-up.
 
@@ -527,6 +528,32 @@ uploaded after the deletion), so nothing is resurrected. A tombstone for an unkn
 durably and uploaded after every earlier blob (readers apply blobs of one device in `seq` order). Cases: (1) a device deletes its own chat: no `owner_device`; (2) a device
 deletes the read-only chat of another device Y: `owner_device = Y`, `before_ts` = newest message of that chat it knows; Y and all other devices delete too. The vault is
 append-only, so earlier `messages` blobs stay as ciphertext; readers that do not know the kind ignore the blob. Deleting a read-only chat needs an active vault (a group key).
+
+Kind `browser` (NomadNet browser data, phase N2): `data = {"ops": [op, ...]}`, ops of the uploading device, applied by every other device. Synced: bookmarks (URL, title),
+favourite nodes, history, per-node settings. Not synced: page cache and the node list learned from announces (every device hears its own announces). All timestamps are
+integer Unix **milliseconds**. An op is a map with `op` and `ts` plus:
+
+| `op` | fields | merge key |
+| --- | --- | --- |
+| `bookmark.put` | `url`, `title`, `created` | `b:<url>` |
+| `bookmark.del` | `url` | `b:<url>` |
+| `fav.put` | `node` (hex hash), `name` | `f:<node>` |
+| `fav.del` | `node` | `f:<node>` |
+| `node_settings.put` | `node`, `key` (`font_scale` number, `wrap_all` bool, `identify` bool), `value` | `s:<node>:<key>` |
+| `history.add` | `url`, `title` (`ts` = visit time) | none (identity `(url, ts)`) |
+| `history.clear` | | `h:clear` |
+
+Merge rules (order independent, repeatable): per merge key the record with the larger `ts` wins; at equal `ts` a `*.del` wins over a put, otherwise the larger canonical
+JSON (keys sorted) wins. A `*.del` is a durable tombstone (stored, never dropped), so it beats older puts that arrive later, and a newer put restores the item. A device
+whose local edit would not be newer than the stored record uses `ts = stored + 1`. Deleting (forgetting) a node sends `fav.del` and default setting puts. `history.add` is
+added if `(url, ts)` is unknown; `history.clear` is a watermark: visits with `ts <=` it are removed and later arrivals with such a `ts` are ignored; larger clear wins. Every
+device keeps only the newest 500 history entries (by `ts`), so older ones are pruned everywhere. Malformed ops and unknown `op` names are skipped, never fatal.
+
+Upload: records are packed into blobs (as many ops as fit under `vault_max_blob_bytes`); history visits are batched (uploaded when the oldest waiting visit is about three
+minutes old, or when the app goes to the background) so browsing does not cause an upload per page. A device uploads its existing bookmarks, favourites, non-default settings
+and history once when it first runs a version with this kind (backfill, with the oldest plausible timestamps so any real edit wins), and everything again when the bridge
+database is recreated. The record format is transport agnostic: phase S carries the same ops over direct LXMF between the devices. Without the bridge the browser data
+stays local; records merged from other devices stay too (they are the user's own data, unlike MeshChatX chats, which are a cache and are dropped).
 
 ## 10. Rate limits (per device, one-minute sliding window)
 | bucket | config key | default | paths |

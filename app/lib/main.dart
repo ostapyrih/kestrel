@@ -66,6 +66,11 @@ Future<void> main() async {
     }),
   );
   unawaited(nomad.start());
+  // browsing history is uploaded in batches; send what is left on the way out
+  AppLifecycleListener(
+    onHide: () => unawaited(bridge.vault.flushHistory()),
+    onPause: () => unawaited(bridge.vault.flushHistory()),
+  );
   runApp(
     ProviderScope(
       overrides: [

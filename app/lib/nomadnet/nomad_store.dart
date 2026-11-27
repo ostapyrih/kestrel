@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:sqflite/sqflite.dart';
 
 import '../storage/database.dart';
+import 'browser_sync.dart';
 import 'page_cache.dart';
 
 class NomadNodeRow {
@@ -152,7 +153,10 @@ class NomadStore implements PageCacheStore {
   }
 
   /// Nodes, favourites first, most recently announced next.
-  Future<List<NomadNodeRow>> nodes({String? search, bool? favouritesOnly}) async {
+  Future<List<NomadNodeRow>> nodes({
+    String? search,
+    bool? favouritesOnly,
+  }) async {
     final where = <String>[];
     final args = <Object?>[];
     if (search != null && search.trim().isNotEmpty) {
@@ -174,23 +178,44 @@ class NomadStore implements PageCacheStore {
 
   Future<void> setFavourite(String hash, bool v) async {
     await ensureNode(hash);
-    await _db.update(
-      'nomad_nodes',
-      {'favourite': v ? 1 : 0},
-      where: 'hash = ?',
-      whereArgs: [hash],
-    );
+    await _db.transaction((t) async {
+      final n = await t.query(
+        'nomad_nodes',
+        where: 'hash = ?',
+        whereArgs: [hash],
+      );
+      await t.update(
+        'nomad_nodes',
+        {'favourite': v ? 1 : 0},
+        where: 'hash = ?',
+        whereArgs: [hash],
+      );
+      final name = n.isEmpty ? '' : n.first['name']! as String;
+      await BrowserSyncStore.mark(
+        t,
+        'f:$hash',
+        (ts) =>
+            v ? BrowserOps.favPut(hash, name, ts) : BrowserOps.favDel(hash, ts),
+      );
+    });
     adb.notify();
   }
 
   Future<void> setIdentify(String hash, bool v) async {
     await ensureNode(hash);
-    await _db.update(
-      'nomad_nodes',
-      {'identify': v ? 1 : 0},
-      where: 'hash = ?',
-      whereArgs: [hash],
-    );
+    await _db.transaction((t) async {
+      await t.update(
+        'nomad_nodes',
+        {'identify': v ? 1 : 0},
+        where: 'hash = ?',
+        whereArgs: [hash],
+      );
+      await BrowserSyncStore.mark(
+        t,
+        's:$hash:identify',
+        (ts) => BrowserOps.settingPut(hash, 'identify', v, ts),
+      );
+    });
     adb.notify();
   }
 
@@ -201,36 +226,109 @@ class NomadStore implements PageCacheStore {
     bool? wrapAll,
   }) async {
     await ensureNode(hash);
-    await _db.update(
-      'nomad_nodes',
-      {
-        'font_scale': ?fontScale,
-        if (wrapAll != null) 'wrap_all': wrapAll ? 1 : 0,
-      },
-      where: 'hash = ?',
-      whereArgs: [hash],
-    );
+    await _db.transaction((t) async {
+      final cur = (await t.query(
+        'nomad_nodes',
+        where: 'hash = ?',
+        whereArgs: [hash],
+      )).first;
+      await t.update(
+        'nomad_nodes',
+        {
+          'font_scale': ?fontScale,
+          if (wrapAll != null) 'wrap_all': wrapAll ? 1 : 0,
+        },
+        where: 'hash = ?',
+        whereArgs: [hash],
+      );
+      if (fontScale != null &&
+          fontScale != (cur['font_scale'] as num?)?.toDouble()) {
+        await BrowserSyncStore.mark(
+          t,
+          's:$hash:font_scale',
+          (ts) => BrowserOps.settingPut(hash, 'font_scale', fontScale, ts),
+        );
+      }
+      if (wrapAll != null && wrapAll != ((cur['wrap_all'] as int?) == 1)) {
+        await BrowserSyncStore.mark(
+          t,
+          's:$hash:wrap_all',
+          (ts) => BrowserOps.settingPut(hash, 'wrap_all', wrapAll, ts),
+        );
+      }
+    });
     adb.notify();
   }
 
+  /// Removes the node row. Its favourite flag and settings go back to the
+  /// defaults everywhere (synced as a `fav.del` and default setting puts).
   Future<void> forgetNode(String hash) async {
-    await _db.delete('nomad_nodes', where: 'hash = ?', whereArgs: [hash]);
+    await _db.transaction((t) async {
+      final n = await t.query(
+        'nomad_nodes',
+        where: 'hash = ?',
+        whereArgs: [hash],
+      );
+      if (n.isNotEmpty) {
+        final r = n.first;
+        if (r['favourite'] == 1) {
+          await BrowserSyncStore.mark(
+            t,
+            'f:$hash',
+            (ts) => BrowserOps.favDel(hash, ts),
+          );
+        }
+        if (((r['font_scale'] as num?)?.toDouble() ?? 1.0) != 1.0) {
+          await BrowserSyncStore.mark(
+            t,
+            's:$hash:font_scale',
+            (ts) => BrowserOps.settingPut(hash, 'font_scale', 1.0, ts),
+          );
+        }
+        for (final k in ['wrap_all', 'identify']) {
+          if (r[k] == 1) {
+            await BrowserSyncStore.mark(
+              t,
+              's:$hash:$k',
+              (ts) => BrowserOps.settingPut(hash, k, false, ts),
+            );
+          }
+        }
+      }
+      await t.delete('nomad_nodes', where: 'hash = ?', whereArgs: [hash]);
+    });
     adb.notify();
   }
 
   // ---------------------------------------------------------------- bookmarks
 
   Future<void> addBookmark(String url, String title, {int? nowMs}) async {
-    await _db.insert('nomad_bookmarks', {
-      'url': url,
-      'title': title,
-      'created': nowMs ?? DateTime.now().millisecondsSinceEpoch,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    final created = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+    await _db.transaction((t) async {
+      await t.insert('nomad_bookmarks', {
+        'url': url,
+        'title': title,
+        'created': created,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      await BrowserSyncStore.mark(
+        t,
+        'b:$url',
+        (ts) => BrowserOps.bookmarkPut(url, title, created, ts),
+        nowMs: nowMs,
+      );
+    });
     adb.notify();
   }
 
   Future<void> removeBookmark(String url) async {
-    await _db.delete('nomad_bookmarks', where: 'url = ?', whereArgs: [url]);
+    await _db.transaction((t) async {
+      await t.delete('nomad_bookmarks', where: 'url = ?', whereArgs: [url]);
+      await BrowserSyncStore.mark(
+        t,
+        'b:$url',
+        (ts) => BrowserOps.bookmarkDel(url, ts),
+      );
+    });
     adb.notify();
   }
 
@@ -258,16 +356,21 @@ class NomadStore implements PageCacheStore {
 
   // ------------------------------------------------------------------ history
 
-  static const historyLimit = 500;
+  static const historyLimit = browserHistoryLimit;
 
-  /// Records a visit; consecutive visits of the same URL collapse.
+  /// Records a visit; consecutive visits of the same URL collapse. The visit
+  /// is uploaded later, in a batch (see `VaultService`).
   Future<void> addHistory(String url, String title, {int? nowMs}) async {
     final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
-    final last = await _db.query('nomad_history', orderBy: 'id DESC', limit: 1);
+    final last = await _db.query(
+      'nomad_history',
+      orderBy: 'ts DESC, id DESC',
+      limit: 1,
+    );
     if (last.isNotEmpty && last.first['url'] == url) {
       await _db.update(
         'nomad_history',
-        {'ts': now, if (title.isNotEmpty) 'title': title},
+        {'ts': now, if (title.isNotEmpty) 'title': title, 'synced': 0},
         where: 'id = ?',
         whereArgs: [last.first['id']],
       );
@@ -277,17 +380,17 @@ class NomadStore implements PageCacheStore {
         'title': title,
         'ts': now,
       });
-      await _db.rawDelete(
-        'DELETE FROM nomad_history WHERE id <= '
-        '(SELECT id FROM nomad_history ORDER BY id DESC LIMIT 1 OFFSET ?)',
-        [historyLimit],
-      );
+      await BrowserSyncStore.prune(_db);
     }
     adb.notify();
   }
 
   Future<List<NomadHistoryEntry>> history({int limit = 200}) async {
-    final r = await _db.query('nomad_history', orderBy: 'id DESC', limit: limit);
+    final r = await _db.query(
+      'nomad_history',
+      orderBy: 'ts DESC, id DESC',
+      limit: limit,
+    );
     return [
       for (final m in r)
         NomadHistoryEntry(
@@ -300,7 +403,10 @@ class NomadStore implements PageCacheStore {
   }
 
   Future<void> clearHistory() async {
-    await _db.delete('nomad_history');
+    await _db.transaction((t) async {
+      await t.delete('nomad_history');
+      await BrowserSyncStore.markHistoryCleared(t);
+    });
     adb.notify();
   }
 
