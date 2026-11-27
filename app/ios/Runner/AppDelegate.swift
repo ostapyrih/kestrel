@@ -11,15 +11,18 @@ import workmanager_apple
   ) -> Bool {
     // local notifications are shown (and tapped) through this delegate
     UNUserNotificationCenter.current().delegate = self as? UNUserNotificationCenterDelegate
+    WorkmanagerPlugin.registerLaunchHandlers()
+    WorkmanagerPlugin.setPluginRegistrantCallback { registry in
+      GeneratedPluginRegistrant.register(with: registry)
+    }
+    WorkmanagerPlugin.registerPeriodicTask(
+      withIdentifier: "com.ostapyrih.kestrel.inbox-check",
+      frequency: NSNumber(value: 15 * 60)
+    )
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
-    // the periodic background check (BGTaskScheduler) runs in a headless
-    // engine that needs the plugins (database, keychain, notifications)
-    WorkmanagerPlugin.setPluginRegistrantCallback { registry in
-      GeneratedPluginRegistrant.register(with: registry)
-    }
   }
 }
