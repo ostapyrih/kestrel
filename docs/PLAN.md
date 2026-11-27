@@ -127,6 +127,7 @@ The main way to use Kestrel on several devices does not need MeshChatX or the br
   - make-before-break handover with an immediate announce: in-flight messages reach the new announcer within the sender's retry window (~10 s opportunistic, ~15 s direct);
   - dedupe by LXMF message hash, never by propagation transient id;
   - device channel keys must be announced at least once to be reachable.
+- **Security invariants carried over from the vault:** every device-sync record is decrypted only through `VaultCrypto.decryptBlob` (Token has no associated data, so the inner `blob_id`/`device_id`/`seq`/`key_epoch` must equal the outer metadata — never bypass this check); per-device `seq` continuity detects missing records. Key re-sharing between devices (absent in the bridge vault: no `/vault/reshare`, a keyless device waits for a revocation or re-pairing) becomes a normal device-to-device message in phase S.
 - **Honest limit:** a lost/stolen device keeps A's private key. Remedy: "change address" (new A, contacts notified), not revocation.
 
 ## 4. Data model on the phone (SQLite)
