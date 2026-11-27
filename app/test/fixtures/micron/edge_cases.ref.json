@@ -1,0 +1,127 @@
+[
+ [
+  {
+   "text": "truecolour",
+   "style": "00ff00|default|||"
+  },
+  {
+   "text": " ",
+   "style": "ddd|default|||"
+  },
+  {
+   "text": "0grey",
+   "style": "ddd| g5|||"
+  }
+ ],
+ [
+  {
+   "text": "gray ",
+   "style": "g50|default|||"
+  },
+  {
+   "text": "six",
+   "style": "123456|default|||"
+  }
+ ],
+ [
+  {
+   "text": "astral colour code, then text",
+   "style": "a😀b|default|||"
+  }
+ ],
+ [
+  {
+   "text": "😀X",
+   "style": "a😀b|fff|||"
+  },
+  {
+   "text": " after astral",
+   "style": "a😀b|default|||"
+  }
+ ],
+ [
+  {
+   "text": "short tag at end ab",
+   "style": "a😀b|default|||"
+  }
+ ],
+ [
+  {
+   "text": "esc `F00fnot a colour ",
+   "style": "a😀b|default|||"
+  },
+  {
+   "text": "red",
+   "style": "00f|default|||"
+  }
+ ],
+ [
+  {
+   "text": "a",
+   "style": "00f|0f0|||"
+  },
+  {
+   "text": " reset ",
+   "style": "ddd|default|||"
+  },
+  {
+   "text": "b centred",
+   "style": "e00|default|||"
+  }
+ ],
+ [
+  {
+   "text": "bold",
+   "style": "e00|default|b||"
+  },
+  {
+   "text": " ",
+   "style": "e00|default|||"
+  },
+  {
+   "text": "it",
+   "style": "e00|default|||i"
+  },
+  {
+   "text": " ",
+   "style": "e00|default|||"
+  },
+  {
+   "text": "ul",
+   "style": "e00|default||u|"
+  },
+  {
+   "text": " ",
+   "style": "e00|default|||"
+  },
+  {
+   "text": "mix",
+   "style": "f00|default|b|u|"
+  },
+  {
+   "text": " done",
+   "style": "ddd|default|||"
+  }
+ ],
+ [
+  {
+   "text": "`Bfff escaped first char",
+   "style": "ddd|default|||"
+  }
+ ],
+ [
+  {
+   "text": "  ",
+   "style": "ddd|2a2|||"
+  },
+  {
+   "text": "  ",
+   "style": "ddd|A2A|||"
+  },
+  {
+   "text": " tab\there nbsp x",
+   "style": "ddd|default|||"
+  }
+ ],
+ []
+]
