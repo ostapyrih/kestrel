@@ -71,6 +71,16 @@ void main() {
   });
 
   group('classification: prose (wraps)', () {
+    test('two spaces after a sentence end are still prose', () {
+      expect(
+        info('First sentence here.  Second one follows!  And a third?  Yes.')
+            .structural,
+        isFalse,
+      );
+      expect(info('Key:  value').structural, isFalse);
+      expect(info('word  word').structural, isTrue);
+    });
+
     test('Cyrillic prose', () {
       final i = info(
         'Ласкаво просимо на вузол! Тут можна читати сторінки, '

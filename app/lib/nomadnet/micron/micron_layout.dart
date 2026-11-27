@@ -138,7 +138,10 @@ MicronLineInfo classifyMicronBlock(MicronBlock b, {int? pageBg}) {
   }
   final mostlyDrawing = nonSpace > 0 && drawing * 2 > nonSpace;
   final trimmed = text.trim();
-  final alignedSpaces = trimmed.contains(RegExp(r'[ \u00A0]{2}|\t'));
+  // two spaces after a sentence end are prose style, not alignment
+  final alignedSpaces = trimmed.contains(
+    RegExp(r'(?<![.!?:])[ \u00A0]{2}|[ \u00A0]{3}|\t'),
+  );
   final structural =
       b.literal || hasBg || alignedSpaces || mostlyDrawing || hasBox;
   return MicronLineInfo(
