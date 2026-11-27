@@ -119,6 +119,14 @@ The main way to use Kestrel on several devices does not need MeshChatX or the br
 - **One announcer at a time.** Online devices agree which one announces A (prefer internet over LoRa-only, then a deterministic tie-break by device id); handover with a fresh announce; a device that hears no sibling announces itself. The announcing device receives inbound messages and forwards them to the siblings over the B channel; ratchet keys of A are shared over the same channel so any device can decrypt messages already in flight.
 - **Sync over LXMF between the devices' B destinations:** direct Link when both are online (bulk catch-up), via a propagation node otherwise (needs phase 5). Data format reuses the vault envelope (group key, per-device seq, tombstones). On LoRa only compact text events; history catch-up when on a fast link.
 - **One display name** for A, synced across devices; renaming on any device renames everywhere and is used in A's announces.
+- **Spike results (2026-11-27, `docs/spikes/device-group.md`, RNS 1.6.1 / LXMF 1.3.1): feasible**, with these rules:
+  - exactly one announcer; non-announcers must never answer path requests for A (else they hijack the path);
+  - group-wide monotonic announce timebase `max(now, last_group_timebase + 1)` plus a clock sanity check in the election (a device with a clock ahead blocks takeover);
+  - before a device may announce or sync it receives A's key, the **merged** ratchet list (never overwrite) and A's announce stamp (generating a cost-25 stamp takes tens of seconds; copying it makes announces instant); only the announcer rotates ratchets;
+  - a propagation node deletes a message after the first download, so exactly one device (the announcer) syncs A's propagation inbox, persists first, then forwards to siblings over the device channel;
+  - make-before-break handover with an immediate announce: in-flight messages reach the new announcer within the sender's retry window (~10 s opportunistic, ~15 s direct);
+  - dedupe by LXMF message hash, never by propagation transient id;
+  - device channel keys must be announced at least once to be reachable.
 - **Honest limit:** a lost/stolen device keeps A's private key. Remedy: "change address" (new A, contacts notified), not revocation.
 
 ## 4. Data model on the phone (SQLite)
@@ -154,7 +162,7 @@ Switching modes changes only `settings.bridge_enabled`; no DELETEs on data.
 | N2 | Browser data sync (owner request 2026-11-27) | NomadNet bookmarks/favourite nodes, history and per-node settings (zoom, wrap, identify) sync across the user's devices over the device sync channel (vault blob kinds now; the same records move to phase S transport later); deletions as tombstones; history capped (e.g. last 500 entries) | ⬜ next |
 | 5 | Propagation sync + offline queue | `B` fetches messages from a propagation node | ⬜ |
 | 6 | RNode: BLE on mobile, USB serial on desktop | KISS + radio config (parameters = those of the LoRa gateway), `LoRa` transport badge | ⬜ |
-| S | Device group sync without the bridge (decided 2026-11-27) | shared main identity A on all devices, hidden per-device B for sync, announcer election + handover, inbound forwarding, ratchet sharing, LXMF sync (direct + propagation), synced display name, change-address flow. Spike first on real RNS 1.6.1/LXMF 1.3.1. Order: 6 → 5 → S → **1.0.0**; voice (V) and 7 after 1.0.0 | 🟡 spike |
+| S | Device group sync without the bridge (decided 2026-11-27) | shared main identity A on all devices, hidden per-device B for sync, announcer election + handover, inbound forwarding, ratchet sharing, LXMF sync (direct + propagation), synced display name, change-address flow. Spike done (PR #36): feasible with the rules in the section above. Order: 6 → 5 → S → **1.0.0**; voice (V) and 7 after 1.0.0 | ⬜ |
 | V | Voice: LXST calls + voice messages (decided 2026-11-27) | Live calls over LXST (compatible with Sideband / MeshChatX Telephone) only on fast transports (TCP/internet), Opus; from identity B, never through the bridge. On LoRa: **voice messages only** (no live calls) — record, compress with Codec2 (low bitrate), send as an LXMF audio field compatible with Sideband, play back. Call UI, ringing, earpiece/speaker, echo cancellation; incoming calls in the background tie in with phase 7 (CallKit on iOS). Scheduled after 6 and 5 | ⬜ |
 | 7 | iOS build on Mac + background notifications | `flutter build ios`, push without content | ⬜ |
 | D | Desktop builds (Windows/macOS/Linux) + USB RNode on desktop | PR #9 merged: Windows .zip, macOS .dmg, Linux tar.gz + AppImage (all unsigned) in releases; two-pane layout ≥ 900 px; device name setting; Windows/Linux CI. Remaining: USB RNode (Phase 6), verify unsigned macOS keychain on a real Mac | 🟡 builds done |
