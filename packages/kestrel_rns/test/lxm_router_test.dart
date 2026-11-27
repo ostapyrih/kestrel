@@ -321,18 +321,6 @@ void main() {
       expect(o.state, LxmState.cancelled);
       expect(p.ra.pending, isEmpty);
     });
-
-    test('propagated delivery is not available yet', () async {
-      p = await _pair();
-      expect(
-        () => p.ra.send(
-          destinationHash: p.rb.address,
-          content: 'x',
-          method: LxmfMethod.propagated,
-        ),
-        throwsA(isA<UnsupportedError>()),
-      );
-    });
   });
 
   group('persistence', () {
