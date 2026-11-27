@@ -28,6 +28,7 @@ class ChatScreen extends ConsumerStatefulWidget {
 
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _text = TextEditingController();
+  final _focus = FocusNode();
 
   /// The chat row; null while this is a draft (nothing stored yet).
   late int? _chatId = widget.chatId;
@@ -86,6 +87,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   void dispose() {
     _text.dispose();
+    _focus.dispose();
     super.dispose();
   }
 
@@ -104,6 +106,31 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // first message: creates the chat row, message and outbox row at once
     final sent = await ref.read(nodeProvider).sendToPeer(d, t);
     if (mounted) setState(() => _chatId = sent.chatId);
+  }
+
+  /// Hardware keyboard: Enter / numpad Enter / Ctrl+Enter / Cmd+Enter send,
+  /// Shift+Enter (and an active IME composition) fall through to the field.
+  /// On-screen keyboards do not produce these key events, so their return
+  /// key keeps inserting a newline.
+  KeyEventResult _onKey(FocusNode node, KeyEvent e) {
+    final isEnter =
+        e.logicalKey == LogicalKeyboardKey.enter ||
+        e.logicalKey == LogicalKeyboardKey.numpadEnter;
+    if (!isEnter) return KeyEventResult.ignored;
+    final kb = HardwareKeyboard.instance;
+    if (kb.isShiftPressed && !kb.isControlPressed && !kb.isMetaPressed) {
+      return KeyEventResult.ignored;
+    }
+    final composing = _text.value.composing;
+    if (composing.isValid && !composing.isCollapsed) {
+      return KeyEventResult.ignored;
+    }
+    if (e is KeyUpEvent) return KeyEventResult.handled;
+    if (_text.text.trim().isNotEmpty) {
+      unawaited(_send());
+      _focus.requestFocus();
+    }
+    return KeyEventResult.handled;
   }
 
   String _draftTitle() {
@@ -254,17 +281,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     Row(
                       children: [
                         Expanded(
-                          child: TextField(
-                            key: const ValueKey('composer-input'),
-                            controller: _text,
-                            minLines: 1,
-                            maxLines: 5,
-                            textCapitalization: TextCapitalization.sentences,
-                            decoration: InputDecoration(
-                              hintText: s.t('message_hint'),
-                              border: InputBorder.none,
+                          child: Focus(
+                            onKeyEvent: _onKey,
+                            canRequestFocus: false,
+                            skipTraversal: true,
+                            child: TextField(
+                              key: const ValueKey('composer-input'),
+                              focusNode: _focus,
+                              controller: _text,
+                              minLines: 1,
+                              maxLines: 5,
+                              textCapitalization: TextCapitalization.sentences,
+                              decoration: InputDecoration(
+                                hintText: s.t('message_hint'),
+                                border: InputBorder.none,
+                              ),
+                              onSubmitted: (_) => _send(),
                             ),
-                            onSubmitted: (_) => _send(),
                           ),
                         ),
                         IconButton.filled(
