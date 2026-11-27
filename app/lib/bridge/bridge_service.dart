@@ -4,25 +4,20 @@ import 'dart:typed_data';
 
 import 'package:kestrel_rns/kestrel_rns.dart';
 
+import '../node/identity_store.dart';
 import '../platform.dart';
 import '../storage/database.dart';
 import '../storage/repo.dart';
 import 'bridge_connection.dart';
 import 'bridge_store.dart';
 import 'codec.dart';
+import 'vault_service.dart';
 
 /// Creates the connection for the bridge identified by [publicKey].
 typedef BridgeApiFactory = BridgeApi Function(
   Uint8List publicKey,
   AllowFallback allowFallback,
 );
-
-/// Thrown when an action needs the E2E vault key rules (spec 9.3) that this
-/// client does not implement yet (Phase 4b).
-class VaultKeysUnsupported implements Exception {
-  @override
-  String toString() => 'vault keys are not supported yet';
-}
 
 /// An RRC message that starts with `/` would run as a hub command as A.
 class RrcCommandBlocked implements Exception {
@@ -62,10 +57,23 @@ class BridgeService {
     required this.apiFactory,
     required this.sendAsB,
     this.retryResend = const Duration(seconds: 15),
-  }) : store = BridgeStore(repo);
+    SecretStore? secrets,
+    VaultService? vaultService,
+  }) : store = BridgeStore(repo),
+       vault =
+           vaultService ??
+           VaultService(
+             repo: repo,
+             keys: VaultKeys(secrets ?? MemorySecretStore()),
+             identity: identity,
+             ownDeviceId: ownDeviceId,
+           );
 
   final Repo repo;
   final BridgeStore store;
+
+  /// End-to-end encrypted sync of this device's Standalone history.
+  final VaultService vault;
 
   /// This device's id (hash of identity B).
   final String Function() ownDeviceId;
@@ -90,7 +98,6 @@ class BridgeService {
   Timer? _upstreamRetry;
   bool? _fallbackSetting;
   bool _ownField = false;
-  bool _vaultInUse = false;
   bool _stopped = false;
 
   BridgeStatus get status => _statusNow;
@@ -158,6 +165,7 @@ class BridgeService {
       ..add(api.pushes.listen((e) => _chain(() => _onPush(e))))
       ..add(api.connected.listen((h) => _chain(() => _onConnected(h))));
     api.setIdentityInfo(await deviceName(), platformId());
+    await vault.attach(api, keyHex);
     if (redeem == null) await api.start();
   }
 
@@ -205,6 +213,7 @@ class BridgeService {
       await s.cancel();
     }
     _subs.clear();
+    await vault.detach();
     final a = _api;
     _api = null;
     await a?.stop();
@@ -305,7 +314,6 @@ class BridgeService {
   // ------------------------------------------------------------ connect/sync
 
   Future<void> _onConnected(HelloResult h) async {
-    _vaultInUse = h.vaultInUse;
     _ownField = h.device.isField;
     await repo.setSetting(SettingKeys.bridgeOwnRoles, h.device.roles.join(','));
     await repo.setSetting(
@@ -317,6 +325,7 @@ class BridgeService {
     await refreshDevices();
     await refreshRooms();
     await _flush();
+    unawaited(vault.onConnected(h));
   }
 
   /// Pulls every conversation change since the stored cursor.
@@ -533,11 +542,15 @@ class BridgeService {
           await store.upsertDevices([rec]);
           await _adoptOwnName(rec);
         }
+      case 'vault.blob':
+        unawaited(vault.onBlobPush());
       case 'device_revoked':
         if (d['device_id'] == ownDeviceId()) {
           await _handleRevoked();
         } else {
           await refreshDevices();
+          // the revoking device rotated the group key (spec 9.2)
+          unawaited(vault.onKeysMayHaveChanged());
         }
       case 'resync':
         await resync();
@@ -551,6 +564,7 @@ class BridgeService {
     await repo.setSetting(SettingKeys.bridgePubkey, '');
     await repo.setSetting(SettingKeys.bridgeStateId, '');
     await repo.setSetting(SettingKeys.bridgeCursor, '0');
+    await vault.forgetKeys();
     _api?.markRevoked();
     _emit(const BridgeStatus(BridgeState.revoked, detail: 'device_revoked'));
   }
@@ -755,35 +769,60 @@ class BridgeService {
     await store.upsertDevices([DeviceRecord.fromMap(asMap(r['device']))]);
   }
 
-  /// Revokes a device. Blocked while the vault is in use: the key rotation of
-  /// spec 9.3 arrives with the vault sync (Phase 4b).
+  /// Revokes a device. While the vault is in use the group key is rotated in
+  /// the same request (spec 9.3): a new key for epoch + 1 wrapped for every
+  /// remaining device. A concurrent revocation (`key_epoch_stale`) is retried
+  /// once with fresh state.
   Future<void> revokeDevice(String deviceId, {String? reason}) async {
-    if (_vaultInUse) throw VaultKeysUnsupported();
-    final r = await _admin('/devices/revoke', {
-      'device_id': deviceId,
-      'reason': ?reason,
-    });
+    Map<String, Object?> r;
+    var attempt = 0;
+    while (true) {
+      final fields = await vault.revokeFields(deviceId);
+      try {
+        r = await _admin('/devices/revoke', {
+          'device_id': deviceId,
+          'reason': ?reason,
+          ...fields.args,
+        });
+        await fields.commit();
+        break;
+      } on BridgeError catch (e) {
+        if (e.code == 'key_epoch_stale' && attempt++ == 0) continue;
+        rethrow;
+      }
+    }
     await store.upsertDevices([DeviceRecord.fromMap(asMap(r['device']))]);
     if (deviceId == ownDeviceId()) await _handleRevoked();
   }
 
-  /// Approves the device whose pairing code was scanned or pasted.
+  /// Approves the device whose pairing code was scanned or pasted. While the
+  /// vault is in use the key chain is wrapped to the new device's identity;
+  /// without a key this device cannot do that ([VaultKeyMissing]).
   Future<DeviceRecord> approveDevice(
     DecodedPairing d, {
     String? name,
     bool field = false,
   }) async {
-    if (_vaultInUse) throw VaultKeysUnsupported();
     final sig = await identity().sign(pairingSignMessage(d.raw, ownDeviceId()));
-    final r = await _admin('/devices/approve', {
-      'payload': d.raw,
-      'signature': sig,
-      if (name != null && name.isNotEmpty) 'name': name,
-      if (field) 'roles': ['field'],
-    });
-    final rec = DeviceRecord.fromMap(asMap(r['device']));
-    await store.upsertDevices([rec]);
-    return rec;
+    var attempt = 0;
+    while (true) {
+      final key = await vault.approveFields(d.payload.pubkey);
+      try {
+        final r = await _admin('/devices/approve', {
+          'payload': d.raw,
+          'signature': sig,
+          if (name != null && name.isNotEmpty) 'name': name,
+          if (field) 'roles': ['field'],
+          ...key,
+        });
+        final rec = DeviceRecord.fromMap(asMap(r['device']));
+        await store.upsertDevices([rec]);
+        return rec;
+      } on BridgeError catch (e) {
+        if (e.code == 'key_epoch_stale' && attempt++ == 0) continue;
+        rethrow;
+      }
+    }
   }
 
   // ----------------------------------------------------------------- pairing
@@ -807,7 +846,8 @@ class BridgeService {
   Future<InviteQr> createInvite() async {
     final key = await configuredKey();
     if (key == null) throw BridgeNotConfigured();
-    final r = await _admin('/devices/invite', {});
+    final vf = await vault.inviteFields();
+    final r = await _admin('/devices/invite', vf.args);
     final t = InviteTicket.fromMap(r);
     final offset =
         double.tryParse(
@@ -820,6 +860,7 @@ class BridgeService {
         token: t.token,
         inviterName: await deviceName(),
         expiresAt: t.expiresAt,
+        inviteSecret: vf.secret,
       ),
     );
     return InviteQr(
@@ -853,6 +894,7 @@ class BridgeService {
     await repo.setSetting(SettingKeys.bridgeRevoked, '0');
     await repo.setBridgeEnabled(true);
     await _attach(key, redeem: inv);
+    await vault.rememberInviteSecret(inv.inviteSecret);
     try {
       final r = await _api!.redeem(
         token: inv.token,
@@ -863,6 +905,7 @@ class BridgeService {
       await store.upsertDevices([rec]);
       return rec;
     } on Object {
+      await vault.rememberInviteSecret(null);
       if (!hadBridge) {
         await _detach();
         await repo.setSetting(SettingKeys.bridgePubkey, '');

@@ -28,6 +28,8 @@ class ChatRow {
     this.lastText,
     this.bridgeLastId,
     this.olderDone = false,
+    this.remoteDeviceId,
+    this.remoteDeviceName,
   });
 
   factory ChatRow.fromMap(Map<String, Object?> m) => ChatRow(
@@ -60,10 +62,21 @@ class ChatRow {
   /// True once the bridge said there is nothing older to page back to.
   final bool olderDone;
 
+  /// Set for a read-only history synced from another device of the user
+  /// (vault, protocol section 9): the id of that device and its name. The
+  /// [id] of such a chat is negative (`-vault_chats.id`).
+  final String? remoteDeviceId;
+  final String? remoteDeviceName;
+
+  bool get isRemote => remoteDeviceId != null;
+
   String get displayTitle => (title != null && title!.isNotEmpty)
       ? title!
       : (peerHash == null ? '?' : shortHash(peerHash!));
 }
+
+/// Remote (vault) chats and messages use negative ids: `-vault_chats.id`.
+bool isRemoteId(int id) => id < 0;
 
 class MessageRow {
   MessageRow({
@@ -151,8 +164,10 @@ String shortHash(String h) =>
     h.length <= 12 ? h : '${h.substring(0, 6)}..${h.substring(h.length - 4)}';
 
 /// All SQL of the app. The only code that deletes chats or messages is
-/// [purgeBridgeAccountData]: account A is a cache of MeshChatX, so turning
-/// the bridge off drops it; account B (this device) is never deleted.
+/// [purgeBridgeAccountData] (account A is a cache of MeshChatX, so turning
+/// the bridge off drops it, together with the downloaded histories of the
+/// other devices) and [resetVaultForNewBridge] (vault caches only); account
+/// B (this device) is never deleted.
 class Repo {
   Repo(this.adb);
   final AppDatabase adb;
@@ -203,6 +218,11 @@ class Repo {
   Future<void> purgeBridgeAccountData() async {
     final a = await accountId('A');
     await _db.transaction((txn) async {
+      // downloaded histories of the other devices and the download position;
+      // this device's own B data, the upload sequence and the key chain stay
+      await txn.rawDelete('DELETE FROM vault_messages');
+      await txn.rawDelete('DELETE FROM vault_chats');
+      await txn.rawDelete('DELETE FROM vault_seen');
       await txn.rawDelete(
         'DELETE FROM delivery_log WHERE message_id IN '
         '(SELECT id FROM messages WHERE account_id = ?)',
@@ -217,6 +237,34 @@ class Repo {
       for (final e in {
         SettingKeys.bridgeStateId: '',
         SettingKeys.bridgeCursor: '0',
+        SettingKeys.vaultCursor: '0',
+      }.entries) {
+        await txn.insert('settings', {
+          'key': e.key,
+          'value': e.value,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
+    adb.notify();
+  }
+
+  /// The bridge database was recreated (new `state_id`): its vault is empty.
+  /// Drops the downloaded histories and the download/upload positions and
+  /// bumps the upload generation, so everything is uploaded again. Own B
+  /// chats and messages are never touched.
+  Future<void> resetVaultForNewBridge() async {
+    final gen =
+        (int.tryParse(await getSetting(SettingKeys.vaultGen) ?? '') ?? 0) + 1;
+    await _db.transaction((txn) async {
+      await txn.rawDelete('DELETE FROM vault_pending');
+      await txn.rawDelete('DELETE FROM vault_seen');
+      await txn.rawDelete('DELETE FROM vault_messages');
+      await txn.rawDelete('DELETE FROM vault_chats');
+      for (final e in {
+        SettingKeys.vaultGen: '$gen',
+        SettingKeys.vaultLastSeq: '0',
+        SettingKeys.vaultCursor: '0',
+        SettingKeys.vaultQuotaFull: '0',
       }.entries) {
         await txn.insert('settings', {
           'key': e.key,
@@ -272,6 +320,7 @@ FROM chats c JOIN accounts a ON a.id = c.account_id''';
   }
 
   Future<ChatRow?> chat(int id) async {
+    if (isRemoteId(id)) return remoteChat(id);
     final rows = await _db.rawQuery('$_chatSelect WHERE c.id = ?', [id]);
     return rows.isEmpty ? null : ChatRow.fromMap(rows.first);
   }
@@ -333,9 +382,85 @@ FROM chats c JOIN accounts a ON a.id = c.account_id''';
     adb.notify();
   }
 
+  // ------------------------------------------------- remote (vault) histories
+
+  static const _remoteChatSelect = '''
+SELECT c.*, d.name AS device_name,
+  (SELECT text FROM vault_messages m WHERE m.chat_id = c.id
+     ORDER BY m.ts DESC, m.id DESC LIMIT 1) AS last_text
+FROM vault_chats c LEFT JOIN bridge_devices d ON d.device_id = c.device_id''';
+
+  ChatRow _remoteChatRow(Map<String, Object?> m) => ChatRow(
+    id: -(m['id']! as int),
+    accountIdentity: 'B',
+    kind: 'lxmf',
+    peerHash: m['peer_hash'] as String?,
+    title: m['peer_name'] as String?,
+    lastTs: m['last_ts'] as int?,
+    unread: 0,
+    lastText: m['last_text'] as String?,
+    remoteDeviceId: m['device_id']! as String,
+    remoteDeviceName: (m['device_name'] as String?)?.isNotEmpty == true
+        ? m['device_name']! as String
+        : shortHash(m['device_id']! as String),
+  );
+
+  /// Histories synced from the user's other devices, newest first.
+  Future<List<ChatRow>> remoteChats() async {
+    final rows = await _db.rawQuery(
+      '$_remoteChatSelect ORDER BY COALESCE(c.last_ts, 0) DESC, c.id DESC',
+    );
+    return rows.map(_remoteChatRow).toList();
+  }
+
+  Future<ChatRow?> remoteChat(int id) async {
+    final rows = await _db.rawQuery('$_remoteChatSelect WHERE c.id = ?', [-id]);
+    return rows.isEmpty ? null : _remoteChatRow(rows.first);
+  }
+
+  MessageRow _remoteMessage(Map<String, Object?> m) {
+    const statuses = {
+      MsgStatus.queued,
+      MsgStatus.sending,
+      MsgStatus.sent,
+      MsgStatus.delivered,
+      MsgStatus.failed,
+      MsgStatus.received,
+      MsgStatus.cancelled,
+    };
+    final st = m['status']! as String;
+    final tr = m['transport'] as String?;
+    return MessageRow(
+      id: -(m['id']! as int),
+      chatId: -(m['chat_id']! as int),
+      direction: m['direction']! as String,
+      lxmfHash: m['lxmf_hash'] as String?,
+      text: m['text']! as String,
+      ts: m['ts']! as int,
+      senderIdentity: 'B',
+      route: m['route'] as String?,
+      transport: (tr == 'tcp' || tr == 'lora') ? tr! : 'none',
+      status: statuses.contains(st) ? st : MsgStatus.sent,
+      error: m['error'] as String?,
+      signatureValid: null,
+      originDevice: m['device_id'] as String?,
+    );
+  }
+
+  Future<List<MessageRow>> remoteMessages(int chatId) async {
+    final r = await _db.query(
+      'vault_messages',
+      where: 'chat_id = ?',
+      whereArgs: [-chatId],
+      orderBy: 'ts ASC, id ASC',
+    );
+    return r.map(_remoteMessage).toList();
+  }
+
   // ----------------------------------------------------------------- messages
 
   Future<List<MessageRow>> messages(int chatId) async {
+    if (isRemoteId(chatId)) return remoteMessages(chatId);
     final r = await _db.query(
       'messages',
       where: 'chat_id = ?',
@@ -346,6 +471,14 @@ FROM chats c JOIN accounts a ON a.id = c.account_id''';
   }
 
   Future<MessageRow?> message(int id) async {
+    if (isRemoteId(id)) {
+      final r = await _db.query(
+        'vault_messages',
+        where: 'id = ?',
+        whereArgs: [-id],
+      );
+      return r.isEmpty ? null : _remoteMessage(r.first);
+    }
     final r = await _db.query('messages', where: 'id = ?', whereArgs: [id]);
     return r.isEmpty ? null : MessageRow.fromMap(r.first);
   }

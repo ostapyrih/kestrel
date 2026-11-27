@@ -225,6 +225,7 @@ class HelloResult {
     required this.meshchatxVersion,
     required this.vaultKeyEpoch,
     required this.vaultInUse,
+    this.vaultUsedBytes = 0,
     required this.limits,
   });
 
@@ -251,6 +252,7 @@ class HelloResult {
       meshchatxVersion: compat['meshchatx_version'] as String?,
       vaultKeyEpoch: asInt(vault['key_epoch']) ?? 1,
       vaultInUse: vault['in_use'] == true,
+      vaultUsedBytes: asInt(vault['used_bytes']) ?? 0,
       limits: m['limits'] is Map ? asMap(m['limits']) : const {},
     );
   }
@@ -278,7 +280,13 @@ class HelloResult {
   final String? meshchatxVersion;
   final int vaultKeyEpoch;
   final bool vaultInUse;
+
+  /// Bytes this device has in the vault.
+  final int vaultUsedBytes;
   final Map<String, Object?> limits;
+
+  /// A limit from `/hello` (`vault_max_blob_bytes`, ...), or [fallback].
+  int limit(String key, int fallback) => asInt(limits[key]) ?? fallback;
 }
 
 // --------------------------------------------------------------------- sync
@@ -663,11 +671,17 @@ class InvitePayload {
     required this.token,
     required this.inviterName,
     required this.expiresAt,
+    this.inviteSecret,
   });
 
   final Uint8List bridgePubkey;
   final Uint8List token;
   final String inviterName;
+
+  /// 32 random bytes that never go to the bridge: the new device decrypts
+  /// the vault key chain wrapped to it (spec 5.4). Null when the vault is
+  /// not in use.
+  final Uint8List? inviteSecret;
 
   /// Unix seconds (bridge clock as the inviting device knew it).
   final double expiresAt;
@@ -677,6 +691,7 @@ class InvitePayload {
     'token': token,
     'inviter_name': inviterName,
     'expires_at': expiresAt,
+    if (inviteSecret != null) 'invite_secret': inviteSecret,
   });
 
   String get bridgeKeyHex => toHex(bridgePubkey);
@@ -718,7 +733,12 @@ InvitePayload decodeInviteQr(String text) {
     throw const FormatException('token must be 16 bytes');
   }
   if (exp is! num) throw const FormatException('expires_at must be a number');
+  final secret = m['invite_secret'];
+  if (secret != null && (secret is! Uint8List || secret.length != 32)) {
+    throw const FormatException('invite_secret must be 32 bytes');
+  }
   return InvitePayload(
+    inviteSecret: secret as Uint8List?,
     bridgePubkey: pub,
     token: token,
     inviterName: name is String ? name : '',

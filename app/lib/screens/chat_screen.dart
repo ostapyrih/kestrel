@@ -9,6 +9,7 @@ import '../l10n/strings.dart';
 import '../providers.dart';
 import '../storage/repo.dart';
 import 'bridge_widgets.dart';
+import 'vault_widgets.dart';
 import 'widgets.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
@@ -87,7 +88,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               d.deviceId: d.name,
           }
         : const <String, String>{};
-    final ownDevice = ref.watch(ownDeviceNameProvider);
+    // a history synced from another device: read only (vault)
+    final remote = chat?.isRemote ?? isRemoteId(widget.chatId);
+    final ownDevice = remote
+        ? (chat?.remoteDeviceName ?? '')
+        : ref.watch(ownDeviceNameProvider);
     final bridgeMode = ref.watch(bridgeModeProvider);
     final olderItem = isA && !(chat?.olderDone ?? true);
     return Scaffold(
@@ -103,7 +108,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
             if (bridgeMode) ...[
               const SizedBox(width: 8),
-              IdentityBadge(identity),
+              if (remote)
+                IdentityBadge(
+                  'B',
+                  key: const ValueKey('badge-remote'),
+                  label: s.account('B', device: chat?.remoteDeviceName),
+                )
+              else
+                IdentityBadge(identity),
             ],
           ],
         ),
@@ -139,51 +151,55 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               error: (e, _) => Center(child: Text('$e')),
             ),
           ),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 4, 8, 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (bridgeMode)
-                    Text(
-                      isA
-                          ? s.t('from_a_bridge')
-                          : s.t('from', {'account': s.account(identity)}),
-                      key: const ValueKey('composer-from'),
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.primary,
+          if (remote && chat != null)
+            ReadOnlyBanner(chat: chat)
+          else
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 8, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (bridgeMode)
+                      Text(
+                        isA
+                            ? s.t('from_a_bridge')
+                            : s.t('from', {'account': s.account(identity)}),
+                        key: const ValueKey('composer-from'),
+                        style: Theme.of(context).textTheme.labelMedium
+                            ?.copyWith(
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
                       ),
-                    ),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          key: const ValueKey('composer-input'),
-                          controller: _text,
-                          minLines: 1,
-                          maxLines: 5,
-                          textCapitalization: TextCapitalization.sentences,
-                          decoration: InputDecoration(
-                            hintText: s.t('message_hint'),
-                            border: InputBorder.none,
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            key: const ValueKey('composer-input'),
+                            controller: _text,
+                            minLines: 1,
+                            maxLines: 5,
+                            textCapitalization: TextCapitalization.sentences,
+                            decoration: InputDecoration(
+                              hintText: s.t('message_hint'),
+                              border: InputBorder.none,
+                            ),
+                            onSubmitted: (_) => _send(),
                           ),
-                          onSubmitted: (_) => _send(),
                         ),
-                      ),
-                      IconButton.filled(
-                        key: const ValueKey('composer-send'),
-                        tooltip: s.t('send'),
-                        icon: const Icon(Icons.send),
-                        onPressed: _send,
-                      ),
-                    ],
-                  ),
-                ],
+                        IconButton.filled(
+                          key: const ValueKey('composer-send'),
+                          tooltip: s.t('send'),
+                          icon: const Icon(Icons.send),
+                          onPressed: _send,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -349,7 +365,24 @@ class MessageDetails extends ConsumerWidget {
               key: const ValueKey('detail-hash'),
             ),
             if (ref.watch(bridgeModeProvider))
-              row(s.t('sender'), s.account(m.senderIdentity)),
+              row(
+                s.t('sender'),
+                isRemoteId(m.id)
+                    ? s.account(
+                        'B',
+                        device:
+                            ref
+                                .watch(bridgeDevicesProvider)
+                                .value
+                                ?.where((d) => d.deviceId == m.originDevice)
+                                .firstOrNull
+                                ?.name ??
+                            (m.originDevice == null
+                                ? null
+                                : shortHash(m.originDevice!)),
+                      )
+                    : s.account(m.senderIdentity),
+              ),
             if (ref.watch(bridgeModeProvider) &&
                 m.senderIdentity == 'A' &&
                 m.outgoing)

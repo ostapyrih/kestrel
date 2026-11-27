@@ -175,7 +175,6 @@ class Strings {
     'device_revoke_body': '«{name}» одразу втратить доступ до моста. Це незворотно: щоб користуватись ним знову, потрібна нова ідентичність.',
     'devices_empty': 'Список порожній. Підключіться до моста.',
     'ok': 'Гаразд',
-    'vault_unsupported': 'Ключі сховища ще не підтримуються: ця дія недоступна, поки сховище активне (Фаза 4b).',
     'error_code': 'Помилка: {code}',
     'bridge_not_connected': 'Немає зʼєднання з мостом',
     'pair_new_title': 'Це новий пристрій',
@@ -223,6 +222,26 @@ class Strings {
     'bridge_meshchatx_incompatible':
         'Версія MeshChatX ({version}) не підтримується мостом.',
     'starting': 'Запуск вузла...',
+    'vault_key_missing': "Цей пристрій не має ключа сховища, тому не може передати його іншому пристрою. Ключ з'явиться після наступного вилучення пристрою з іншого пристрою, або додайте пристрій заново.",
+    'pair_stale': "Запрошення застаріло: ключ сховища змінився. Створіть нове запрошення.",
+    'account_other': "Інші пристрої",
+    'vault_title': "Синхронізація історії",
+    'vault_state_off': "не підключено до мосту",
+    'vault_state_needs_key': "Очікування ключа від іншого пристрою",
+    'vault_state_syncing': "Синхронізація…",
+    'vault_state_idle': "Синхронізовано",
+    'vault_state_quota_full':
+        "Сховище для цього пристрою заповнене, вивантаження зупинено",
+    'vault_state_error': "Помилка синхронізації, спробую знову",
+    'vault_last_sync': "Остання синхронізація: {time}",
+    'vault_never': "ще не було",
+    'vault_usage': "Вивантажено: {used} з {quota}",
+    'vault_remote_devices': "Пристроїв з отриманою історією: {n}",
+    'vault_needs_key_help': "Ключ сховища повинен передати інший ваш пристрій, який його має: при додаванні пристрою або вилученні іншого. Окремої дії «поділитися ключем» немає.",
+    'vault_note': "Історія чатів B цього пристрою шифрується на ньому й лишається нечитною для мосту. Інші ваші пристрої показують її лише для читання.",
+    'vault_readonly': "Історія з {device} · лише читання",
+    'vault_reply': "Відповісти з цього пристрою",
+    'vault_reply_title': "Відповісти від імені",
   };
 
   static const _en = <String, String>{
@@ -357,7 +376,6 @@ class Strings {
     'device_revoke_body': '"{name}" loses access to the bridge immediately. This cannot be undone: it needs a new identity to be used again.',
     'devices_empty': 'The list is empty. Connect to the bridge.',
     'ok': 'OK',
-    'vault_unsupported': 'Vault keys are not supported yet: this action is unavailable while the vault is in use (Phase 4b).',
     'error_code': 'Error: {code}',
     'bridge_not_connected': 'Not connected to the bridge',
     'pair_new_title': 'This is the new device',
@@ -406,6 +424,27 @@ class Strings {
     'bridge_meshchatx_incompatible':
         'The MeshChatX version ({version}) is not supported by the bridge.',
     'starting': 'Starting node...',
+    'vault_key_missing': "This device has no vault key, so it cannot pass it on to another device. A key arrives after another device removes a device next time, or add the device again.",
+    'pair_stale':
+        "The invite is outdated: the vault key changed. Create a new invite.",
+    'account_other': "Other devices",
+    'vault_title': "History sync",
+    'vault_state_off': "not connected to the bridge",
+    'vault_state_needs_key': "Waiting for key from another device",
+    'vault_state_syncing': "Syncing…",
+    'vault_state_idle': "Up to date",
+    'vault_state_quota_full':
+        "This device's vault quota is full, uploads are stopped",
+    'vault_state_error': "Sync error, retrying",
+    'vault_last_sync': "Last sync: {time}",
+    'vault_never': "never",
+    'vault_usage': "Uploaded: {used} of {quota}",
+    'vault_remote_devices': "Devices with downloaded history: {n}",
+    'vault_needs_key_help': "Another of your devices that has the vault key must pass it on: when it adds a device or removes another one. There is no separate \"share key\" action.",
+    'vault_note': "This device's B chat history is encrypted on it and unreadable to the bridge. Your other devices show it read-only.",
+    'vault_readonly': "History from {device} · read only",
+    'vault_reply': "Reply from this device",
+    'vault_reply_title': "Reply as",
   };
 }
 

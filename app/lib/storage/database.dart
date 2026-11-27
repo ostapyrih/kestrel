@@ -170,6 +170,69 @@ CREATE TABLE rrc_messages (
   PRIMARY KEY (hub, room, seq)
 )''',
   ]),
+  // Standalone history vault (protocol 9, Phase 4b). `vault_chats` and
+  // `vault_messages` hold the read-only histories of the user's OTHER
+  // devices (a cache of the bridge vault, dropped when the bridge is turned
+  // off). They are separate tables on purpose: `accounts`, `messages.sender_
+  // identity` and the outbox triggers only know this device's A and B, and
+  // remote histories must never be sendable. `vault_seen`, `vault_upload`
+  // and `vault_pending` are bookkeeping of the sync itself.
+  Migration(4, [
+    '''
+CREATE TABLE vault_chats (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id TEXT NOT NULL,
+  peer_hash TEXT NOT NULL,
+  peer_name TEXT,
+  last_ts INTEGER,
+  UNIQUE (device_id, peer_hash)
+)''',
+    '''
+CREATE TABLE vault_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER NOT NULL REFERENCES vault_chats(id),
+  device_id TEXT NOT NULL,
+  lxmf_hash TEXT NOT NULL,
+  direction TEXT NOT NULL,
+  title TEXT,
+  text TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  rts REAL NOT NULL,
+  status TEXT NOT NULL,
+  route TEXT,
+  transport TEXT NOT NULL DEFAULT 'none',
+  error TEXT,
+  UNIQUE (device_id, lxmf_hash)
+)''',
+    'CREATE INDEX vault_messages_chat ON vault_messages(chat_id, ts)',
+    // highest blob seq applied per remote device (continuity check)
+    '''
+CREATE TABLE vault_seen (
+  device_id TEXT PRIMARY KEY,
+  last_seq INTEGER NOT NULL
+)''',
+    // what of this device's own B messages was uploaded, in which state;
+    // `gen` changes when the bridge database was recreated
+    '''
+CREATE TABLE vault_upload (
+  message_id INTEGER PRIMARY KEY,
+  gen INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL,
+  error TEXT,
+  lxmf_hash TEXT
+)''',
+    // the one blob being uploaded: persisted BEFORE the put, so a retry
+    // sends the very same blob_id/seq/ciphertext (idempotent)
+    '''
+CREATE TABLE vault_pending (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  blob_id TEXT,
+  seq INTEGER,
+  key_epoch INTEGER,
+  ciphertext BLOB,
+  marks TEXT
+)''',
+  ]),
 ];
 
 int get latestSchemaVersion => migrations.last.version;
@@ -201,6 +264,17 @@ abstract final class SettingKeys {
   static const bridgeClockOffset = 'bridge_clock_offset';
   static const bridgeRevoked = 'bridge_revoked';
   static const bridgeOwnRoles = 'bridge_own_roles';
+
+  // Vault sync. Cursor and downloaded histories are reset when the bridge is
+  // turned off; the upload sequence, `vault_gen` and the key chain (secure
+  // storage) belong to the pairing and survive.
+  static const vaultCursor = 'vault_cursor';
+  static const vaultLastSeq = 'vault_last_seq';
+  static const vaultGen = 'vault_gen';
+  static const vaultLastSync = 'vault_last_sync';
+  static const vaultUsedBytes = 'vault_used_bytes';
+  static const vaultQuotaBytes = 'vault_quota_bytes';
+  static const vaultQuotaFull = 'vault_quota_full';
 }
 
 const defaultServerHost = 'rns.ostapyrih.com';

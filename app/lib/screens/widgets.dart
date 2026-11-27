@@ -5,8 +5,11 @@ import '../node/node_service.dart';
 
 /// Small coloured badge with the identity letter (`A` / `B`).
 class IdentityBadge extends StatelessWidget {
-  const IdentityBadge(this.identity, {super.key});
+  const IdentityBadge(this.identity, {super.key, this.label});
   final String identity;
+
+  /// Replaces the letter, e.g. `B · iPhone` for a history of another device.
+  final String? label;
 
   @override
   Widget build(BuildContext context) {
@@ -20,7 +23,7 @@ class IdentityBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
-        identity,
+        label ?? identity,
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
           fontWeight: FontWeight.bold,
           color: isB ? cs.onPrimaryContainer : cs.onTertiaryContainer,

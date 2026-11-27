@@ -4,6 +4,7 @@ import 'bridge/bridge_connection.dart';
 import 'bridge/bridge_service.dart';
 import 'bridge/bridge_store.dart';
 import 'bridge/codec.dart';
+import 'bridge/vault_service.dart';
 import 'node/node_service.dart';
 import 'platform.dart';
 import 'storage/database.dart';
@@ -19,7 +20,7 @@ final connectionProvider = StreamProvider<NodeConnection>((ref) async* {
   yield* n.connectionChanges;
 });
 
-/// Selected account chip: null = all, otherwise `A` or `B`.
+/// Selected account chip: null = all, `A`, `B`, or `R` (histories of other devices).
 class AccountFilter extends Notifier<String?> {
   @override
   String? build() => null;
@@ -46,10 +47,30 @@ final selectedChatProvider = NotifierProvider<SelectedChat, int?>(
 final chatsProvider = StreamProvider<List<ChatRow>>((ref) {
   final repo = ref.watch(repoProvider);
   final f = ref.watch(accountFilterProvider);
-  // bridge off: only this device's own chats are shown
+  // bridge off: only this device's own chats are shown (no histories of
+  // other devices either: they are not even stored then)
   final mode = ref.watch(bridgeModeProvider);
-  final effective = mode ? f : 'B';
-  return repo.watch(() => repo.chats(accountIdentity: effective));
+  return repo.watch(() async {
+    if (!mode) return repo.chats(accountIdentity: 'B');
+    if (f == 'R') return repo.remoteChats();
+    final own = await repo.chats(accountIdentity: f);
+    if (f != null) return own;
+    final all = [...own, ...await repo.remoteChats()]
+      ..sort((a, b) => (b.lastTs ?? 0).compareTo(a.lastTs ?? 0));
+    return all;
+  });
+});
+
+/// True when histories of other devices exist (shows the "other devices" chip).
+final hasRemoteChatsProvider = StreamProvider<bool>((ref) {
+  final repo = ref.watch(repoProvider);
+  return repo.watch(() async => (await repo.remoteChats()).isNotEmpty);
+});
+
+/// State of the history sync, for Settings.
+final vaultStatusProvider = StreamProvider<VaultStatus>((ref) {
+  final b = ref.watch(bridgeProvider);
+  return b.repo.watch(b.vault.snapshot);
 });
 
 final chatProvider = StreamProvider.family<ChatRow?, int>((ref, id) {
