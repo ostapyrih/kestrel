@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 
 import 'installer.dart';
 import 'release_key.dart';
+import 'update_outcome.dart';
 import 'releases.dart';
 import 'verify.dart';
 import 'version.dart';
@@ -43,6 +44,7 @@ class UpdateState {
     this.manualOnly = false,
     this.dismissed = false,
     this.lastChecked,
+    this.failure,
   });
 
   final UpdateStatus status;
@@ -64,6 +66,10 @@ class UpdateState {
   final bool dismissed;
   final DateTime? lastChecked;
 
+  /// The previous start tried to update and the old version came back: where
+  /// the installer log is and the installer to run by hand.
+  final UpdateOutcome? failure;
+
   UpdateState copyWith({
     UpdateStatus? status,
     ReleaseInfo? release,
@@ -76,6 +82,8 @@ class UpdateState {
     bool? manualOnly,
     bool? dismissed,
     DateTime? lastChecked,
+    UpdateOutcome? failure,
+    bool clearFailure = false,
   }) => UpdateState(
     status: status ?? this.status,
     current: current,
@@ -86,6 +94,7 @@ class UpdateState {
     manualOnly: manualOnly ?? this.manualOnly,
     dismissed: dismissed ?? this.dismissed,
     lastChecked: lastChecked ?? this.lastChecked,
+    failure: clearFailure ? null : (failure ?? this.failure),
   );
 
   UpdateState withCurrent(AppVersion? v) => UpdateState(
@@ -98,6 +107,7 @@ class UpdateState {
     manualOnly: manualOnly,
     dismissed: dismissed,
     lastChecked: lastChecked,
+    failure: failure,
   );
 }
 
@@ -228,8 +238,51 @@ class UpdateService {
   void start() {
     if (_disabled) return;
     _timer?.cancel();
+    unawaited(checkPreviousInstall());
     Timer(const Duration(seconds: 5), _auto);
     _timer = Timer.periodic(checkInterval, (_) => _auto());
+  }
+
+  /// After an update attempt: says whether the new version is running. A
+  /// failed attempt (the old version came back) puts the log path and the
+  /// installer in [UpdateState.failure]; a successful one only clears the
+  /// marker.
+  Future<UpdateOutcome> checkPreviousInstall({DateTime? now}) async {
+    final cur = currentVersion;
+    if (_disabled || cur == null) {
+      return const UpdateOutcome(UpdateOutcomeKind.none);
+    }
+    final pending = await readPendingUpdate(tempDir);
+    final out = evaluateUpdateOutcome(
+      pending: pending,
+      running: cur,
+      now: now ?? DateTime.now(),
+      exitCode: pending == null ? null : await readInstallerExitCode(pending),
+    );
+    if (out.failed) {
+      _set(_state.copyWith(failure: out));
+    }
+    // the verdict is shown once: the marker goes either way
+    if (pending != null) await clearPendingUpdate(tempDir);
+    return out;
+  }
+
+  /// Hides the "update failed" notice.
+  void dismissFailure() => _set(_state.copyWith(clearFailure: true));
+
+  /// Runs the installer of a failed attempt visibly (the manual fallback).
+  Future<void> installManually(UpdateOutcome failure) async {
+    final path = failure.pending?.installerPath;
+    if (path == null || !await File(path).exists()) return;
+    if (Platform.isWindows) {
+      await Process.start(path, const [], mode: ProcessStartMode.detached);
+    } else {
+      await Process.start(
+        Platform.isMacOS ? 'open' : 'xdg-open',
+        [path],
+        mode: ProcessStartMode.detached,
+      );
+    }
   }
 
   Future<void> _auto() async {
@@ -354,6 +407,19 @@ class UpdateService {
       );
 
       _set(_state.copyWith(status: UpdateStatus.installing));
+      // remembered across the restart: the next start checks that the new
+      // version is really the one running
+      await writePendingUpdate(
+        tempDir,
+        PendingUpdate(
+          from: '${currentVersion ?? ''}',
+          target: '${release.version}',
+          installerPath: file.path,
+          logPath: updateLogPath(file),
+          resultPath: updateResultPath(file),
+          startedAt: DateTime.now(),
+        ),
+      );
       await installer!.install(file, exitApp: exitApp);
     } on UpdateVerifyException catch (e) {
       await _discard(file);
@@ -363,6 +429,7 @@ class UpdateService {
         VerifyFailure.badSignature => UpdateError.badSignature,
       }, e.detail);
     } on InstallException catch (e) {
+      await clearPendingUpdate(tempDir);
       _fail(
         e.noPermission ? UpdateError.noPermission : UpdateError.installFailed,
         e.message,
