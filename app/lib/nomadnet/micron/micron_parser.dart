@@ -535,14 +535,17 @@ class _Parser {
             italic = !italic;
           case 'F':
           case 'B':
-            if (line.length >= i + 4) {
+            // NomadNet indexes by code point, Dart strings by UTF-16 unit:
+            // take the colour from the code points after the tag.
+            final rest = line.substring(i + 1).runes.toList();
+            if (rest.length >= 3) {
               String color;
-              if (line[i + 1] == 'T' && line.length >= i + 8) {
-                color = line.substring(i + 2, i + 8);
-                skip = 7;
+              if (rest[0] == 0x54 /* T */ && rest.length >= 7) {
+                color = String.fromCharCodes(rest.sublist(1, 7));
+                skip = color.length + 1; // UTF-16 units consumed
               } else {
-                color = line.substring(i + 1, i + 4);
-                skip = 3;
+                color = String.fromCharCodes(rest.sublist(0, 3));
+                skip = color.length;
               }
               final v = parseMicronColor(color);
               if (c == 'F') {

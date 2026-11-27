@@ -16,6 +16,13 @@ typedef MicronLinkTap = void Function(
 const micronMinZoom = 0.5;
 const micronMaxZoom = 4.0;
 
+/// Programming ligatures (`->`, `!=`, `^=`...) off: a terminal draws each
+/// character separately.
+const _noLigatures = [
+  FontFeature.disable('calt'),
+  FontFeature.disable('liga'),
+];
+
 /// Renders a [MicronDocument]: monospace, selectable, theme aware, with
 /// working links, input fields, checkboxes, radio buttons and foldable
 /// headings. Nothing is loaded from anywhere: links only call [onLink].
@@ -420,6 +427,13 @@ class MicronViewState extends State<MicronView> {
       fontFamily: micronFontFamily,
       fontFamilyFallback: micronFontFallback,
       fontSize: _fs,
+      // Micron is a character grid: every glyph advances exactly
+      // [micronCharEm]. Do not inherit the theme's tracking (Material 3
+      // body text has +0.25 px per glyph, which skews every row of a
+      // colour-block map) and keep programming ligatures off.
+      letterSpacing: 0,
+      wordSpacing: 0,
+      fontFeatures: _noLigatures,
       height: solid ? 1.0 : 1.25,
       leadingDistribution: TextLeadingDistribution.even,
       color: fg,
