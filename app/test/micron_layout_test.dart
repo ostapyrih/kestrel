@@ -25,7 +25,7 @@ void main() {
 
     test('rule made of equals signs', () {
       expect(info('=' * 80).structural, isTrue);
-      expect(info('+' + '=' * 40 + '+').structural, isTrue);
+      expect(info('+${'=' * 40}+').structural, isTrue);
     });
 
     test('colour-block map row with labels', () {

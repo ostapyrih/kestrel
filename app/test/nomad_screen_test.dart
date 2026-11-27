@@ -242,8 +242,7 @@ void main() {
     await show(tester, size: const Size(1200, 800));
     await tester.tap(find.text('Beta Node'));
     await settle(tester);
-    requests.single.respond('>T
-body');
+    requests.single.respond('>T');
     await settle(tester);
     Future<void> pick(String text) async {
       await tester.tap(find.byKey(const ValueKey('nn-menu')));
