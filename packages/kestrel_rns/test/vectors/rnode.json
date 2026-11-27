@@ -1,0 +1,346 @@
+{
+  "detect": "c00873c05000c04800c04900c0",
+  "shutdown": [
+    "c00600c0",
+    "c00affc0"
+  ],
+  "configs": [
+    {
+      "name": "reticulum_manual_eu",
+      "freq": 867200000,
+      "bw": 125000,
+      "txp": 7,
+      "sf": 8,
+      "cr": 5,
+      "frames": [
+        "c00133b06c00c0",
+        "c0020001e848c0",
+        "c00307c0",
+        "c00408c0",
+        "c00505c0",
+        "c00601c0"
+      ],
+      "bitrate": 3125.0
+    },
+    {
+      "name": "fast_sf7",
+      "freq": 868100000,
+      "bw": 250000,
+      "txp": 14,
+      "sf": 7,
+      "cr": 5,
+      "frames": [
+        "c00133be27a0c0",
+        "c0020003d090c0",
+        "c0030ec0",
+        "c00407c0",
+        "c00505c0",
+        "c00601c0"
+      ],
+      "bitrate": 10937.5
+    },
+    {
+      "name": "long_range",
+      "freq": 867200000,
+      "bw": 62500,
+      "txp": 14,
+      "sf": 12,
+      "cr": 8,
+      "frames": [
+        "c00133b06c00c0",
+        "c0020000f424c0",
+        "c0030ec0",
+        "c0040cc0",
+        "c00508c0",
+        "c00601c0"
+      ],
+      "bitrate": 91.552734375
+    },
+    {
+      "name": "airtime_limits",
+      "freq": 868000000,
+      "bw": 125000,
+      "txp": 10,
+      "sf": 9,
+      "cr": 6,
+      "st": 10.0,
+      "lt": 1.5,
+      "frames": [
+        "c00133bca100c0",
+        "c0020001e848c0",
+        "c0030ac0",
+        "c00409c0",
+        "c00506c0",
+        "c00b03e8c0",
+        "c00c0096c0",
+        "c00601c0"
+      ],
+      "bitrate": 1464.84375
+    },
+    {
+      "name": "escaping_frequency",
+      "freq": 3235578048,
+      "bw": 125000,
+      "txp": 7,
+      "sf": 8,
+      "cr": 5,
+      "frames": [
+        "c001dbdcdbdd00dbdcc0",
+        "c0020001e848c0",
+        "c00307c0",
+        "c00408c0",
+        "c00505c0",
+        "c00601c0"
+      ],
+      "bitrate": 3125.0
+    }
+  ],
+  "data_out": [
+    {
+      "payload": "6869",
+      "frame": "c0006869c0",
+      "ready_after": false
+    },
+    {
+      "payload": "c0dbdcdd00",
+      "frame": "c000dbdcdbdddcdd00c0",
+      "ready_after": false
+    },
+    {
+      "payload": "5e3a22252de8420fc6f85b7622fb8e8a34293baa9528b23eb57733b28d64e26c8c59faf69b618314da8d89d6701a9d0e196cd9a931005a96e9b2fb0ee49835b6cba3c35a8b8231bdf2746b543cb00ba57a1963b141b38905ba83487d8c3e797816027dd1b85e359a7182d26ec6429f087469da26b10ebcadc32c564febe1ff439839854b4c257dfeadc04101d88be637fd04798a9d98e085b0d1ac0282a366cb849a3e0450a7dac8bc8eb4342dd5136c8687132221d5b8ed34ab56288734e53f0d4480b2184af98e685ecd644d8fd3e61e40eae0a53f2b4b55ed946fcd7927137627b0c2cad7e9f5cba4bbf8ac8e6c81ff38ab202913bced7454f1c9cadd71f9e9b798012442a31d5d1a572db6ab7a7570d0cd80dd356ab074e6a606cc2d9e2ae742c2b8e7c1947e702fe264",
+      "frame": "c0005e3a22252de8420fc6f85b7622fb8e8a34293baa9528b23eb57733b28d64e26c8c59faf69b618314da8d89d6701a9d0e196cd9a931005a96e9b2fb0ee49835b6cba3c35a8b8231bdf2746b543cb00ba57a1963b141b38905ba83487d8c3e797816027dd1b85e359a7182d26ec6429f087469da26b10ebcadc32c564febe1ff439839854b4c257dfeaddbdc4101d88be637fd04798a9d98e085b0d1ac0282a366cb849a3e0450a7dac8bc8eb4342dd5136c8687132221d5b8ed34ab56288734e53f0d4480b2184af98e685ecd644d8fd3e61e40eae0a53f2b4b55ed946fcd7927137627b0c2cad7e9f5cba4bbf8ac8e6c81ff38ab202913bced7454f1c9cadd71f9e9b798012442a31d5d1a572db6ab7a7570d0cd80dd356ab074e6a606cc2d9e2ae742c2b8e7c1947e702fe264c0",
+      "ready_after": false
+    }
+  ],
+  "flow": {
+    "written_before_ready": [
+      "c0006f6e65c0"
+    ],
+    "queued": [
+      "74776f"
+    ],
+    "written_after_ready": [
+      "c0006f6e65c0",
+      "c00074776fc0"
+    ]
+  },
+  "scripts": [
+    {
+      "name": "detect_response",
+      "stream": "c00846c0c0500152c0c04880c0c04981c0",
+      "detected": true,
+      "fw": [
+        1,
+        82
+      ],
+      "platform": 128,
+      "mcu": 129,
+      "r_frequency": null,
+      "r_bandwidth": null,
+      "r_txpower": null,
+      "r_sf": null,
+      "r_cr": null,
+      "r_state": null,
+      "rssi": null,
+      "snr": null,
+      "quality": null,
+      "bitrate": 0,
+      "data": [],
+      "airtime": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        null,
+        null
+      ],
+      "battery": [
+        0,
+        0
+      ],
+      "temp": null
+    },
+    {
+      "name": "config_echo",
+      "stream": "c00133b06c00c0c0020001e848c0c00307c0c00408c0c00505c0c00601c0",
+      "detected": false,
+      "fw": [
+        0,
+        0
+      ],
+      "platform": null,
+      "mcu": null,
+      "r_frequency": 867200000,
+      "r_bandwidth": 125000,
+      "r_txpower": 7,
+      "r_sf": 8,
+      "r_cr": 5,
+      "r_state": 1,
+      "rssi": null,
+      "snr": null,
+      "quality": null,
+      "bitrate": 3125.0,
+      "data": [],
+      "airtime": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        null,
+        null
+      ],
+      "battery": [
+        0,
+        0
+      ],
+      "temp": null
+    },
+    {
+      "name": "rx_with_rssi_snr",
+      "stream": "c00133b06c00c0c0020001e848c0c00307c0c00408c0c00505c0c00601c0c0234dc0c024e4c0c000dbdcdbdd010203c0",
+      "detected": false,
+      "fw": [
+        0,
+        0
+      ],
+      "platform": null,
+      "mcu": null,
+      "r_frequency": 867200000,
+      "r_bandwidth": 125000,
+      "r_txpower": 7,
+      "r_sf": 8,
+      "r_cr": 5,
+      "r_state": 1,
+      "rssi": -80,
+      "snr": -7.0,
+      "quality": 23.5,
+      "bitrate": 3125.0,
+      "data": [
+        "c0db010203"
+      ],
+      "airtime": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        null,
+        null
+      ],
+      "battery": [
+        0,
+        0
+      ],
+      "temp": null
+    },
+    {
+      "name": "rx_snr_positive_sf12",
+      "stream": "c00133b06c00c0c0020001e848c0c00307c0c0040cc0c00505c0c00601c0c0241ac0",
+      "detected": false,
+      "fw": [
+        0,
+        0
+      ],
+      "platform": null,
+      "mcu": null,
+      "r_frequency": 867200000,
+      "r_bandwidth": 125000,
+      "r_txpower": 7,
+      "r_sf": 12,
+      "r_cr": 5,
+      "r_state": 1,
+      "rssi": null,
+      "snr": 6.5,
+      "quality": 100.0,
+      "bitrate": 292.96875,
+      "data": [],
+      "airtime": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        null,
+        null
+      ],
+      "battery": [
+        0,
+        0
+      ],
+      "temp": null
+    },
+    {
+      "name": "channel_time_battery_temp",
+      "stream": "c025009603e8003201f47828ffc0c0270157c0c02991c0",
+      "detected": false,
+      "fw": [
+        0,
+        0
+      ],
+      "platform": null,
+      "mcu": null,
+      "r_frequency": null,
+      "r_bandwidth": null,
+      "r_txpower": null,
+      "r_sf": null,
+      "r_cr": null,
+      "r_state": null,
+      "rssi": null,
+      "snr": null,
+      "quality": null,
+      "bitrate": 0,
+      "data": [],
+      "airtime": [
+        1.5,
+        10.0,
+        0.5,
+        5.0,
+        -37,
+        -117
+      ],
+      "battery": [
+        1,
+        87
+      ],
+      "temp": 25
+    },
+    {
+      "name": "escaped_frequency",
+      "stream": "c001dbdcdbdd00dbdcc0",
+      "detected": false,
+      "fw": [
+        0,
+        0
+      ],
+      "platform": null,
+      "mcu": null,
+      "r_frequency": 3235578048,
+      "r_bandwidth": null,
+      "r_txpower": null,
+      "r_sf": null,
+      "r_cr": null,
+      "r_state": null,
+      "rssi": null,
+      "snr": null,
+      "quality": null,
+      "bitrate": 0,
+      "data": [],
+      "airtime": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        null,
+        null
+      ],
+      "battery": [
+        0,
+        0
+      ],
+      "temp": null
+    }
+  ],
+  "required_fw": [
+    1,
+    52
+  ],
+  "rssi_offset": 157
+}
