@@ -12,6 +12,7 @@ import 'update_outcome.dart';
 import 'releases.dart';
 import 'verify.dart';
 import 'version.dart';
+import 'windows_launch.dart';
 
 enum UpdateStatus {
   idle,
@@ -257,13 +258,16 @@ class UpdateService {
       pending: pending,
       running: cur,
       now: now ?? DateTime.now(),
-      exitCode: pending == null ? null : await readInstallerExitCode(pending),
+      log: pending == null ? null : await readInstallerLog(pending),
     );
     if (out.failed) {
       _set(_state.copyWith(failure: out));
     }
     // the verdict is shown once: the marker goes either way
     if (pending != null) await clearPendingUpdate(tempDir);
+    if (out.kind == UpdateOutcomeKind.succeeded) {
+      await deleteUpdateDir(pending!);
+    }
     return out;
   }
 
@@ -275,13 +279,12 @@ class UpdateService {
     final path = failure.pending?.installerPath;
     if (path == null || !await File(path).exists()) return;
     if (Platform.isWindows) {
-      await Process.start(path, const [], mode: ProcessStartMode.detached);
+      // the installer closes this app itself: it must outlive it
+      launchDetachedWindows('"$path"');
     } else {
-      await Process.start(
-        Platform.isMacOS ? 'open' : 'xdg-open',
-        [path],
-        mode: ProcessStartMode.detached,
-      );
+      await Process.start(Platform.isMacOS ? 'open' : 'xdg-open', [
+        path,
+      ], mode: ProcessStartMode.detached);
     }
   }
 
@@ -416,7 +419,6 @@ class UpdateService {
           target: '${release.version}',
           installerPath: file.path,
           logPath: updateLogPath(file),
-          resultPath: updateResultPath(file),
           startedAt: DateTime.now(),
         ),
       );
