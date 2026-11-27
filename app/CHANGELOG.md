@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.0](https://github.com/ostapyrih/kestrel/compare/app-v0.7.0...app-v0.8.0) (2026-11-27)
+
+
+### Features
+
+* delete chats on every device (own B, account A via MeshChatX, other devices' chats) ([#26](https://github.com/ostapyrih/kestrel/issues/26)) ([4ee6320](https://github.com/ostapyrih/kestrel/commit/4ee63205ab7e55269046b11616af60eee1e638f9))
+* NomadNet browser (Phase N) ([#28](https://github.com/ostapyrih/kestrel/issues/28)) ([d38ff56](https://github.com/ostapyrih/kestrel/commit/d38ff56873d0dee0aea01f114ab58746156270fa))
+
 ## [0.7.0](https://github.com/ostapyrih/kestrel/compare/app-v0.6.0...app-v0.7.0) (2026-11-27)
 
 

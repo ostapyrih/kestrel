@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/ostapyrih/kestrel/compare/bridge-v0.6.0...bridge-v0.7.0) (2026-11-27)
+
+
+### Features
+
+* delete chats on every device (own B, account A via MeshChatX, other devices' chats) ([#26](https://github.com/ostapyrih/kestrel/issues/26)) ([4ee6320](https://github.com/ostapyrih/kestrel/commit/4ee63205ab7e55269046b11616af60eee1e638f9))
+
 ## [0.6.0](https://github.com/ostapyrih/kestrel/compare/bridge-v0.5.0...bridge-v0.6.0) (2026-11-27)
 
 
