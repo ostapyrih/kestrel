@@ -110,6 +110,16 @@ Consequences:
 
 ---
 
+## Device group mode without the bridge (decided 2026-11-27, required before 1.0.0)
+The main way to use Kestrel on several devices does not need MeshChatX or the bridge.
+- **Two exclusive modes.** *Device group* (default, target for 1.0.0) and *MeshChatX bridge* (an optional feature for people who run MeshChatX as their main chat; it works as today, A = the MeshChatX identity on the server). They cannot be used at the same time; switching modes is explicit.
+- **A = the one main identity of the device group**, created by the first device and shared with every paired device (key transferred encrypted during QR pairing). It is the only identity used to talk to people, on every device.
+- **B = a hidden per-device identity**, used only between the user's own Kestrel clients (sync and coordination). Never shown in the UI, never used for chats. Existing B chats from earlier versions stay as read-only history.
+- **One announcer at a time.** Online devices agree which one announces A (prefer internet over LoRa-only, then a deterministic tie-break by device id); handover with a fresh announce; a device that hears no sibling announces itself. The announcing device receives inbound messages and forwards them to the siblings over the B channel; ratchet keys of A are shared over the same channel so any device can decrypt messages already in flight.
+- **Sync over LXMF between the devices' B destinations:** direct Link when both are online (bulk catch-up), via a propagation node otherwise (needs phase 5). Data format reuses the vault envelope (group key, per-device seq, tombstones). On LoRa only compact text events; history catch-up when on a fast link.
+- **One display name** for A, synced across devices; renaming on any device renames everywhere and is used in A's announces.
+- **Honest limit:** a lost/stolen device keeps A's private key. Remedy: "change address" (new A, contacts notified), not revocation.
+
 ## 4. Data model on the phone (SQLite)
 
 - `accounts` — `A` (bridge, remote) and `B` (local): hash, name, type.
@@ -142,6 +152,7 @@ Switching modes changes only `settings.bridge_enabled`; no DELETEs on data.
 | X | Chat deletion (owner request 2026-11-27) | delete own B chats, account A chats (in MeshChatX, all devices) and other devices' chats (everywhere, via vault tombstones); no resurrection on resync | ✅ app 0.8.0 + bridge 0.7.0 (PR #26) |
 | 5 | Propagation sync + offline queue | `B` fetches messages from a propagation node | ⬜ |
 | 6 | RNode: BLE on mobile, USB serial on desktop | KISS + radio config (parameters = those of the LoRa gateway), `LoRa` transport badge | ⬜ |
+| S | Device group sync without the bridge (decided 2026-11-27) | shared main identity A on all devices, hidden per-device B for sync, announcer election + handover, inbound forwarding, ratchet sharing, LXMF sync (direct + propagation), synced display name, change-address flow. Spike first on real RNS 1.6.1/LXMF 1.3.1. Order: 6 → 5 → S → **1.0.0**; voice (V) and 7 after 1.0.0 | 🟡 spike |
 | V | Voice: LXST calls + voice messages (decided 2026-11-27) | Live calls over LXST (compatible with Sideband / MeshChatX Telephone) only on fast transports (TCP/internet), Opus; from identity B, never through the bridge. On LoRa: **voice messages only** (no live calls) — record, compress with Codec2 (low bitrate), send as an LXMF audio field compatible with Sideband, play back. Call UI, ringing, earpiece/speaker, echo cancellation; incoming calls in the background tie in with phase 7 (CallKit on iOS). Scheduled after 6 and 5 | ⬜ |
 | 7 | iOS build on Mac + background notifications | `flutter build ios`, push without content | ⬜ |
 | D | Desktop builds (Windows/macOS/Linux) + USB RNode on desktop | PR #9 merged: Windows .zip, macOS .dmg, Linux tar.gz + AppImage (all unsigned) in releases; two-pane layout ≥ 900 px; device name setting; Windows/Linux CI. Remaining: USB RNode (Phase 6), verify unsigned macOS keychain on a real Mac | 🟡 builds done |
