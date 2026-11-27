@@ -235,6 +235,15 @@ class BridgeStore {
       [tsMs, m.id, m.id, chatId],
     );
     adb.notify();
+    if (ex == null && m.incoming) {
+      await repo.announceIncoming(
+        identity: 'A',
+        chatId: chatId,
+        hash: m.hash,
+        text: m.text,
+        ts: DateTime.fromMillisecondsSinceEpoch(tsMs),
+      );
+    }
     return id;
   }
 

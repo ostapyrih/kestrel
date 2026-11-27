@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:sqflite/sqflite.dart';
 
 import '../nomadnet/browser_sync.dart';
+import '../notifications/notification_models.dart';
 import 'database.dart';
 
 /// Delivery status shown on a message (docs/PLAN.md section 2.3).
@@ -213,6 +214,41 @@ class Repo {
   Repo(this.adb);
   final AppDatabase adb;
   Database get _db => adb.db;
+
+  final _incoming = StreamController<IncomingMessage>.broadcast();
+
+  /// Every message that was newly stored as incoming (never a duplicate, never
+  /// a message of another device's history): what notifications react to.
+  Stream<IncomingMessage> get incomingMessages => _incoming.stream;
+
+  /// Announces a stored incoming message. Account A messages only count while
+  /// their chat is unread (a conversation already read in MeshChatX is not
+  /// news), and a [ts] older than a day is history, not a new message.
+  Future<void> announceIncoming({
+    required String identity,
+    required int chatId,
+    required String hash,
+    required String text,
+    required DateTime ts,
+  }) async {
+    if (!_incoming.hasListener) return;
+    final c = await chat(chatId);
+    if (c == null) return;
+    if (identity == 'A' && c.unread == 0) return;
+    final old = DateTime.now().difference(ts) > const Duration(days: 1);
+    _incoming.add(
+      IncomingMessage(
+        identity: identity,
+        chatId: chatId,
+        peerHash: c.peerHash,
+        sender: c.displayTitle,
+        text: text,
+        hash: hash,
+        ts: ts,
+        isHistory: identity == 'A' && old,
+      ),
+    );
+  }
 
   /// Runs [query] now and again after every database change.
   Stream<T> watch<T>(Future<T> Function() query) async* {
@@ -910,6 +946,13 @@ FROM vault_chats c LEFT JOIN bridge_devices d ON d.device_id = c.device_id''';
     );
     await addLog(id, 'received', detail: route);
     adb.notify();
+    await announceIncoming(
+      identity: identity,
+      chatId: chatId,
+      hash: lxmfHash,
+      text: text,
+      ts: ts,
+    );
     return id;
   }
 

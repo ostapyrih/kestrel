@@ -6,6 +6,8 @@ import 'package:material_ui/material_ui.dart';
 
 import '../bridge/codec.dart';
 import '../l10n/strings.dart';
+import '../notifications/notification_providers.dart';
+import '../notifications/notification_strings.dart';
 import '../providers.dart';
 import '../storage/chat_target.dart';
 import '../storage/repo.dart';
@@ -34,10 +36,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   /// The chat row; null while this is a draft (nothing stored yet).
   late int? _chatId = widget.chatId;
   late final DraftTexts _drafts;
+  late final ChatFocus _focusTracker;
+  int? _tracked;
 
   @override
   void initState() {
     super.initState();
+    _focusTracker = ref.read(chatFocusProvider);
     _drafts = ref.read(draftTextsProvider.notifier);
     final d = widget.draft;
     if (_chatId == null && d != null) {
@@ -50,6 +55,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final id = _chatId;
       if (id == null) return;
+      _track(id);
       try {
         final repo = ref.read(repoProvider);
         // A chats: tell the bridge (it also clears the local flag first)
@@ -85,8 +91,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
+  /// Tells the notification logic which chat is on screen (no notification
+  /// for it, and its messages count as read).
+  void _track(int id) {
+    if (_tracked == id) return;
+    if (_tracked != null) _focusTracker.closed(_tracked!);
+    _tracked = id;
+    _focusTracker.opened(id);
+  }
+
   @override
   void dispose() {
+    if (_tracked != null) _focusTracker.closed(_tracked!);
     _text.dispose();
     _focus.dispose();
     super.dispose();
@@ -108,7 +124,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final sent = await ref
         .read(nodeProvider)
         .sendToPeer(d, t, viaNode: viaNode);
-    if (mounted) setState(() => _chatId = sent.chatId);
+    if (mounted) {
+      setState(() => _chatId = sent.chatId);
+      _track(sent.chatId);
+    }
   }
 
   /// Hardware keyboard: Enter / numpad Enter / Ctrl+Enter / Cmd+Enter send,
@@ -173,6 +192,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     return Scaffold(
       appBar: AppBar(
         actions: [
+          if (chat != null && !remote && chat.peerHash != null)
+            _MuteButton(identity: chat.accountIdentity, peer: chat.peerHash!),
           if (chat != null && isDeletable(chat))
             PopupMenuButton<String>(
               key: const ValueKey('chat-menu'),
@@ -577,4 +598,31 @@ String formatTimeSeconds(int ms) {
   final d = DateTime.fromMillisecondsSinceEpoch(ms);
   String two(int n) => n.toString().padLeft(2, '0');
   return '${two(d.hour)}:${two(d.minute)}:${two(d.second)}';
+}
+
+/// Bell in the app bar: mutes or unmutes notifications of one chat.
+class _MuteButton extends ConsumerWidget {
+  const _MuteButton({required this.identity, required this.peer});
+  final String identity;
+  final String peer;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final muted = ref
+        .watch(notificationPrefsProvider)
+        .value
+        ?.isMuted(identity, peer);
+    return IconButton(
+      key: const ValueKey('mute-chat'),
+      tooltip: nf(context, (muted ?? false) ? 'n_unmute_chat' : 'n_mute_chat'),
+      icon: Icon(
+        (muted ?? false)
+            ? Icons.notifications_off_outlined
+            : Icons.notifications_none,
+      ),
+      onPressed: () => ref
+          .read(notificationPrefsStoreProvider)
+          .setMuted(identity, peer, !(muted ?? false)),
+    );
+  }
 }

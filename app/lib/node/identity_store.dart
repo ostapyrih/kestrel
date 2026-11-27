@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:kestrel_rns/kestrel_rns.dart';
@@ -22,12 +23,43 @@ class SecureSecretStore implements SecretStore {
           );
   final FlutterSecureStorage _s;
 
-  @override
-  Future<String?> read(String key) => _s.read(key: key);
+  /// iOS background checks run while the phone is locked, when keychain items
+  /// of the default accessibility ("when unlocked") cannot be read. Every
+  /// secret is therefore mirrored under `<key>.bg` with "after first unlock".
+  /// Existing items are never modified or deleted, only copied.
+  static const _bgSuffix = '.bg';
+  static const _bgOptions = IOSOptions(
+    accessibility: KeychainAccessibility.first_unlock,
+  );
+  bool get _mirror => Platform.isIOS;
 
   @override
-  Future<void> write(String key, String value) =>
-      _s.write(key: key, value: value);
+  Future<String?> read(String key) async {
+    if (!_mirror) return _s.read(key: key);
+    try {
+      final b = await _s.read(key: '$key$_bgSuffix', iOptions: _bgOptions);
+      if (b != null && b.isNotEmpty) return b;
+    } on Object {
+      // fall through to the primary item
+    }
+    final v = await _s.read(key: key);
+    if (v != null && v.isNotEmpty) await _writeMirror(key, v);
+    return v;
+  }
+
+  @override
+  Future<void> write(String key, String value) async {
+    await _s.write(key: key, value: value);
+    if (_mirror) await _writeMirror(key, value);
+  }
+
+  Future<void> _writeMirror(String key, String value) async {
+    try {
+      await _s.write(key: '$key$_bgSuffix', value: value, iOptions: _bgOptions);
+    } on Object {
+      // best effort: the background check just cannot run while locked
+    }
+  }
 }
 
 class MemorySecretStore implements SecretStore {

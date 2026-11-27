@@ -118,6 +118,7 @@ class NodeService {
     this.interfaceFactory = defaultInterfaceFactory,
     this.transportConfig = const TransportConfig(),
     this.routerConfig = const LxmRouterConfig(),
+    this.announceOnConnect = true,
     KestrelStorage? rnsStorage,
   }) : _rnsStorage = rnsStorage ?? MemoryStorage();
 
@@ -126,6 +127,10 @@ class NodeService {
   final InterfaceFactory interfaceFactory;
   final TransportConfig transportConfig;
   final LxmRouterConfig routerConfig;
+
+  /// Announce when the connection comes up. A short background check runs
+  /// with this off: the foreground instance announces.
+  final bool announceOnConnect;
   final KestrelStorage _rnsStorage;
 
   BridgeService? _bridge;
@@ -239,7 +244,7 @@ class NodeService {
     _current = c;
     if (!_connection.isClosed) _connection.add(c);
     if (c == NodeConnection.online) {
-      if (!_announcedThisConnection) {
+      if (announceOnConnect && !_announcedThisConnection) {
         _announcedThisConnection = true;
         unawaited(announce());
       }
