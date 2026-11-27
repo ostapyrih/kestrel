@@ -248,21 +248,28 @@ class Strings {
     'delete_title_n': 'Видалити чатів: {n}?',
     'delete_confirm': 'Видалити',
     'delete_irreversible': 'Це неможливо скасувати.',
-    'delete_b_body':
-        'Чат, його повідомлення та журнал доставки буде видалено з цього пристрою.',
-    'delete_b_vault':
-        'Інші ваші пристрої теж приберуть свою копію цього чату (лише читання).',
-    'delete_a_body':
-        'Видалити на всіх пристроях і в MeshChatX: розмову буде видалено в MeshChatX і на всіх ваших пристроях.',
-    'delete_remote_body':
-        'Видалити цей чат на всіх пристроях, зокрема на «{device}». Повідомлення до цього моменту буде видалено і там; новіші залишаться.',
+    'delete_b_body': 'Чат, його повідомлення та журнал доставки буде видалено з цього пристрою.',
+    'delete_b_vault': 'Інші ваші пристрої теж приберуть свою копію цього чату (лише читання).',
+    'delete_a_body': 'Видалити на всіх пристроях і в MeshChatX: розмову буде видалено в MeshChatX і на всіх ваших пристроях.',
+    'delete_remote_body': 'Видалити цей чат на всіх пристроях, зокрема на «{device}». Повідомлення до цього моменту буде видалено і там; новіші залишаться.',
     'delete_unsent': 'Невідправлені повідомлення ({n}) буде скасовано.',
     'delete_a_offline':
         'Міст не підключено, тому чати акаунта A зараз не можна видалити.',
     'delete_a_old_bridge':
         'Цей міст застарів і не вміє видаляти чати. Оновіть міст.',
-    'delete_remote_no_vault':
-        'Щоб видалити чат іншого пристрою, синхронізація історії має бути активна.',
+    'delete_remote_no_vault': 'Щоб видалити чат іншого пристрою, синхронізація історії має бути активна.',
+    'delete_a_upstream': 'MeshChatX зараз недоступний, тому чати акаунта A не можна видалити. Спробуйте пізніше.',
+    'delete_progress': 'Видалення…',
+    'bridge_timeout': 'Міст не відповів вчасно. Спробуйте ще раз.',
+    'error_upstream': 'MeshChatX зараз недоступний. Спробуйте пізніше.',
+    'new_chat_as': 'Почати чат від імені',
+    'new_chat_a_queued': 'MeshChatX зараз недоступний: повідомлення A стануть у чергу й підуть, коли він повернеться.',
+    'vault_sync_now': 'Синхронізувати зараз',
+    'vault_diag_title': 'Діагностика',
+    'vault_diag_uploaded': 'Вивантажено блобів із цього пристрою: {n}',
+    'vault_diag_downloaded': 'Отримано від «{device}»: {n}',
+    'vault_diag_none': 'Нічого не отримано від інших пристроїв',
+    'vault_diag_error': 'Остання помилка: {err}',
     'select': 'Вибрати',
     'selected_n': 'Вибрано: {n}',
   };
@@ -478,17 +485,25 @@ class Strings {
         'The chat, its messages and delivery log are deleted from this device.',
     'delete_b_vault':
         'Your other devices remove their read-only copy of this chat too.',
-    'delete_a_body':
-        'Delete for all devices and in MeshChatX: the conversation is deleted in MeshChatX and on all your devices.',
-    'delete_remote_body':
-        'Delete this chat on all devices, including {device}. Messages up to now are removed there too; newer ones stay.',
+    'delete_a_body': 'Delete for all devices and in MeshChatX: the conversation is deleted in MeshChatX and on all your devices.',
+    'delete_remote_body': 'Delete this chat on all devices, including {device}. Messages up to now are removed there too; newer ones stay.',
     'delete_unsent': '{n} unsent message(s) will be cancelled.',
-    'delete_a_offline':
-        'The bridge is not connected, so chats of account A cannot be deleted now.',
+    'delete_a_offline': 'The bridge is not connected, so chats of account A cannot be deleted now.',
     'delete_a_old_bridge':
         'This bridge is too old to delete chats. Update the bridge.',
-    'delete_remote_no_vault':
-        'Deleting a chat of another device needs the history sync to be active.',
+    'delete_remote_no_vault': 'Deleting a chat of another device needs the history sync to be active.',
+    'delete_a_upstream': 'MeshChatX is unavailable, so chats of account A cannot be deleted now. Try again later.',
+    'delete_progress': 'Deleting…',
+    'bridge_timeout': 'The bridge did not answer in time. Try again.',
+    'error_upstream': 'MeshChatX is unavailable right now. Try again later.',
+    'new_chat_as': 'Start the chat as',
+    'new_chat_a_queued': 'MeshChatX is unavailable: account A messages will queue and go out when it is back.',
+    'vault_sync_now': 'Sync now',
+    'vault_diag_title': 'Diagnostics',
+    'vault_diag_uploaded': 'Blobs uploaded from this device: {n}',
+    'vault_diag_downloaded': 'Received from "{device}": {n}',
+    'vault_diag_none': 'Nothing received from other devices',
+    'vault_diag_error': 'Last error: {err}',
     'select': 'Select',
     'selected_n': 'Selected: {n}',
   };

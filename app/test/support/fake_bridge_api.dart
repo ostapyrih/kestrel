@@ -11,6 +11,7 @@ typedef Handler = FutureOr<Map<String, Object?>> Function(
 class FakeBridgeApi implements BridgeApi {
   final Map<String, Handler> handlers = {};
   final List<(String, Map<String, Object?>)> calls = [];
+  final Map<String, Duration?> timeouts = {};
   final _status = StreamController<BridgeStatus>.broadcast();
   final _pushes = StreamController<PushEvent>.broadcast();
   final _connected = StreamController<HelloResult>.broadcast();
@@ -130,6 +131,7 @@ class FakeBridgeApi implements BridgeApi {
   }) async {
     if (!up && !fallback) throw BridgeTransportError('bridge unreachable');
     calls.add((path, args));
+    timeouts[path] = timeout;
     final h = handlers[path];
     if (h == null) throw BridgeError('unknown_path', path);
     return h(args);

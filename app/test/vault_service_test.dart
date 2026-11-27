@@ -829,7 +829,8 @@ void main() {
       await svc.vault.onBlobPush();
       var c = (await repo.remoteChats()).single;
       expect((await repo.messages(c.id)).map((m) => m.text), ['one']);
-      expect(await svc.vault.store.cursor(), 0); // not advanced past the gap
+      // not advanced past the gap (blob 1 is done, blob 3 waits)
+      expect(await svc.vault.store.cursor(), 1);
       // the missing blob appears (vcursor order: it must come before 3)
       server.blobs.insert(
         1,
@@ -897,6 +898,148 @@ void main() {
         expect(api.callsTo('/vault/get').length, calls); // nothing re-fetched
       },
     );
+  });
+
+  group('field fixes', () {
+    test('a seq gap of one device does not block the others', () async {
+      await connect();
+      final chain = chainOf(svc.vault);
+      final third = 'cc' * 16;
+      server.blobs.add(await otherBlob(chain, 1, [rec('c1' * 16, 'one')]));
+      server.blobs.add(await otherBlob(chain, 3, [rec('c3' * 16, 'three')]));
+      server.blobs.add(
+        await otherBlob(chain, 1, [rec('d1' * 16, 'from third')], device: third),
+      );
+      for (var i = 0; i < server.blobs.length; i++) {
+        server.blobs[i]['vcursor'] = i + 1;
+      }
+      await svc.vault.onBlobPush();
+      final chats = await repo.remoteChats();
+      expect(chats.map((c) => c.remoteDeviceId).toSet(), {other, third});
+      final snap = await svc.vault.snapshot();
+      expect(snap.downloaded, {other: 1, third: 1});
+      // the gap is read again: the saved cursor stays in front of it
+      expect(await svc.vault.store.cursor(), 1);
+    });
+
+    test('a message that arrives while a pass runs is uploaded too', () async {
+      final orig = api.handlers['/vault/put']!;
+      var first = true;
+      api.handlers['/vault/put'] = (a) async {
+        if (first) {
+          first = false;
+          await addOwn('b2' * 16, 'typed during the upload', ts: 1700000009000);
+        }
+        return orig(a);
+      };
+      await addOwn('b1' * 16, 'first');
+      await connect();
+      expect(server.putLog.length, 2);
+      expect(await svc.vault.store.hasUploadWork(), isFalse);
+    });
+
+    test('the own history is uploaded although the download fails', () async {
+      api.handlers['/vault/list'] = (a) => throw BridgeError('internal', 'x');
+      await addOwn('b1' * 16, 'mine');
+      await connect();
+      expect(server.blobs, hasLength(1));
+      final snap = await svc.vault.snapshot();
+      expect(snap.state, VaultState.error);
+      expect(snap.lastError, 'download: internal');
+    });
+
+    test('"sync now" recovers from an error; diagnostics count blobs', () async {
+      final orig = api.handlers['/vault/list']!;
+      var broken = true;
+      api.handlers['/vault/list'] = (a) =>
+          broken ? throw BridgeError('internal', 'x') : orig(a);
+      await addOwn('b1' * 16, 'mine');
+      await connect();
+      expect((await svc.vault.snapshot()).state, VaultState.error);
+      broken = false;
+      server.blobs.add(await otherBlob(chainOf(svc.vault), 1, [rec('c1' * 16, 'x')]));
+      server.blobs.last['vcursor'] = server.blobs.length;
+      await svc.vault.syncNow();
+      await svc.vault.whenIdle();
+      final snap = await svc.vault.snapshot();
+      expect(snap.state, VaultState.idle);
+      expect(snap.lastError, isNull);
+      expect(snap.uploadedBlobs, 1);
+      expect(snap.downloaded, {other: 1});
+    });
+
+    test('the history sync runs although MeshChatX is down', () async {
+      api.handlers['/sync_chats'] = (a) =>
+          throw BridgeError('upstream_unavailable', 'x', {'retry_after': 10});
+      api.handlers['/list_rooms'] = (a) =>
+          throw BridgeError('upstream_unavailable', 'x');
+      await addOwn('b1' * 16, 'mine');
+      await connect();
+      expect(server.blobs, hasLength(1));
+      expect(svc.upstreamOk, isFalse);
+    });
+
+    test('the history sync runs although the chat sync blows up', () async {
+      api.handlers['/sync_chats'] = (a) => throw StateError('boom');
+      await addOwn('b1' * 16, 'mine');
+      await connect();
+      expect(server.blobs, hasLength(1));
+    });
+
+    test('a malformed blob is skipped; later blobs and own uploads go on', () async {
+      await connect();
+      final chain = chainOf(svc.vault);
+      // valid crypto, but records whose fields have the wrong types
+      server.blobs.add(
+        await otherBlob(chain, 1, [
+          {'hash': 5, 'peer': [], 'text': null, 'ts': 'x'},
+          {...rec('c0' * 16, 'x'), 'peer_name': 7, 'title': 3},
+        ]),
+      );
+      server.blobs.add(await otherBlob(chain, 2, [rec('c2' * 16, 'good')]));
+      for (var i = 0; i < server.blobs.length; i++) {
+        server.blobs[i]['vcursor'] = i + 1;
+      }
+      await addOwn('b1' * 16, 'mine');
+      await svc.vault.onBlobPush();
+      final c = (await repo.remoteChats()).single;
+      expect((await repo.messages(c.id)).map((m) => m.text), contains('good'));
+      expect(server.putLog, isNotEmpty);
+      expect((await svc.vault.snapshot()).downloaded[other], 2);
+    });
+
+    test('an invite-adopted device (iPhone) downloads a blob pushed later '
+        'and shows it as a remote chat', () async {
+      final gk = {1: VaultCrypto.generateGroupKey()};
+      final secret = secureRandomBytes(32);
+      server
+        ..inUse = true
+        ..epoch = 1;
+      server.wrapped[me] = await VaultCrypto.wrapToInvite(gk, secret);
+      server.wrapKind[me] = 'invite';
+      await svc.vault.rememberInviteSecret(secret);
+      await connect(vaultInUse: true);
+      expect(chainOf(svc.vault).keys.toSet(), {1});
+      // the other device uploads AFTER this one connected: only the
+      // vault.blob push (topic `vault`) tells it
+      server.blobs.add(await otherBlob(gk, 1, [rec('c1' * 16, 'from windows')]));
+      api.push('vault.blob', {'blob_id': 'x'});
+      await svc.flushEvents();
+      await svc.vault.whenIdle();
+      final c = (await repo.remoteChats()).single;
+      expect((await repo.messages(c.id)).single.text, 'from windows');
+    });
+
+    test('a vault.blob push downloads another device history', () async {
+      await connect();
+      server.blobs.add(
+        await otherBlob(chainOf(svc.vault), 1, [rec('c1' * 16, 'hello')]),
+      );
+      api.push('vault.blob', {'blob_id': 'x'});
+      await svc.flushEvents();
+      await svc.vault.whenIdle();
+      expect(await repo.remoteChats(), hasLength(1));
+    });
   });
 
   group('bridge off', () {

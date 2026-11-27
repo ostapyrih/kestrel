@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -943,6 +944,122 @@ void main() {
       await svc.flushEvents();
       expect((await svc.store.rrcMessages('ee' * 16, 'general')).length, 3);
       expect((await svc.store.rooms()).single.unread, 1);
+    });
+  });
+
+  group('field fixes', () {
+    test('a resync requested while one is running is not dropped', () async {
+      await up();
+      final gate = Completer<void>();
+      var n = 0;
+      api.handlers['/sync_chats'] = (a) async {
+        n++;
+        if (n == 1) await gate.future;
+        return {
+          'state_id': 'state1',
+          'cursor': 9,
+          'reset': false,
+          'more': false,
+          'lxmf': <Object?>[],
+          'rrc': <Object?>[],
+          'deleted': n == 1
+              ? <Object?>[]
+              : [
+                  {'peer': peer, 'before_ts': 1700009999.0},
+                ],
+        };
+      };
+      final first = svc.resync();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      final chat = (await svc.store.chatIdForPeer(peer))!;
+      expect(await repo.chat(chat), isNotNull);
+      // a reconnect resyncs while the first one is still running
+      await svc.resync(helloStateId: 'state1');
+      gate.complete();
+      await first;
+      expect(n, 2);
+      expect(await repo.chat(chat), isNull); // the deletion was applied
+    });
+
+    test('a timed out sync on a live link is retried by itself', () async {
+      await up();
+      var n = 0;
+      api.handlers['/sync_chats'] = (a) {
+        n++;
+        if (n == 1) throw BridgeTransportError('request timed out');
+        return {
+          'state_id': 'state1',
+          'cursor': 9,
+          'reset': false,
+          'more': false,
+          'lxmf': <Object?>[],
+          'rrc': <Object?>[],
+        };
+      };
+      await svc.resync();
+      expect(n, 1);
+      // the retry timer is 15 s: not waited for here, just made sure the
+      // service stays usable and a manual resync works
+      await svc.resync();
+      expect(n, 2);
+    });
+
+    test('A chats cannot be deleted while MeshChatX is unavailable: fails '
+        'fast, no request, nothing removed', () async {
+      api.handlers['/delete_chat'] = (a) => {'peer': a['peer']};
+      await up();
+      final chat = (await svc.store.chatIdForPeer(peer))!;
+      api.handlers['/sync_chats'] = (a) =>
+          throw BridgeError('upstream_unavailable', 'x', {'retry_after': 10});
+      await svc.resync();
+      expect(svc.upstreamOk, isFalse);
+      api.connect(
+        helloFor(me, capabilities: ['lxmf', 'delete_chat']),
+      ); // link is up, bridge can delete
+      await svc.flushEvents();
+      await expectLater(
+        svc.deleteAChat(chat),
+        throwsA(
+          isA<BridgeError>().having(
+            (e) => e.code,
+            'code',
+            'upstream_unavailable',
+          ),
+        ),
+      );
+      expect(api.callsTo('/delete_chat'), isEmpty);
+      expect(await repo.chat(chat), isNotNull);
+    });
+
+    test('the delete request has its own short timeout', () async {
+      api.handlers['/delete_chat'] = (a) => {'peer': a['peer']};
+      api.connect(helloFor(me, capabilities: ['lxmf', 'delete_chat']));
+      await svc.flushEvents();
+      final chat = (await svc.store.chatIdForPeer(peer))!;
+      await svc.deleteAChat(chat);
+      expect(api.timeouts['/delete_chat'], BridgeService.deleteTimeout);
+      expect(BridgeService.deleteTimeout, lessThanOrEqualTo(const Duration(seconds: 30)));
+    });
+
+    test('an A chat can be started offline; its message queues', () async {
+      api.disconnect();
+      final id = await svc.openAChat(peer.toUpperCase(), name: 'New');
+      final chat = await repo.chat(id);
+      expect(chat!.accountIdentity, 'A');
+      expect(chat.peerHash, peer);
+      final mid = await svc.sendMessage(id, 'hello later');
+      final m = await repo.message(mid);
+      expect(m!.status, 'queued');
+      expect(m.senderIdentity, 'A');
+      // the link comes back: the queued message goes out
+      api.handlers['/send_lxmf'] = (a) => {
+        'lxmf_hash': 'ee' * 16,
+        'state': 'sent',
+        'method': 'direct',
+      };
+      await up();
+      await svc.flushEvents();
+      expect(api.callsTo('/send_lxmf').single['text'], 'hello later');
     });
   });
 

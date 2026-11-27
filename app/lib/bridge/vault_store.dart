@@ -256,6 +256,17 @@ LIMIT ?''',
     'last_seq': seq,
   }, conflictAlgorithm: ConflictAlgorithm.replace);
 
+  /// Last `seq` read per other device (blobs downloaded from it).
+  Future<Map<String, int>> seenAll() async => {
+    for (final r in await _db.query('vault_seen'))
+      r['device_id']! as String: r['last_seq']! as int,
+  };
+
+  Future<String?> lastError() async {
+    final v = await repo.getSetting(SettingKeys.vaultLastError);
+    return (v == null || v.isEmpty) ? null : v;
+  }
+
   /// Number of other devices whose history was downloaded.
   Future<int> remoteDeviceCount() async =>
       Sqflite.firstIntValue(

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:kestrel_rns/kestrel_rns.dart';
 
 import '../node/identity_store.dart';
+import '../storage/database.dart';
 import '../storage/repo.dart';
 import 'bridge_connection.dart';
 import 'codec.dart';
@@ -39,6 +40,9 @@ class VaultStatus {
     this.quotaBytes = 0,
     this.remoteDevices = 0,
     this.skippedBlobs = 0,
+    this.uploadedBlobs = 0,
+    this.downloaded = const {},
+    this.lastError,
   });
 
   final VaultState state;
@@ -49,6 +53,15 @@ class VaultStatus {
 
   /// Blobs of this session that failed to decrypt or verify and were skipped.
   final int skippedBlobs;
+
+  /// Blobs this device has uploaded (its upload sequence number).
+  final int uploadedBlobs;
+
+  /// Blobs downloaded per other device id (the last `seq` read).
+  final Map<String, int> downloaded;
+
+  /// The last failure of a sync pass (cleared by the next good pass).
+  final String? lastError;
 }
 
 /// The group-key chain and the invite secret, kept in the secure store and
@@ -133,6 +146,8 @@ class VaultService {
     required this.ownDeviceId,
     this.debounce = const Duration(seconds: 2),
     this.gapRetry = const Duration(seconds: 30),
+    this.pollEvery = const Duration(minutes: 5),
+    this.errorRetry = const Duration(seconds: 60),
   }) : store = VaultStore(repo);
 
   final Repo repo;
@@ -142,6 +157,8 @@ class VaultService {
   final String Function() ownDeviceId;
   final Duration debounce;
   final Duration gapRetry;
+  final Duration pollEvery;
+  final Duration errorRetry;
 
   /// Cancels queued B messages in the LXMF router (by hash) before another
   /// device's `delete_chat` removes them here; wired by `NodeService`.
@@ -162,6 +179,8 @@ class VaultService {
   bool _noKeySkips = false;
   Timer? _debounce;
   Timer? _retry;
+  Timer? _poll;
+  String? _lastError;
   StreamSubscription<void>? _dbSub;
   final List<DateTime> _putTimes = [];
   Future<void> _running = Future.value();
@@ -196,6 +215,7 @@ class VaultService {
   Future<void> detach() async {
     _debounce?.cancel();
     _retry?.cancel();
+    _poll?.cancel();
     await _dbSub?.cancel();
     _dbSub = null;
     _api = null;
@@ -228,6 +248,15 @@ class VaultService {
   Future<void> onConnected(HelloResult h) {
     _hello = h;
     _epoch = h.vaultKeyEpoch;
+    // a safety net for a missed `vault.blob` push: look again from time to time
+    _poll?.cancel();
+    _poll = Timer.periodic(pollEvery, (_) => unawaited(_schedule()));
+    return _schedule(immediate: true);
+  }
+
+  /// "Sync now": a full pass (keys, download, upload), also after an error.
+  Future<void> syncNow() {
+    _retry?.cancel();
     return _schedule(immediate: true);
   }
 
@@ -264,13 +293,38 @@ class VaultService {
 
   Future<void> _runPasses() async {
     try {
+      var rounds = 0;
       do {
         _again = false;
         await _pass();
+        // messages that arrived while the pass ran: the database change that
+        // announced them was ignored because the pass was busy
+        if (!_again &&
+            _api != null &&
+            _state == VaultState.idle &&
+            rounds < 20 &&
+            await _hasUploadWorkSafe()) {
+          _again = true;
+        }
+        rounds++;
       } while (_again && _api != null);
     } finally {
       _busy = false;
     }
+  }
+
+  Future<bool> _hasUploadWorkSafe() async {
+    try {
+      return await store.hasUploadWork();
+    } on Object {
+      return false; // database closed (shutdown)
+    }
+  }
+
+  void _fail(String what) {
+    _lastError = what;
+    unawaited(repo.setSetting(SettingKeys.vaultLastError, what));
+    _scheduleRetry(errorRetry.inSeconds.toDouble());
   }
 
   Future<void> _pass() async {
@@ -278,31 +332,51 @@ class VaultService {
     final h = _hello;
     if (api == null || h == null) return;
     _setState(VaultState.syncing);
+    _lastError = null;
     try {
       await noteHello(h);
       if (!await _ensureKeys()) {
         _setState(VaultState.needsKey);
         return;
       }
-      await _download(api, h);
+      try {
+        await _download(api, h);
+      } on BridgeError catch (e) {
+        // a failed download must not keep this device's own history from
+        // being uploaded
+        if (e.code == 'device_revoked') rethrow;
+        _fail('download: ${e.code}');
+        debugPrint('vault download: ${e.code}');
+      } on BridgeTransportError {
+        rethrow;
+      } on Object catch (e) {
+        if (_api == null) return;
+        _fail('download: $e');
+        debugPrint('vault download failed: $e');
+      }
       final stop = await _upload(api, h);
       if (stop == VaultState.quotaFull) {
         _setState(VaultState.quotaFull);
       } else if (stop == VaultState.error) {
         _setState(VaultState.error);
       } else {
-        _setState(VaultState.idle);
+        _setState(_lastError == null ? VaultState.idle : VaultState.error);
+        if (_lastError == null) {
+          await repo.setSetting(SettingKeys.vaultLastError, '');
+        }
       }
-      await store.touchLastSync(DateTime.now());
+      if (_lastError == null) await store.touchLastSync(DateTime.now());
     } on BridgeTransportError {
       _setState(VaultState.off);
     } on BridgeError catch (e) {
       debugPrint('vault sync: ${e.code}');
       _setState(e.code == 'device_revoked' ? VaultState.off : VaultState.error);
+      if (e.code != 'device_revoked') _fail(e.code);
     } on Object catch (e, st) {
       if (_api == null) return; // detached meanwhile (bridge off, stop)
       debugPrint('vault sync failed: $e\n$st');
       _setState(VaultState.error);
+      _fail('$e');
     }
   }
 
@@ -670,6 +744,7 @@ class VaultService {
             return VaultState.idle;
           default:
             debugPrint('vault put refused: ${e.code}');
+            _fail('upload: ${e.code}');
             return VaultState.error;
         }
       }
@@ -692,6 +767,11 @@ class VaultService {
     final maxIds = h.limit('vault_get_max_ids', 32);
     var cursor = await store.cursor();
     var refreshedKeys = false;
+    // First blob a device is missing: the saved cursor never moves past it,
+    // so the next pass reads it again; blobs of OTHER devices behind it are
+    // still applied (a gap in one device's sequence blocks only that device).
+    int? holdAt;
+    final gapped = <String>{};
     while (true) {
       final r = await api.call('/vault/list', {'cursor': cursor, 'limit': 100});
       final metas = [for (final m in asMapList(r['blobs'])) ?_Meta.tryParse(m)];
@@ -703,7 +783,9 @@ class VaultService {
         );
         final wanted = [
           for (final m in chunk)
-            if (m.deviceId != own && m.seq > await store.seen(m.deviceId))
+            if (m.deviceId != own &&
+                !gapped.contains(m.deviceId) &&
+                m.seq > await store.seen(m.deviceId))
               m.blobId,
         ];
         final got = await _fetch(api, wanted);
@@ -711,12 +793,13 @@ class VaultService {
           if (m.deviceId == own) continue;
           final seen = await store.seen(m.deviceId);
           if (m.seq <= seen) continue;
+          if (gapped.contains(m.deviceId)) continue;
           if (m.seq > seen + 1) {
             // a blob of this device is not uploaded (yet): try again later
             debugPrint('vault: gap for a device (have $seen, got ${m.seq})');
-            _retry?.cancel();
-            _retry = Timer(gapRetry, () => unawaited(_schedule()));
-            return;
+            gapped.add(m.deviceId);
+            holdAt ??= m.vcursor - 1;
+            continue;
           }
           final ct = got[m.blobId];
           if (ct == null) {
@@ -738,9 +821,13 @@ class VaultService {
           await store.setSeen(m.deviceId, m.seq);
         }
         cursor = chunk.last.vcursor;
-        await store.saveCursor(cursor);
+        await store.saveCursor(holdAt == null || cursor < holdAt ? cursor : holdAt);
       }
       if (r['more'] != true) break;
+    }
+    if (holdAt != null) {
+      _retry?.cancel();
+      _retry = Timer(gapRetry, () => unawaited(_schedule()));
     }
   }
 
@@ -786,6 +873,13 @@ class VaultService {
     } on VaultCryptoException catch (e) {
       _skipped++;
       debugPrint('vault: blob skipped (${e.message})');
+    } on Object catch (e) {
+      // a malformed blob of another device (unexpected types, ...) is
+      // skipped like an undecryptable one: it must not stall the sync of
+      // every later blob, nor this device's own uploads
+      if (_api == null) rethrow;
+      _skipped++;
+      debugPrint('vault: blob skipped (malformed: $e)');
     }
   }
 
@@ -828,6 +922,9 @@ class VaultService {
     quotaBytes: await store.quotaBytes(),
     remoteDevices: await store.remoteDeviceCount(),
     skippedBlobs: _skipped,
+    uploadedBlobs: await store.lastSeq(),
+    downloaded: await store.seenAll(),
+    lastError: _lastError ?? await store.lastError(),
   );
 
   /// Refreshes the stored usage numbers from `/hello`.

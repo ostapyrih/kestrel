@@ -128,6 +128,12 @@ class BridgeRejected implements Exception {
 
 typedef AllowFallback = bool Function();
 
+/// Push topics the app subscribes to. `vault` is a topic of its own: without
+/// it the bridge never sends `vault.blob`, so a history another device
+/// uploaded (or a `delete_chat` blob) would only be read after the next
+/// reconnect.
+const bridgeSubscribeTopics = ['lxmf', 'rrc', 'vault'];
+
 /// Link based connection with reconnect/back-off, keepalive, push reception
 /// (packets and Resources) and the LXMF command fallback.
 class BridgeConnection implements BridgeApi {
@@ -143,6 +149,8 @@ class BridgeConnection implements BridgeApi {
     this.retryMax = const Duration(seconds: 60),
     this.rejectedRetry = const Duration(seconds: 30),
     this.keepaliveEvery = const Duration(seconds: 90),
+    this.keepaliveTimeout = const Duration(seconds: 30),
+    this.keepaliveMisses = 2,
     this.linkTimeout = const Duration(seconds: 25),
     this.requestTimeout = const Duration(seconds: 30),
     this.lxmfTimeout = const Duration(minutes: 3),
@@ -164,6 +172,8 @@ class BridgeConnection implements BridgeApi {
   final Duration retryMax;
   final Duration rejectedRetry;
   final Duration keepaliveEvery;
+  final Duration keepaliveTimeout;
+  final int keepaliveMisses;
   final Duration linkTimeout;
   final Duration requestTimeout;
   final Duration lxmfTimeout;
@@ -189,6 +199,7 @@ class BridgeConnection implements BridgeApi {
   int _rejectedStreak = 0;
   double _clockOffset = 0;
   Completer<void>? _wake;
+  String? _closeReason;
   final Map<String, Completer<Map<String, Object?>>> _lxmfPending = {};
   String? _deviceName;
   String? _platform;
@@ -463,23 +474,30 @@ class BridgeConnection implements BridgeApi {
       final h = HelloResult.fromMap(hello);
       _clockOffset = h.time - _clock();
       await _request(link, '/subscribe', {
-        'topics': ['lxmf', 'rrc'],
+        'topics': bridgeSubscribeTopics,
         'profile': 'full',
       }, null);
       _rejectedStreak = 0;
       onSuccess();
       _set(BridgeState.connected, hello: h);
       if (!_connected.isClosed) _connected.add(h);
-      // keepalive: the Link has its own, this also detects a dead bridge
+      // keepalive: the Link has its own, this also detects a dead bridge. One
+      // slow answer (a busy bridge, a long transfer on the same Link) must
+      // not drop a healthy Link: only consecutive failures do.
+      var misses = 0;
       final ka = Timer.periodic(keepaliveEvery, (_) async {
         try {
           await _request(link, '/hello', {
             'protocol_version': bridgeProtocolVersion,
-          }, const Duration(seconds: 20));
+          }, keepaliveTimeout);
+          misses = 0;
         } on BridgeError {
-          // answered: alive
+          misses = 0; // answered: alive
         } on Object {
-          unawaited(link.teardown());
+          if (++misses >= keepaliveMisses) {
+            _closeReason = 'keepalive failed';
+            unawaited(link.teardown());
+          }
         }
       });
       try {
@@ -488,7 +506,11 @@ class BridgeConnection implements BridgeApi {
         ka.cancel();
       }
       if (_running && !_terminal) {
-        _set(BridgeState.unreachable, detail: 'link closed');
+        _set(
+          BridgeState.unreachable,
+          detail: _closeReason ?? 'link closed (${link.teardownReason?.name})',
+        );
+        _closeReason = null;
       }
     } finally {
       if (identical(_link, link)) _link = null;
@@ -575,6 +597,7 @@ class BridgeConnection implements BridgeApi {
 
   static bool lxmfAllowed(String path) =>
       path != '/subscribe' &&
+      path != '/delete_chat' && // Link only: over LXMF it would just hang
       !path.startsWith('/devices/') &&
       !path.startsWith('/vault/');
 
