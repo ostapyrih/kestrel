@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.10.0](https://github.com/ostapyrih/kestrel/compare/app-v0.9.1...app-v0.10.0) (2026-11-27)
+
+
+### Features
+
+* address change spreads to all group devices; history backfill for new devices ([#51](https://github.com/ostapyrih/kestrel/issues/51)) ([038883e](https://github.com/ostapyrih/kestrel/commit/038883ede524d0cecfa390fc0f40762936a25fb5))
+* **app:** compact mail-via-node settings, node picker, default propagation node ([#44](https://github.com/ostapyrih/kestrel/issues/44)) ([ff7f1e7](https://github.com/ostapyrih/kestrel/commit/ff7f1e70c9aac90d53b614a695a5e010e8dc3875))
+* **app:** notifications and background operation (Phase 7) ([#46](https://github.com/ostapyrih/kestrel/issues/46)) ([254aa5d](https://github.com/ostapyrih/kestrel/commit/254aa5dec0feba27a8c8de5cd854935735a59a8c))
+* device group sync without the bridge (Phase S) ([#50](https://github.com/ostapyrih/kestrel/issues/50)) ([e7fb4e4](https://github.com/ostapyrih/kestrel/commit/e7fb4e456a89d1c44b3b162f64a252811f29d3a2))
+* RNode LoRa interface over BLE and USB serial, radio settings (Phase 6) ([#47](https://github.com/ostapyrih/kestrel/issues/47)) ([8d3e069](https://github.com/ostapyrih/kestrel/commit/8d3e06921ee746bea97f4f132ef3896dedf5b6cf))
+
+
+### Bug Fixes
+
+* **app:** chat list badge overflow; update outdated tests ([#52](https://github.com/ostapyrih/kestrel/issues/52)) ([af3381b](https://github.com/ostapyrih/kestrel/commit/af3381bc3c945db9a09103903ca34bc5dd6ec642))
+* **app:** keep Micron cells on the character grid ([#48](https://github.com/ostapyrih/kestrel/issues/48)) ([b5c61cf](https://github.com/ostapyrih/kestrel/commit/b5c61cf1fc6d8e99af854c3c33c7b754f719676f))
+* **app:** update default propagation node hash ([#53](https://github.com/ostapyrih/kestrel/issues/53)) ([65a6ca9](https://github.com/ostapyrih/kestrel/commit/65a6ca90224b8c2d9e575533db8e66ce27d03800))
+
 ## [0.9.1](https://github.com/ostapyrih/kestrel/compare/app-v0.9.0...app-v0.9.1) (2026-11-27)
 
 
