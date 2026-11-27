@@ -83,7 +83,7 @@ for synchronous SHA/HMAC. `pointycastle` was not needed.
   (announced, validated on an isolate, `enforceStamps` off by default like Python).
 * `LxmStore`: pluggable persistence of the outbound queue and inbound dedup (`MemoryLxmStore`
   ships; the app provides SQLite).
-* PROPAGATED: API shape kept, throws `UnsupportedError` until Phase 5. Tickets: not implemented
+* PROPAGATED (client side of LXMF propagation, see below). Tickets: not implemented
   (incoming ticket fields are ignored, no ticket stamps generated).
 
 ```dart
@@ -98,6 +98,52 @@ await out.done;
 Interop is tested against Python LXMF 1.3.1 (`tools/it/lxmf_peer.py`): Dart to Python and back,
 opportunistic, direct, resource-sized messages, delivery proofs, stamp-requiring peers in both
 directions, path discovery after a late announce.
+
+### Propagation (offline mail, Phase 5)
+
+Kestrel is only ever a *client* of LXMF propagation nodes; it never runs one, peers with one or
+forwards for others.
+
+* **Discovery:** `lxmf.propagation` announces are decoded (`PropagationNodeData`: enabled flag,
+  per-message and per-sync limits in kB, stamp cost, flexibility, peering cost, name; the
+  transitional fractional costs of LXMF 1.3.x are honoured). `router.propagationNodes` lists
+  hash, name, hops, last heard, limits, stamp cost, enabled; known nodes are restored from the
+  persisted announces.
+* **Selection:** a pinned node (`setPinnedNode`) always wins; otherwise `activeNode` is the
+  nearest (fewest hops) enabled node heard recently, kept until it becomes unreachable (two
+  consecutive failures park it for `nodeUnreachableFor`). `PropagationNodeSelector` is pure.
+* **Upload:** `send(method: LxmfMethod.propagated)` encrypts for the recipient (announced
+  ratchet if known), attaches the propagation stamp the node requires (`LxmStamper.generatePn`:
+  1000-round workblock over the transient id, target cost from the announce, generated on an
+  isolate) and sends `msgpack([time, [lxmf_data + stamp]])` over a link to the node: one
+  link packet when it fits (acknowledged by the node's proof), otherwise a Resource with the
+  app flag. The final state is `LxmState.sent` ("the node has it"). A node answering
+  `ERROR_INVALID_STAMP` (0xf5) gives `rejected`; messages over the announced per-message or
+  per-sync limit fail locally. A resource-sized upload is proven before the node validates its
+  stamps, exactly as in the reference.
+* **Fallback:** when OPPORTUNISTIC/DIRECT delivery gives up (attempts exhausted or the path
+  never appeared) and a node is available, the message is re-queued as PROPAGATED once
+  (`fallbackToPropagation`, on by default). The message hash does not change, so a late direct
+  delivery is deduplicated.
+* **Inbox sync:** `syncInbox()` requests the list, downloads the wanted messages (our per-transfer
+  limit is sent to the node; oversize messages stay there and show up in `remaining`),
+  decrypts them with the delivery identity and its ratchets, deduplicates by **LXMF message
+  hash** (never by transient id), persists them and only then sends the "haves" that make the
+  node delete its copy. A message that cannot be decrypted or persisted is not acknowledged. The
+  persistence step is `router.inboundPersister`, which is awaited before a message counts as
+  handled. `lastSync`, `syncProgress` and `syncEvents` report phase, progress and result;
+  triggers are start/connect, `setSyncInterval` (default 15 minutes) and manual calls.
+* **Multi-device:** a node deletes a message after the first download, so with one identity on
+  several devices exactly one may sync (`inboxSyncEnabled`, see `docs/spikes/device-group.md` section 4).
+* **Stamp search speed:** for block-aligned workblocks (all LXMF stamps) the workblock is
+  compressed once (`Sha256Midstate`) and each candidate costs one SHA-256 compression, so a
+  cost-16 propagation stamp takes a fraction of a second on a desktop CPU (deriving the
+  workblock dominates; the search itself is cheap).
+
+Interop is tested against a real Python LXMF 1.3.1 propagation node and client on loopback
+(`test/integration/propagation_test.dart`, `tools/it/lxmf_peer.py --propagation`): Dart to
+Python and Python to Dart through the node, stamp enforcement, resource uploads, limits, crash
+safety of the haves, dedup, fallback.
 
 ## Compatibility matrix
 
