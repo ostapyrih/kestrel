@@ -561,6 +561,9 @@ class _BrowserPaneState extends ConsumerState<BrowserPane> {
   String? _shownUrl;
   bool _bookmarked = false;
   String? _lastSavedPrompt;
+  String? _prefsHash;
+  double _zoom = 1;
+  bool _wrapAll = false;
 
   BrowserController get c => widget.controller;
 
@@ -597,6 +600,7 @@ class _BrowserPaneState extends ConsumerState<BrowserPane> {
     c.isBookmarked().then((b) {
       if (mounted && b != _bookmarked) setState(() => _bookmarked = b);
     });
+    _loadPrefs();
     final a = c.pendingAnchor;
     if (a != null && c.phase == BrowserPhase.loaded) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -605,6 +609,35 @@ class _BrowserPaneState extends ConsumerState<BrowserPane> {
       c.pendingAnchor = null;
     }
   }
+
+  /// Loads the zoom / wrap preferences of the node being browsed.
+  Future<void> _loadPrefs() async {
+    final h = (c.current ?? c.target)?.hashHex;
+    if (h == null || h == _prefsHash) return;
+    _prefsHash = h;
+    final row = await ref.read(nomadServiceProvider).store.node(h);
+    if (!mounted || _prefsHash != h) return;
+    setState(() {
+      _zoom = row?.fontScale ?? 1;
+      _wrapAll = row?.wrapAll ?? false;
+    });
+  }
+
+  void _savePrefs({double? zoom, bool? wrapAll}) {
+    if (zoom != null) _zoom = zoom;
+    if (wrapAll != null) _wrapAll = wrapAll;
+    setState(() {});
+    final h = _prefsHash;
+    if (h == null) return;
+    ref
+        .read(nomadServiceProvider)
+        .store
+        .setViewPrefs(h, fontScale: zoom, wrapAll: wrapAll);
+  }
+
+  void _stepZoom(double factor) => _savePrefs(
+    zoom: (_zoom * factor).clamp(micronMinZoom, micronMaxZoom),
+  );
 
   Future<void> _toggleIdentify() async {
     final u = c.current ?? c.target;
@@ -727,6 +760,14 @@ class _BrowserPaneState extends ConsumerState<BrowserPane> {
                 );
               } else if (v == 'identify') {
                 _toggleIdentify();
+              } else if (v == 'wrap') {
+                _savePrefs(wrapAll: !_wrapAll);
+              } else if (v == 'zoom_in') {
+                _stepZoom(1.15);
+              } else if (v == 'zoom_out') {
+                _stepZoom(1 / 1.15);
+              } else if (v == 'zoom_reset') {
+                _savePrefs(zoom: 1);
               }
             },
             itemBuilder: (_) => [
@@ -737,6 +778,27 @@ class _BrowserPaneState extends ConsumerState<BrowserPane> {
               PopupMenuItem(
                 value: 'identify',
                 child: Text(nt(context, 'nn_identify')),
+              ),
+              CheckedPopupMenuItem(
+                key: const ValueKey('nn-menu-wrap'),
+                value: 'wrap',
+                checked: _wrapAll,
+                child: Text(nt(context, 'nn_wrap_lines')),
+              ),
+              PopupMenuItem(
+                key: const ValueKey('nn-menu-zoom-in'),
+                value: 'zoom_in',
+                child: Text(nt(context, 'nn_zoom_in')),
+              ),
+              PopupMenuItem(
+                key: const ValueKey('nn-menu-zoom-out'),
+                value: 'zoom_out',
+                child: Text(nt(context, 'nn_zoom_out')),
+              ),
+              PopupMenuItem(
+                key: const ValueKey('nn-menu-zoom-reset'),
+                value: 'zoom_reset',
+                child: Text(nt(context, 'nn_zoom_reset')),
               ),
             ],
           ),
@@ -827,6 +889,9 @@ class _BrowserPaneState extends ConsumerState<BrowserPane> {
     return MicronView(
       key: _viewKey,
       document: doc,
+      zoom: _zoom,
+      wrapAll: _wrapAll,
+      onZoomChanged: (z) => _savePrefs(zoom: z),
       onLink: (target, data) => c.followLink(target, data),
     );
   }

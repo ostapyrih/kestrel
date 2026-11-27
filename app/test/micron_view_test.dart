@@ -37,7 +37,7 @@ void main() {
     expect(span.children!.length, 3);
     final style = (span.children![1] as TextSpan).style!;
     expect(style.fontWeight, FontWeight.bold);
-    expect(style.fontFamily, 'monospace');
+    expect(style.fontFamily, 'JetBrainsMono');
   });
 
   testWidgets('tapping a link reports target and no data', (tester) async {

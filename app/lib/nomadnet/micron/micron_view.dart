@@ -2,6 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:kestrel_rns/kestrel_rns.dart';
 import 'package:material_ui/material_ui.dart';
 
+import 'micron_layout.dart';
 import 'micron_parser.dart';
 
 /// Called when a link is activated: the raw [target] and the request data
@@ -11,12 +12,20 @@ typedef MicronLinkTap = void Function(
   Map<String, String>? requestData,
 );
 
-const _monoFamily = 'monospace';
-const _monoFallback = ['Consolas', 'Menlo', 'Roboto Mono', 'Courier New'];
+/// Pinch-zoom limits (multiplier on top of fit-to-width).
+const micronMinZoom = 0.5;
+const micronMaxZoom = 4.0;
 
 /// Renders a [MicronDocument]: monospace, selectable, theme aware, with
 /// working links, input fields, checkboxes, radio buttons and foldable
 /// headings. Nothing is loaded from anywhere: links only call [onLink].
+///
+/// Micron is a fixed-width, terminal style format, so lines that carry layout
+/// (art, tables, aligned columns, background colour) are never soft wrapped:
+/// the page font shrinks to fit the widest one (down to
+/// [micronMinFontSize]); below that the page scrolls horizontally as one
+/// block. Ordinary prose wraps at the viewport width. See
+/// [classifyMicronBlock].
 class MicronView extends StatefulWidget {
   const MicronView({
     super.key,
@@ -26,6 +35,9 @@ class MicronView extends StatefulWidget {
     this.controller,
     this.fontSize = 14,
     this.padding = const EdgeInsets.all(12),
+    this.zoom = 1,
+    this.onZoomChanged,
+    this.wrapAll = false,
   });
 
   final MicronDocument document;
@@ -36,6 +48,15 @@ class MicronView extends StatefulWidget {
   final ScrollController? controller;
   final double fontSize;
   final EdgeInsets padding;
+
+  /// Pinch / menu zoom multiplier applied on top of fit-to-width.
+  final double zoom;
+
+  /// Called when the user changes the zoom (pinch end, double-tap reset).
+  final ValueChanged<double>? onZoomChanged;
+
+  /// Wrap every line, structural ones included (no fit, no horizontal scroll).
+  final bool wrapAll;
 
   @override
   State<MicronView> createState() => MicronViewState();
@@ -50,6 +71,23 @@ class MicronViewState extends State<MicronView> {
   final _radios = <String, (int, int)>{};
   final _collapsed = <int>{};
   final _recognizers = <(int, int), TapGestureRecognizer>{};
+  final _infos = <MicronLineInfo>[];
+  int _columns = 0;
+  late double _zoom = widget.zoom;
+  double _zoomStart = 1;
+  double _fs = 14;
+  MicronFit _fit = const MicronFit(
+    fontSize: 14,
+    contentWidth: 0,
+    scrolls: false,
+  );
+  final _hScroll = ScrollController();
+
+  /// Font size the page is currently drawn with (logical px).
+  double get effectiveFontSize => _fs;
+
+  /// True when the page block is wider than the viewport.
+  bool get scrollsHorizontally => _fit.scrolls;
 
   @override
   void initState() {
@@ -63,6 +101,7 @@ class MicronViewState extends State<MicronView> {
   @override
   void didUpdateWidget(MicronView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.zoom != widget.zoom) _zoom = widget.zoom;
     if (!identical(oldWidget.document, widget.document)) {
       _disposeState();
       _init();
@@ -72,6 +111,13 @@ class MicronViewState extends State<MicronView> {
 
   void _init() {
     final blocks = widget.document.blocks;
+    _infos
+      ..clear()
+      ..addAll([
+        for (final b in blocks)
+          classifyMicronBlock(b, pageBg: widget.document.background),
+      ]);
+    _columns = widestStructuralColumns(widget.document);
     for (var i = 0; i < blocks.length; i++) {
       final b = blocks[i];
       if (b.collapsible && b.collapsedInitially) _collapsed.add(i);
@@ -109,6 +155,7 @@ class MicronViewState extends State<MicronView> {
   void dispose() {
     _disposeState();
     if (_ownsScroll) _scroll.dispose();
+    _hScroll.dispose();
     super.dispose();
   }
 
@@ -135,7 +182,7 @@ class MicronViewState extends State<MicronView> {
     } else if (_scroll.hasClients) {
       // not built yet (lazy list): jump near it first, then align exactly
       _scroll.jumpTo(
-        (idx * widget.fontSize * 1.5).clamp(0, _scroll.position.maxScrollExtent),
+        (idx * _fs * 1.5).clamp(0, _scroll.position.maxScrollExtent),
       );
       WidgetsBinding.instance.addPostFrameCallback((_) => ensure());
     }
@@ -204,7 +251,7 @@ class MicronViewState extends State<MicronView> {
     );
   }
 
-  double get _charW => widget.fontSize * 0.6;
+  double get _charW => _fs * micronCharEm;
 
   List<int> _visible() {
     final blocks = widget.document.blocks;
@@ -224,25 +271,119 @@ class MicronViewState extends State<MicronView> {
     return out;
   }
 
+  Offset? _downAt;
+  Duration _downTime = Duration.zero;
+  Offset? _lastTapAt;
+  Duration _lastTapTime = Duration.zero;
+
+  void _pointerUp(PointerUpEvent e) {
+    final down = _downAt;
+    if (down == null) return;
+    _downAt = null;
+    const slop = 24.0;
+    const gap = Duration(milliseconds: 300);
+    if ((e.position - down).distance > slop || e.timeStamp - _downTime > gap) {
+      _lastTapAt = null;
+      return;
+    }
+    final last = _lastTapAt;
+    if (last != null &&
+        e.timeStamp - _lastTapTime < gap &&
+        (e.position - last).distance < slop * 2) {
+      _lastTapAt = null;
+      _setZoom(1);
+    } else {
+      _lastTapAt = e.position;
+      _lastTapTime = e.timeStamp;
+    }
+  }
+
+  bool _nowrap(int i) => !widget.wrapAll && _infos[i].structural;
+
+  void _setZoom(double z, {bool notify = true}) {
+    z = z.clamp(micronMinZoom, micronMaxZoom);
+    setState(() => _zoom = z);
+    if (notify) widget.onZoomChanged?.call(z);
+  }
+
   @override
   Widget build(BuildContext context) {
     final doc = widget.document;
     final bg = doc.background != null ? Color(0xFF000000 | doc.background!) : null;
     final visible = _visible();
-    final list = ListView.builder(
-      controller: _scroll,
-      padding: widget.padding,
-      itemCount: visible.length,
-      itemBuilder: (context, n) {
-        final i = visible[n];
-        return KeyedSubtree(
-          key: _keys.putIfAbsent(i, GlobalKey.new),
-          child: _block(context, i, doc.blocks[i]),
+    final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1;
+    final child = LayoutBuilder(
+      builder: (context, box) {
+        final viewport = box.maxWidth.isFinite ? box.maxWidth : 400.0;
+        final pad = widget.padding.horizontal;
+        if (widget.wrapAll) {
+          _fit = MicronFit(
+            fontSize: widget.fontSize * _zoom,
+            contentWidth: viewport,
+            scrolls: false,
+          );
+        } else {
+          _fit = fitMicron(
+            viewport: viewport,
+            columns: _columns,
+            baseFont: widget.fontSize,
+            zoom: _zoom,
+            dpr: dpr,
+            padding: pad,
+          );
+        }
+        _fs = _fit.fontSize;
+        final proseW = (viewport - pad).clamp(1.0, double.infinity);
+        Widget list = ListView.builder(
+          controller: _scroll,
+          padding: widget.padding,
+          itemCount: visible.length,
+          itemBuilder: (context, n) {
+            final i = visible[n];
+            return KeyedSubtree(
+              key: _keys.putIfAbsent(i, GlobalKey.new),
+              child: _block(context, i, doc.blocks[i], proseW),
+            );
+          },
+        );
+        if (_fit.scrolls) {
+          list = SingleChildScrollView(
+            key: const ValueKey('micron-hscroll'),
+            controller: _hScroll,
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: _fit.contentWidth,
+              height: box.maxHeight.isFinite ? box.maxHeight : null,
+              child: list,
+            ),
+          );
+        }
+        return GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onScaleStart: (_) => _zoomStart = _zoom,
+          onScaleUpdate: (d) {
+            if (d.pointerCount < 2) return;
+            _setZoom(_zoomStart * d.scale, notify: false);
+          },
+          onScaleEnd: (_) {
+            if (_zoom != widget.zoom) widget.onZoomChanged?.call(_zoom);
+          },
+          // Double-tap is detected from raw pointers: a DoubleTap recognizer
+          // would sit in the gesture arena and delay every link/checkbox tap.
+          child: Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: (e) {
+              _downAt = e.position;
+              _downTime = e.timeStamp;
+            },
+            onPointerUp: _pointerUp,
+            child: list,
+          ),
         );
       },
     );
-    final child = SelectionArea(child: list);
-    return bg == null ? child : ColoredBox(color: bg, child: child);
+    final area = SelectionArea(child: child);
+    return bg == null ? area : ColoredBox(color: bg, child: area);
   }
 
   Color _defaultFg(BuildContext context) {
@@ -257,7 +398,12 @@ class MicronViewState extends State<MicronView> {
     return Theme.of(context).colorScheme.onSurface;
   }
 
-  TextStyle _textStyle(BuildContext context, MicronStyle s, {bool link = false}) {
+  TextStyle _textStyle(
+    BuildContext context,
+    MicronStyle s, {
+    bool link = false,
+    bool solid = false,
+  }) {
     final doc = widget.document;
     final cs = Theme.of(context).colorScheme;
     Color? bg;
@@ -271,10 +417,11 @@ class MicronViewState extends State<MicronView> {
       fg = _defaultFg(context);
     }
     return TextStyle(
-      fontFamily: _monoFamily,
-      fontFamilyFallback: _monoFallback,
-      fontSize: widget.fontSize,
-      height: 1.25,
+      fontFamily: micronFontFamily,
+      fontFamilyFallback: micronFontFallback,
+      fontSize: _fs,
+      height: solid ? 1.0 : 1.25,
+      leadingDistribution: TextLeadingDistribution.even,
       color: fg,
       backgroundColor: bg,
       fontWeight: s.bold ? FontWeight.bold : FontWeight.normal,
@@ -292,10 +439,19 @@ class MicronViewState extends State<MicronView> {
         MicronAlign.right => TextAlign.right,
       };
 
-  InlineSpan _span(BuildContext context, int bi, int si, MicronSpan s) {
+  InlineSpan _span(
+    BuildContext context,
+    int bi,
+    int si,
+    MicronSpan s, {
+    bool solid = false,
+  }) {
     switch (s) {
       case MicronText t:
-        return TextSpan(text: t.text, style: _textStyle(context, t.style));
+        return TextSpan(
+          text: t.text,
+          style: _textStyle(context, t.style, solid: solid),
+        );
       case MicronLinkSpan l:
         final rec = _recognizers.putIfAbsent(
           (bi, si),
@@ -303,7 +459,7 @@ class MicronViewState extends State<MicronView> {
         )..onTap = () => _tapLink(l);
         return TextSpan(
           text: l.label,
-          style: _textStyle(context, l.style, link: true),
+          style: _textStyle(context, l.style, link: true, solid: solid),
           recognizer: rec,
           mouseCursor: SystemMouseCursors.click,
         );
@@ -369,7 +525,7 @@ class MicronViewState extends State<MicronView> {
                     ? Icons.radio_button_checked
                     : Icons.radio_button_unchecked)
                 : (selected ? Icons.check_box : Icons.check_box_outline_blank),
-            size: widget.fontSize + 6,
+            size: _fs + 6,
             color: style.color,
           ),
           const SizedBox(width: 4),
@@ -388,10 +544,17 @@ class MicronViewState extends State<MicronView> {
     );
   }
 
-  Widget _block(BuildContext context, int i, MicronBlock b) {
+  Widget _prose(double width, Widget child) => _fit.scrolls
+      ? Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(width: width, child: child),
+        )
+      : child;
+
+  Widget _block(BuildContext context, int i, MicronBlock b, double proseW) {
     switch (b.kind) {
       case MicronBlockKind.blank:
-        return SizedBox(height: widget.fontSize * 1.25);
+        return SizedBox(height: _fs * 1.25);
       case MicronBlockKind.divider:
         return _indent(
           b,
@@ -403,27 +566,47 @@ class MicronViewState extends State<MicronView> {
                 maxLines: 1,
                 softWrap: false,
                 overflow: TextOverflow.clip,
-                style: _textStyle(context, const MicronStyle()),
+                style: _textStyle(context, const MicronStyle(), solid: true),
               );
             },
           ),
         );
       case MicronBlockKind.heading:
-        return _heading(context, i, b);
+        return _prose(proseW, _heading(context, i, b));
       case MicronBlockKind.text:
-        return _indent(b, _line(context, i, b));
+        final line = _line(context, i, b);
+        return _nowrap(i) ? _indent(b, line) : _prose(proseW, _indent(b, line));
     }
   }
 
   Widget _line(BuildContext context, int i, MicronBlock b) {
+    final solid = _infos[i].solid;
     if (!b.hasInputs) {
       return SizedBox(
         width: double.infinity,
         child: Text.rich(
           TextSpan(children: [
-            for (var j = 0; j < b.spans.length; j++) _span(context, i, j, b.spans[j]),
+            for (var j = 0; j < b.spans.length; j++)
+              _span(context, i, j, b.spans[j], solid: solid),
           ]),
           textAlign: _align(b.align),
+          softWrap: !_nowrap(i),
+          style: _textStyle(context, const MicronStyle(), solid: solid),
+          strutStyle: solid
+              ? StrutStyle(
+                  fontFamily: micronFontFamily,
+                  fontFamilyFallback: micronFontFallback,
+                  fontSize: _fs,
+                  height: 1.0,
+                  leading: 0,
+                  forceStrutHeight: true,
+                )
+              : null,
+          textHeightBehavior: const TextHeightBehavior(
+            applyHeightToFirstAscent: true,
+            applyHeightToLastDescent: true,
+            leadingDistribution: TextLeadingDistribution.even,
+          ),
         ),
       );
     }

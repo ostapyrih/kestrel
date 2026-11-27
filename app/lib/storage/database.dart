@@ -295,6 +295,12 @@ CREATE TABLE nomad_cache (
   expires INTEGER NOT NULL
 )''',
   ]),
+  // Per-node page view preferences: pinch/menu zoom multiplier and "wrap
+  // long lines" (structural lines wrap too).
+  Migration(7, [
+    'ALTER TABLE nomad_nodes ADD COLUMN font_scale REAL NOT NULL DEFAULT 1.0',
+    'ALTER TABLE nomad_nodes ADD COLUMN wrap_all INTEGER NOT NULL DEFAULT 0',
+  ]),
 ];
 
 int get latestSchemaVersion => migrations.last.version;

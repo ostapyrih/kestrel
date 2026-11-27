@@ -15,6 +15,8 @@ class NomadNodeRow {
     required this.announced,
     required this.favourite,
     required this.identify,
+    this.fontScale = 1.0,
+    this.wrapAll = false,
   });
 
   factory NomadNodeRow.fromMap(Map<String, Object?> m) => NomadNodeRow(
@@ -26,6 +28,8 @@ class NomadNodeRow {
     announced: (m['announced']! as int) == 1,
     favourite: (m['favourite']! as int) == 1,
     identify: (m['identify']! as int) == 1,
+    fontScale: (m['font_scale'] as num?)?.toDouble() ?? 1.0,
+    wrapAll: (m['wrap_all'] as int?) == 1,
   );
 
   final String hash;
@@ -40,6 +44,12 @@ class NomadNodeRow {
 
   /// "Identify to this node" (reveals the device identity); default off.
   final bool identify;
+
+  /// Page zoom multiplier on top of fit-to-width (1.0 = fit).
+  final double fontScale;
+
+  /// "Wrap long lines": wrap structural lines too.
+  final bool wrapAll;
 
   String get title => name.isEmpty ? hash : name;
 }
@@ -178,6 +188,25 @@ class NomadStore implements PageCacheStore {
     await _db.update(
       'nomad_nodes',
       {'identify': v ? 1 : 0},
+      where: 'hash = ?',
+      whereArgs: [hash],
+    );
+    adb.notify();
+  }
+
+  /// Saves the page zoom and "wrap long lines" of a node.
+  Future<void> setViewPrefs(
+    String hash, {
+    double? fontScale,
+    bool? wrapAll,
+  }) async {
+    await ensureNode(hash);
+    await _db.update(
+      'nomad_nodes',
+      {
+        'font_scale': ?fontScale,
+        if (wrapAll != null) 'wrap_all': wrapAll ? 1 : 0,
+      },
       where: 'hash = ?',
       whereArgs: [hash],
     );
