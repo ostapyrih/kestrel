@@ -41,6 +41,7 @@ class Strings {
 
   static const _uk = <String, String>{
     'group_devices': 'Мої пристрої',
+    'history_syncing': 'Синхронізація історії…',
     'group_devices_hint': 'Усі пристрої з вашою адресою. Повідомлення синхронізуються між ними без моста.',
     'this_device': 'цей пристрій',
     'announcer_badge': 'відповідає в мережі',
@@ -308,6 +309,7 @@ class Strings {
 
   static const _en = <String, String>{
     'group_devices': 'My devices',
+    'history_syncing': 'Syncing history…',
     'group_devices_hint': 'All devices that share your address. Messages sync between them without the bridge.',
     'this_device': 'this device',
     'announcer_badge': 'answers on the network',

@@ -238,8 +238,22 @@ class GroupService {
   /// the notices from the old identity before and restarts the router after.
   Future<void> replaceGroupIdentity(Identity fresh) async {
     await ids.saveGroupIdentity(fresh);
+    _state.adoptIdentity(_state.identityGen + 1, toHex(fresh.hash));
     _g = fresh;
     await _save();
+  }
+
+  /// Applies an `identity` record of a sibling (already adopted in [state] by
+  /// [DeviceSync]): G' replaces G on this device.
+  Future<Identity> applyIdentity(IdentityChange c) async {
+    final fresh = await Identity.fromPrivateKey(c.privateKey);
+    await ids.saveGroupIdentity(fresh);
+    _g = fresh;
+    if (c.name.isNotEmpty) {
+      await repo.setSetting(SettingKeys.displayName, _state.displayName);
+    }
+    await _save();
+    return fresh;
   }
 
   /// The bridge now knows this device by the device key: forget legacy B.

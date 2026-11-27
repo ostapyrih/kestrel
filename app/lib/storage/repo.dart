@@ -1005,7 +1005,13 @@ LEFT JOIN group_legacy_devices l ON l.device_id = c.device_id''';
   /// one). Upserts by LXMF hash: a message that is already here is not
   /// stored twice; a delivery state only moves forward. Returns true if a
   /// row was inserted or changed.
-  Future<bool> applySyncedMessage(Map<Object?, Object?> d) async {
+  ///
+  /// With [history] (history backfill of a new device) an incoming message
+  /// neither raises the unread counter nor notifies: it is old.
+  Future<bool> applySyncedMessage(
+    Map<Object?, Object?> d, {
+    bool history = false,
+  }) async {
     final hash = d['hash'];
     final peer = d['peer'];
     final text = d['text'];
@@ -1079,12 +1085,12 @@ LEFT JOIN group_legacy_devices l ON l.device_id = c.device_id''';
     });
     await _db.rawUpdate(
       'UPDATE chats SET last_ts = MAX(COALESCE(last_ts, 0), ?)'
-      '${incoming ? ', unread = unread + 1' : ''} WHERE id = ?',
+      '${incoming && !history ? ', unread = unread + 1' : ''} WHERE id = ?',
       [tsMs, chatId],
     );
     await addLog(id, incoming ? 'synced_in' : 'synced_out');
     adb.notify();
-    if (incoming) {
+    if (incoming && !history) {
       await announceIncoming(
         identity: 'B',
         chatId: chatId,
@@ -1094,6 +1100,17 @@ LEFT JOIN group_legacy_devices l ON l.device_id = c.device_id''';
       );
     }
     return true;
+  }
+
+  /// History backfill: the unread counter of the chat with [peerHash] as the
+  /// other devices have it (only raised, never lowered).
+  Future<void> applySyncedUnread(String peerHash, int unread) async {
+    await _db.rawUpdate(
+      'UPDATE chats SET unread = MAX(unread, ?) WHERE kind = ? AND peer_hash = ? '
+      "AND account_id = (SELECT id FROM accounts WHERE identity = 'B')",
+      [unread, 'lxmf', peerHash],
+    );
+    adb.notify();
   }
 
   /// A group-wide `delete_chat`: removes the messages of the chat with

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:kestrel_rns/kestrel_rns.dart';
 
 import '../nomadnet/browser_sync.dart';
+import 'history_backfill.dart';
 import '../storage/repo.dart';
 import 'group_service.dart';
 
@@ -22,6 +23,7 @@ class GroupRuntime {
     required this.internet,
     required this.onRole,
     this.onName,
+    this.onIdentity,
     this.browser,
     this.presenceInterval = const Duration(seconds: 10),
   });
@@ -42,12 +44,19 @@ class GroupRuntime {
   /// the propagation inbox of G, and announce immediately when true.
   final FutureOr<void> Function(bool announcing) onRole;
   final void Function(String name)? onName;
+
+  /// A sibling moved the group to a new G: the owner switches router and
+  /// announcer (and restarts the runtime).
+  final Future<void> Function(IdentityChange change)? onIdentity;
   final BrowserSyncStore? browser;
   final Duration presenceInterval;
 
   late LxmRouter deviceRouter;
   late DeviceSync sync;
   late GroupAnnouncer announcer;
+
+  /// History backfill: serves siblings, requests it on a freshly paired device.
+  late DeviceBackfill backfill;
   StreamSubscription<SyncRecord>? _sub;
   Timer? _pump;
   bool _started = false;
@@ -73,6 +82,7 @@ class GroupRuntime {
       state: group.state,
       store: KestrelSyncStore(storage),
       group: groupRouter.destination,
+      onIdentity: onIdentity,
       onStateChanged: () {
         unawaited(group.persist());
         final n = group.state.displayName;
@@ -80,6 +90,13 @@ class GroupRuntime {
       },
     );
     await sync.start();
+    backfill = DeviceBackfill(
+      sync: sync,
+      storage: storage,
+      source: AppBackfillSource(repo),
+      sink: AppBackfillSink(repo, browser: browser),
+    );
+    await backfill.init();
     sync.rememberSiblings();
     _sub = sync.records.listen((r) => unawaited(_apply(r)));
     announcer = GroupAnnouncer(
@@ -116,6 +133,7 @@ class GroupRuntime {
     _started = false;
     _pump?.cancel();
     await _sub?.cancel();
+    await backfill.stop();
     await announcer.stop();
     await sync.stop();
     rns.transport.deregisterDestination(deviceRouter.destination);

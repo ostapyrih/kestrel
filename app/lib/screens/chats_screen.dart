@@ -11,6 +11,7 @@ import '../storage/repo.dart';
 import 'chat_screen.dart';
 import 'bridge_widgets.dart';
 import 'delete_chat.dart';
+import 'group_screens.dart';
 import 'new_chat_screen.dart';
 import 'rooms_screen.dart';
 import 'settings_screen.dart';
@@ -149,6 +150,17 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
                 semanticsLabel: s.t('bridge_syncing'),
               ),
           ],
+          if (ref.watch(historyBackfillProvider) case AsyncData(:final value?))
+            Column(
+              key: const ValueKey('history-syncing'),
+              children: [
+                LinearProgressIndicator(value: value > 0 ? value : null),
+                Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: Text(s.t('history_syncing')),
+                ),
+              ],
+            ),
           Expanded(
             child: chats.when(
               data: (list) => list.isEmpty

@@ -11,6 +11,22 @@ import '../providers.dart';
 import '../storage/repo.dart' show shortHash;
 import 'bridge_setup_screen.dart';
 
+/// Progress of the history backfill on a freshly paired device (null while
+/// no backfill runs). Polled: the runtime starts and stops with the router.
+final historyBackfillProvider = StreamProvider<double?>((ref) async* {
+  final node = ref.watch(nodeProvider);
+  double? last = -1;
+  while (true) {
+    final p = node.groupRuntime?.backfill.progress;
+    final v = (p != null && p.active && !p.done) ? (p.fraction ?? 0.0) : null;
+    if (v != last) {
+      last = v;
+      yield v;
+    }
+    await Future<void>.delayed(const Duration(seconds: 1));
+  }
+});
+
 /// Rebuilds when the group (device list, name, keys) changes.
 final groupChangesProvider = StreamProvider<int>((ref) async* {
   final g = ref.watch(nodeProvider).group;

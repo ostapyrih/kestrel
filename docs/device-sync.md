@@ -50,7 +50,8 @@ merged-ratchet decrypt of a Python-encrypted message), plus cross-path dedupe an
   targeted (`seq` 0) `rekey` record encrypted under the old epoch (the removed device is not a recipient), then the device list.
   The removed device still holds G: the UI offers **Change address**.
 * **Change address**: new G; an LXMF notice ("My new Kestrel address: <hex>") goes from the old G to the 50 most recent contacts, then
-  the router restarts on the new G and announces. Old chats stay. Syncing the new G to the other devices is not done yet (see gaps).
+  the router restarts on the new G and announces. Old chats stay. The device that ran it then publishes an `identity` record (below), so
+  the whole group follows; the notice is sent once, by that device only.
 
 ## Part 3 - sync, election, forwarding
 
@@ -70,6 +71,23 @@ merged-ratchet decrypt of a Python-encrypted message), plus cross-path dedupe an
   route?, state?}`, upsert by LXMF hash, state only moves forward), `delete_chat` (`{peer, before_ts}`; tombstone under device id
   `group`), `read` (`{peer}`), `browser` (`{ops}` as in bridge protocol 9.5; the group sync consumes the dirty marks when a group is
   active).
+* **`identity`** (versioned, `IdentityChange`): `{v: 1, priv (G' private key), gen, replaces (hash of the old G), name, name_rev,
+  ratchets: [{k, t}], stamp?, tb}`. `gen` is a monotonic generation kept in `GroupState` (`id_gen`, `id_hash`; it also travels in the
+  pairing bundle): the highest generation wins, at equal generations the larger identity hash, the same change twice is ignored.
+  A sibling that adopts it (`DeviceSync.onIdentity`) stores G', switches its LxmRouter to it (merging the ratchets, importing the
+  stamp, taking name and timebase), restarts the election so the announcer announces G' at once while the others stay silent, stops
+  answering for the old G (destination deregistered) and keeps the old-G chats as history (chats are keyed by the account, so new
+  messages to contacts simply go from G'). Sent to every sibling over the normal channel (direct, propagation fallback). The
+  record is an ordinary encrypted record, so a removed device (new key epoch) never receives it. No new vault blob kind:
+  `kSyncSemanticsVersion` stays 2.
+* **History backfill** (`DeviceBackfill`, app: `history_backfill.dart`): after pairing the new device pulls the group's history from
+  the pairing host (rotating to another sibling when it does not answer). Targeted records (seq 0): `backfill_req {p, c}` (phase,
+  cursor) answered by `backfill {rp, rc, sp, items, np, nc, total}`. Phases in order: `tomb` (group deletion tombstones, first so
+  deleted chats stay deleted), `msg` (messages of the main identity, cursor = local message id, batches of 40 / ~48 kB, upserted by
+  LXMF hash, incoming ones do not raise unread), `read` (unread counters), `bsync` / `bhist` (browser ops and history, as in 9.5).
+  MeshChatX chats are not included (they come from the bridge). The new device persists `(phase, cursor)` after each applied batch
+  (restart resumes), ignores answers for positions it has passed, re-asks after 20 s and shows "Syncing history..." on the chat
+  list. Batches travel directly when the sibling is online (large ones upgrade to a link/resource), otherwise via the propagation node.
 * **Presence and election** (`GroupAnnouncer`): every 10 s each device sends every sibling a signed presence packet
   `[body, sig]` (`body = {v, dev, t (wall clock), net (TCP path), ann (is announcing), ep}`) to `kestrel.group.presence`, announced once
   per connection. A sibling not heard for 35 s is out. `electAnnouncer`: candidates are the live siblings plus this device; a candidate
@@ -86,14 +104,17 @@ merged-ratchet decrypt of a Python-encrypted message), plus cross-path dedupe an
   tests: the 4th announce within a second stays unseen for about a minute). The app spaces the device-key announces by 2 s.
 
 Tests: `test/group_test.dart`, `test/group_election_test.dart`, `test/integration/group_pairing_test.dart`,
+`test/group_identity_test.dart` (identity record, generations, sibling switch), `app/test/history_backfill_test.dart`,
 `test/integration/group_sync_test.dart` (Python transport node + Python LXMF peer + three Dart devices: pairing, one announcer,
 forwarding to siblings, a message sent on a sibling, `delete_chat` and `browser` records, handover with an in-flight message, key rotation
-cutting off a removed device, no duplicates).
+cutting off a removed device, no duplicates, change address on one device moving all, backfill to a newly paired device).
 
 ### Known gaps
 * The bridge vault is not yet wired as a `SyncTransport` (the interface and `ingest` dedupe exist); the vault keeps uploading the
   old per-device history semantics (`kSyncSemanticsVersion` stays 2: no new vault blob kind).
-* "Change address" is applied on the device that runs it; an `identity` record to move the other devices to the new G is not implemented.
-* No history backfill to a newly paired device (new messages sync, old ones stay on the older devices).
+* A sibling that is offline during "Change address" receives the `identity` record when it is next reachable (propagation node or
+  gap request); until then it still announces nothing for G (silent) but answers for the old G.
+* Backfill is pulled from one device at a time; the history is a snapshot per phase (a message arriving meanwhile arrives as a
+  normal `messages` record). Old histories of retired devices (`group_legacy_devices`) are not backfilled.
 * A propagation-node multi-device test (inbox consumed once) is not part of the integration suite; `inboxSyncEnabled` is covered by unit
   tests and asserted on the non-announcers.

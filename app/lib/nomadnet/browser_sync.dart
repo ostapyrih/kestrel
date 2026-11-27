@@ -326,6 +326,18 @@ class BrowserSyncStore {
     await setSetting(SettingKeys.browserBackfilled, '1');
   }
 
+  /// Decodes the `op` column of [rows] (history backfill).
+  static List<Map<String, Object?>> decodeOps(
+    List<Map<String, Object?>> rows,
+  ) {
+    final out = <Map<String, Object?>>[];
+    for (final r in rows) {
+      final op = json.decode(r['op']! as String);
+      if (op is Map) out.add(op.cast<String, Object?>());
+    }
+    return out;
+  }
+
   /// The bridge database was recreated: everything has to be uploaded again.
   static Future<void> markAllDirty(DatabaseExecutor x) async {
     await x.rawUpdate('UPDATE browser_sync SET dirty = 1');
