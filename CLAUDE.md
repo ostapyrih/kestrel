@@ -46,6 +46,8 @@ docs/      PLAN.md, bridge protocol, ADRs; docs/private/ is not in git
   - `app` → tag `app-vX.Y.Z`, version in `app/pubspec.yaml` (`X.Y.Z+build`), `app/CHANGELOG.md`
   - `bridge` → tag `bridge-vX.Y.Z`, version in `bridge/pyproject.toml`, `bridge/CHANGELOG.md`
 - SemVer; `0.x` until the protocol is stable.
+- **Never release `1.0.0` (app or bridge) without the owner's explicit approval.** Before 1.0.0 there is a long testing period.
+- Release pace: batch merged work into fewer releases and leave the owner time to test; merge the release-please PR only when the owner asks or after a batch worth testing.
 - Process: merges to `main` → release-please opens a Release PR → the orchestrator reviews the changelog
   (hand-writes a human-readable summary on top if needed) → merge → tag + GitHub Release →
   the workflow builds the artifacts and attaches them to the release.
