@@ -78,7 +78,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
         // remembering the choice is a convenience
       }
     }
-    final id = await ref
+    final target = await ref
         .read(nodeProvider)
         .openChat(
           a,
@@ -86,7 +86,11 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
           identity: identity,
         );
     nav.pushReplacement(
-      MaterialPageRoute<void>(builder: (_) => ChatScreen(chatId: id)),
+      MaterialPageRoute<void>(
+        builder: (_) => target.isDraft
+            ? ChatScreen(draft: target)
+            : ChatScreen(chatId: target.chatId),
+      ),
     );
   }
 

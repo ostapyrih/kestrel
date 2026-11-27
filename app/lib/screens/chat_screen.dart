@@ -7,6 +7,7 @@ import 'package:material_ui/material_ui.dart';
 import '../bridge/codec.dart';
 import '../l10n/strings.dart';
 import '../providers.dart';
+import '../storage/chat_target.dart';
 import '../storage/repo.dart';
 import 'bridge_widgets.dart';
 import 'delete_chat.dart';
@@ -14,8 +15,12 @@ import 'vault_widgets.dart';
 import 'widgets.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
-  const ChatScreen({super.key, required this.chatId});
-  final int chatId;
+  /// Opens an existing chat ([chatId]) or a draft conversation ([draft],
+  /// no database row until the first message is sent).
+  const ChatScreen({super.key, this.chatId, this.draft})
+    : assert(chatId != null || draft != null);
+  final int? chatId;
+  final ChatTarget? draft;
 
   @override
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
@@ -24,19 +29,34 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _text = TextEditingController();
 
+  /// The chat row; null while this is a draft (nothing stored yet).
+  late int? _chatId = widget.chatId;
+  late final DraftTexts _drafts;
+
   @override
   void initState() {
     super.initState();
+    _drafts = ref.read(draftTextsProvider.notifier);
+    final d = widget.draft;
+    if (_chatId == null && d != null) {
+      _text.text = ref.read(draftTextsProvider)[d.draftKey] ?? '';
+      _text.addListener(() {
+        // unsent text lives in memory for the session only
+        if (_chatId == null) _drafts.set(d.draftKey, _text.text);
+      });
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      final id = _chatId;
+      if (id == null) return;
       try {
         final repo = ref.read(repoProvider);
         // A chats: tell the bridge (it also clears the local flag first)
         unawaited(
           ref
               .read(bridgeProvider)
-              .markRead(widget.chatId)
+              .markRead(id)
               .catchError((Object _) {})
-              .then((_) => repo.markRead(widget.chatId)),
+              .then((_) => repo.markRead(id)),
         );
       } on Object {
         // no repo (widget tests)
@@ -47,9 +67,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _loadingOlder = false;
 
   Future<void> _loadOlder() async {
+    final id = _chatId;
+    if (id == null) return;
     setState(() => _loadingOlder = true);
     try {
-      await ref.read(bridgeProvider).loadOlder(widget.chatId);
+      await ref.read(bridgeProvider).loadOlder(id);
     } on Object catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -70,16 +92,35 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Future<void> _send() async {
     final t = _text.text.trim();
     if (t.isEmpty) return;
+    final id = _chatId;
+    if (id != null) {
+      _text.clear();
+      await ref.read(nodeProvider).sendMessage(id, t);
+      return;
+    }
+    final d = widget.draft!;
     _text.clear();
-    await ref.read(nodeProvider).sendMessage(widget.chatId, t);
+    _drafts.set(d.draftKey, '');
+    // first message: creates the chat row, message and outbox row at once
+    final sent = await ref.read(nodeProvider).sendToPeer(d, t);
+    if (mounted) setState(() => _chatId = sent.chatId);
+  }
+
+  String _draftTitle() {
+    final d = widget.draft;
+    if (d == null) return '';
+    return (d.name != null && d.name!.isNotEmpty) ? d.name! : shortHash(d.peer);
   }
 
   @override
   Widget build(BuildContext context) {
     final s = Strings.of(context);
-    final chat = ref.watch(chatProvider(widget.chatId)).value;
-    final msgs = ref.watch(messagesProvider(widget.chatId));
-    final identity = chat?.accountIdentity ?? 'B';
+    final id = _chatId;
+    final chat = id == null ? null : ref.watch(chatProvider(id)).value;
+    final msgs = id == null
+        ? const AsyncValue<List<MessageRow>>.data(<MessageRow>[])
+        : ref.watch(messagesProvider(id));
+    final identity = chat?.accountIdentity ?? widget.draft?.identity ?? 'B';
     final isA = identity == 'A';
     final deviceNames = isA
         ? {
@@ -90,13 +131,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           }
         : const <String, String>{};
     // a history synced from another device: read only (vault)
-    final remote = chat?.isRemote ?? isRemoteId(widget.chatId);
+    final remote = chat?.isRemote ?? (id != null && isRemoteId(id));
     final ownDevice = remote
         ? (chat?.remoteDeviceName ?? '')
         : ref.watch(ownDeviceNameProvider);
     final bridgeMode = ref.watch(bridgeModeProvider);
     final olderItem = isA && !(chat?.olderDone ?? true);
-    final deleteBlock = ref.watch(deleteBlockProvider(widget.chatId)).value;
+    final deleteBlock = id == null
+        ? null
+        : ref.watch(deleteBlockProvider(id)).value;
     return Scaffold(
       appBar: AppBar(
         actions: [
@@ -107,7 +150,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 if (v != 'delete') return;
                 final done = await deleteChatsFlow(context, ref, [chat]);
                 if (!done || !context.mounted) return;
-                if (ref.read(selectedChatProvider) == widget.chatId) {
+                if (ref.read(selectedChatProvider) == id) {
                   ref.read(selectedChatProvider.notifier).select(null);
                 } else if (Navigator.of(context).canPop()) {
                   Navigator.of(context).pop();
@@ -137,7 +180,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           children: [
             Flexible(
               child: Text(
-                chat?.displayTitle ?? '',
+                chat?.displayTitle ?? _draftTitle(),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),

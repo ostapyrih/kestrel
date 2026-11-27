@@ -147,6 +147,61 @@ void main() {
     });
   });
 
+  group('draft conversations (no empty chats)', () {
+    testWidgets('reply as B opens a draft: nothing is sent or stored until '
+        'the first message', (tester) async {
+      node.draft = true;
+      await show(tester, const ChatScreen(chatId: -1));
+      await tester.tap(find.byKey(const ValueKey('vault-reply')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('reply-as-B')));
+      await tester.pumpAndSettle();
+      // the draft screen (composer, no banner) is open; nothing was sent
+      expect(find.byKey(const ValueKey('composer-input')), findsOneWidget);
+      expect(node.sent, isEmpty);
+      expect(node.draftSends, isEmpty);
+      await tester.enterText(
+        find.byKey(const ValueKey('composer-input')),
+        'first',
+      );
+      await tester.tap(find.byKey(const ValueKey('composer-send')));
+      await tester.pumpAndSettle();
+      expect(node.draftSends, [('cc' * 16, 'first')]);
+      expect(node.sent, isEmpty);
+    });
+
+    testWidgets('reply as A opens an A draft', (tester) async {
+      node.draft = true;
+      await show(tester, const ChatScreen(chatId: -1));
+      await tester.tap(find.byKey(const ValueKey('vault-reply')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('reply-as-A')));
+      await tester.pumpAndSettle();
+      expect(bridge.openedA, ['cc' * 16]);
+      expect(find.byKey(const ValueKey('composer-input')), findsOneWidget);
+      expect(node.draftSends, isEmpty);
+    });
+
+    testWidgets('unsent text is kept for the session only, in memory', (
+      tester,
+    ) async {
+      node.draft = true;
+      await show(tester, const ChatScreen(chatId: -1), configured: false);
+      await tester.tap(find.byKey(const ValueKey('vault-reply')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('composer-input')),
+        'half typed',
+      );
+      tester.state<NavigatorState>(find.byType(Navigator).first).pop();
+      await tester.pumpAndSettle();
+      expect(node.draftSends, isEmpty);
+      await tester.tap(find.byKey(const ValueKey('vault-reply')));
+      await tester.pumpAndSettle();
+      expect(find.text('half typed'), findsOneWidget);
+    });
+  });
+
   group('settings', () {
     testWidgets('sync status section', (tester) async {
       await show(

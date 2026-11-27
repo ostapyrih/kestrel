@@ -1038,16 +1038,30 @@ void main() {
       final chat = (await svc.store.chatIdForPeer(peer))!;
       await svc.deleteAChat(chat);
       expect(api.timeouts['/delete_chat'], BridgeService.deleteTimeout);
-      expect(BridgeService.deleteTimeout, lessThanOrEqualTo(const Duration(seconds: 30)));
+      expect(
+        BridgeService.deleteTimeout,
+        lessThanOrEqualTo(const Duration(seconds: 30)),
+      );
     });
 
     test('an A chat can be started offline; its message queues', () async {
       api.disconnect();
-      final id = await svc.openAChat(peer.toUpperCase(), name: 'New');
+      final target = await svc.openAChat(peer.toUpperCase(), name: 'New');
+      // a draft: opening stores nothing
+      expect(target.isDraft, isTrue);
+      expect(await repo.chats(), isEmpty);
+      final sent = await svc.sendToPeer(
+        target.peer,
+        'hello later',
+        name: 'New',
+      );
+      final id = sent.chatId;
       final chat = await repo.chat(id);
       expect(chat!.accountIdentity, 'A');
       expect(chat.peerHash, peer);
-      final mid = await svc.sendMessage(id, 'hello later');
+      expect(chat.title, 'New');
+      final mid = sent.messageId;
+      expect(await svc.store.queuedSends(), hasLength(1));
       final m = await repo.message(mid);
       expect(m!.status, 'queued');
       expect(m.senderIdentity, 'A');

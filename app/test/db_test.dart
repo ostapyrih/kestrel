@@ -201,6 +201,29 @@ void main() {
             .whereType<File>()
             .where((f) => f.path.endsWith('.dart'))) {
       var src = f.readAsStringSync().replaceAll('\r\n', '\n');
+      if (f.path.replaceAll('\\', '/').endsWith('storage/database.dart')) {
+        // the one allowed statement: the no-empty-chats migration, which
+        // may only remove LXMF chats with zero messages and zero outbox rows
+        final m = RegExp(
+          r'const String removeEmptyChatsSql =(.*?);',
+          dotAll: true,
+        ).firstMatch(src);
+        expect(m, isNotNull, reason: 'removeEmptyChatsSql exists');
+        final sql = m!.group(1)!;
+        expect(sql, contains("DELETE FROM chats WHERE kind = 'lxmf'"));
+        expect(
+          sql,
+          contains('NOT EXISTS (SELECT 1 FROM messages WHERE '
+              'messages.chat_id = chats.id)'),
+        );
+        expect(
+          sql,
+          contains('NOT EXISTS (SELECT 1 FROM outbox WHERE '
+              'outbox.chat_id = chats.id)'),
+        );
+        expect(RegExp('DELETE FROM').allMatches(src), hasLength(1));
+        src = src.replaceRange(m.start, m.end, '');
+      }
       if (f.path.replaceAll('\\', '/').endsWith('storage/repo.dart')) {
         final start = src.indexOf('Future<void> purgeBridgeAccountData()');
         expect(start, greaterThan(0), reason: 'the purge method exists');
@@ -256,9 +279,9 @@ void main() {
     // the chat deletion: four statements, each scoped by the account of the
     // chat being deleted (never another account's rows) ...
     expect(deleteRows, isNotNull);
-    final dels = RegExp(
-      r'DELETE FROM (chats|messages|outbox|delivery_log)\b',
-    ).allMatches(deleteRows!).toList();
+    final dels = RegExp(r'DELETE FROM (chats|messages|outbox|delivery_log)\b')
+        .allMatches(deleteRows!)
+        .toList();
     expect(dels.map((m) => m.group(1)).toSet(), {
       'chats',
       'messages',
@@ -279,9 +302,9 @@ void main() {
     }
     // ... and the other-device history removal only touches one device's rows
     expect(vaultRemoval, isNotNull);
-    final vdels = RegExp(
-      r'DELETE FROM (vault_chats|vault_messages)',
-    ).allMatches(vaultRemoval!).toList();
+    final vdels = RegExp(r'DELETE FROM (vault_chats|vault_messages)')
+        .allMatches(vaultRemoval!)
+        .toList();
     expect(vdels, hasLength(2));
     for (final m in vdels) {
       expect(

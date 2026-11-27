@@ -181,19 +181,21 @@ class ReadOnlyBanner extends ConsumerWidget {
       if (picked == null) return;
       identity = picked;
     }
-    final id = identity == 'A'
-        ? await ref
-              .read(bridgeProvider)
-              .store
-              .ensureChat(peer, name: chat.title)
+    final target = identity == 'A'
+        ? await ref.read(bridgeProvider).openAChat(peer, name: chat.title)
         : await ref.read(nodeProvider).openChat(peer, name: chat.title);
     if (!context.mounted) return;
-    if (MediaQuery.sizeOf(context).width >= wideLayoutBreakpoint) {
+    final id = target.chatId;
+    if (id != null &&
+        MediaQuery.sizeOf(context).width >= wideLayoutBreakpoint) {
       ref.read(selectedChatProvider.notifier).select(id);
     } else {
-      await Navigator.of(
-        context,
-      ).push(MaterialPageRoute<void>(builder: (_) => ChatScreen(chatId: id)));
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) =>
+              id == null ? ChatScreen(draft: target) : ChatScreen(chatId: id),
+        ),
+      );
     }
   }
 

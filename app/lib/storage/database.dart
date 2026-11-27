@@ -301,7 +301,17 @@ CREATE TABLE nomad_cache (
     'ALTER TABLE nomad_nodes ADD COLUMN font_scale REAL NOT NULL DEFAULT 1.0',
     'ALTER TABLE nomad_nodes ADD COLUMN wrap_all INTEGER NOT NULL DEFAULT 0',
   ]),
+  // No empty chats: a chat exists only once it has a message. Removes the LXMF
+  // chats (any account) that have no messages and no outbox entries.
+  Migration(8, [removeEmptyChatsSql]),
 ];
+
+/// The one statement that may delete chats outside the user's own delete
+/// flows: only LXMF chats with zero messages and zero outbox rows.
+const String removeEmptyChatsSql =
+    "DELETE FROM chats WHERE kind = 'lxmf' "
+    'AND NOT EXISTS (SELECT 1 FROM messages WHERE messages.chat_id = chats.id) '
+    'AND NOT EXISTS (SELECT 1 FROM outbox WHERE outbox.chat_id = chats.id)';
 
 int get latestSchemaVersion => migrations.last.version;
 

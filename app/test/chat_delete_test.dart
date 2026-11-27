@@ -64,7 +64,7 @@ void main() {
     );
   }
 
-  Future<({int messageId, int outboxId})> addOut(
+  Future<({int messageId, int outboxId, int chatId})> addOut(
     String identity,
     String peerHash,
     String text,

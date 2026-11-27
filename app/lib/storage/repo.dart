@@ -523,7 +523,11 @@ class Repo {
     try {
       final marks = json.decode(p.first['marks']! as String) as List<Object?>;
       final hit = marks.any(
-        (m) => m is List && m.isNotEmpty && m.first is int && gone.contains(m.first),
+        (m) =>
+            m is List &&
+            m.isNotEmpty &&
+            m.first is int &&
+            gone.contains(m.first),
       );
       if (hit) await txn.delete('vault_pending');
     } on FormatException {
@@ -665,7 +669,24 @@ FROM chats c JOIN accounts a ON a.id = c.account_id''';
     return rows.isEmpty ? null : ChatRow.fromMap(rows.first);
   }
 
+  /// Id of the existing LXMF chat with [peerHash] under [identity], or null.
+  /// Never creates anything (opening a conversation must not store a row).
+  Future<int?> findChatId(String identity, String peerHash) async {
+    final acc = await accountId(identity);
+    final ex = await _db.query(
+      'chats',
+      columns: ['id'],
+      where: "account_id = ? AND kind = 'lxmf' AND peer_hash = ?",
+      whereArgs: [acc, peerHash],
+    );
+    return ex.isEmpty ? null : ex.first['id']! as int;
+  }
+
   /// Finds or creates the LXMF chat with [peerHash] under [identity].
+  ///
+  /// Only for paths that store a message right away (incoming messages, the
+  /// bridge sync). A conversation opened by the user is a draft instead, see
+  /// [insertOutgoing] with `chatId: null`.
   Future<int> findOrCreateChat(
     String identity,
     String peerHash, {
@@ -869,9 +890,13 @@ FROM vault_chats c LEFT JOIN bridge_devices d ON d.device_id = c.device_id''';
 
   /// Queues an outgoing message: the `messages` row and the `outbox` row with
   /// the frozen sender identity and route, in one transaction.
-  Future<({int messageId, int outboxId})> insertOutgoing({
+  /// With [chatId] null the chat row is created (or found) in the same
+  /// transaction as the message and the outbox row: the first send of a draft
+  /// conversation. [newChatTitle] names that new chat.
+  Future<({int messageId, int outboxId, int chatId})> insertOutgoing({
+    int? chatId,
+    String? newChatTitle,
     required String identity,
-    required int chatId,
     required String destinationHash,
     required String text,
     String? title,
@@ -884,10 +909,29 @@ FROM vault_chats c LEFT JOIN bridge_devices d ON d.device_id = c.device_id''';
     final now = DateTime.now().millisecondsSinceEpoch;
     late int mid;
     late int oid;
+    late int cid;
     await _db.transaction((t) async {
+      var existing = chatId;
+      if (existing == null) {
+        final ex = await t.query(
+          'chats',
+          columns: ['id'],
+          where: "account_id = ? AND kind = 'lxmf' AND peer_hash = ?",
+          whereArgs: [acc, destinationHash],
+        );
+        existing = ex.isNotEmpty
+            ? ex.first['id']! as int
+            : await t.insert('chats', {
+                'account_id': acc,
+                'kind': 'lxmf',
+                'peer_hash': destinationHash,
+                'title': newChatTitle,
+              });
+      }
+      cid = existing;
       mid = await t.insert('messages', {
         'account_id': acc,
-        'chat_id': chatId,
+        'chat_id': cid,
         'direction': 'out',
         'text': text,
         'title': title,
@@ -902,7 +946,7 @@ FROM vault_chats c LEFT JOIN bridge_devices d ON d.device_id = c.device_id''';
       oid = await t.insert('outbox', {
         'message_id': mid,
         'account_id': acc,
-        'chat_id': chatId,
+        'chat_id': cid,
         'sender_identity': identity,
         'route': route,
         'destination_hash': destinationHash,
@@ -913,7 +957,7 @@ FROM vault_chats c LEFT JOIN bridge_devices d ON d.device_id = c.device_id''';
         'chats',
         {'last_ts': now},
         where: 'id = ?',
-        whereArgs: [chatId],
+        whereArgs: [cid],
       );
       await t.insert('delivery_log', {
         'message_id': mid,
@@ -923,7 +967,7 @@ FROM vault_chats c LEFT JOIN bridge_devices d ON d.device_id = c.device_id''';
       });
     });
     adb.notify();
-    return (messageId: mid, outboxId: oid);
+    return (messageId: mid, outboxId: oid, chatId: cid);
   }
 
   Future<void> updateMessage(
