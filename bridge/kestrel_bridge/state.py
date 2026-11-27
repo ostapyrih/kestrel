@@ -230,6 +230,29 @@ class State:
             row = self._db.execute("SELECT change_cursor FROM conv WHERE key=?", (key,)).fetchone()
         return row[0] if row else 0
 
+    # ---- deleted chats (tombstones) ----------------------------------------------------------------
+    # A tombstone is a ``conv`` row ``del:<peer>`` whose fingerprint is ``before_ts`` (repr of the float). It takes
+    # a normal change cursor value, so /sync_chats reports it to devices that were offline during the deletion.
+    def tombstone_put(self, peer: str, before_ts: float) -> int:
+        """Record that the conversation was deleted (messages with ts <= before_ts); returns the new cursor."""
+        with self.transaction():
+            self.touch_conv(f"del:{peer}", repr(float(before_ts)), force=True)
+            return self.cursor()
+
+    def tombstone_ts(self, key: str) -> float | None:
+        rows = self.query("SELECT fingerprint FROM conv WHERE key=?", (key,))
+        try:
+            return float(rows[0][0]) if rows else None
+        except ValueError:
+            return None
+
+    def forget_peer(self, peer: str) -> None:
+        """Drop what the bridge remembers about a deleted conversation (cursor row, origin map, pending acks)."""
+        with self.transaction():
+            self.execute("DELETE FROM conv WHERE key=?", (f"lxmf:{peer}",))
+            self.execute("DELETE FROM outbound WHERE peer=?", (peer,))
+            self.execute("DELETE FROM pending WHERE peer=?", (peer,))
+
     def set_last_id(self, key: str, last_id: int) -> None:
         with self._lock:
             self._db.execute("UPDATE conv SET last_id=MAX(last_id, ?) WHERE key=?", (last_id, key))
