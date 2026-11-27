@@ -377,6 +377,14 @@ messages with `ts <= before_ts` (and the chat if none is left). MeshChatX no lon
 message from/to the peer starts a fresh conversation (`ts > before_ts`); the tombstone stays and is harmless. If the bridge database is recreated (`state_id` change) the
 tombstones are lost, but the deleted conversations are not in MeshChatX either.
 
+**Client guidance: sync-semantics version.** A client that predates deletions (no handling of `deleted` / `delete_chat`) still advances its
+`/sync_chats` cursor and its vault cursor past those events, so after it is updated they never arrive again. Clients therefore keep a local
+`sync_semantics_version` (Kestrel: `kSyncSemanticsVersion`). When the app starts with a higher value than the stored one, the next connection does a one-time
+full catch-up: bridge cursor to 0 (every tombstone is returned in `deleted` again) and a vault replay from cursor 0 (known records are deduplicated by LXMF hash,
+`delete_chat` blobs applied). Bump the constant whenever a change to sync semantics would make stored cursors unsafe. Tombstones MUST be stored durably
+(also for a chat not present yet) and every later insert of a message with `ts <= before_ts` for that peer (account A: `/get_messages`, snapshots, pushes; vault: records of the
+owning device) MUST be dropped. They survive turning the bridge mode off. A manual "Full resync" runs the same catch-up.
+
 ### 6.6 RRC
 `/list_rooms` and `/get_room_messages` are unchanged from v1:
 `/list_rooms {}` -> `{"hubs": [{"hub","name","connected","status","rooms":[{"room","unread","mention"}]}]}`;

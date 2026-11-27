@@ -319,7 +319,50 @@ class BridgeService {
 
   // ------------------------------------------------------------ connect/sync
 
+  /// One-time catch-up when this app's sync semantics are newer than what the
+  /// database last saw ([kSyncSemanticsVersion]): an older app may have moved
+  /// the bridge and vault cursors past events it could not apply (chat
+  /// deletions), so both streams are read again from 0. The cursor reset is
+  /// persisted before the version is, so an interruption just continues.
+  Future<void> _catchUpIfNeeded() async {
+    try {
+      final v =
+          int.tryParse(
+            await repo.getSetting(SettingKeys.syncSemanticsVersion) ?? '',
+          ) ??
+          0;
+      if (v >= kSyncSemanticsVersion) return;
+      await _rewindAll();
+      await repo.setSetting(
+        SettingKeys.syncSemanticsVersion,
+        '$kSyncSemanticsVersion',
+      );
+    } on Object catch (e) {
+      debugPrint('bridge: sync catch-up failed: $e');
+    }
+  }
+
+  Future<void> _rewindAll() async {
+    await store.resetCursors();
+    await vault.store.rewind();
+  }
+
+  /// "Full resync" (Settings): the same catch-up as after an app upgrade, on
+  /// demand. Idempotent: known messages are matched by hash, never duplicated.
+  Future<void> fullResync() async {
+    if (_api == null) return;
+    await vault.whenIdle();
+    await _rewindAll();
+    await repo.setSetting(
+      SettingKeys.syncSemanticsVersion,
+      '$kSyncSemanticsVersion',
+    );
+    unawaited(vault.syncNow());
+    await resync();
+  }
+
   Future<void> _onConnected(HelloResult h) async {
+    await _catchUpIfNeeded();
     // The history sync (vault) only needs the bridge and its own keys, never
     // MeshChatX: it starts first, in parallel, and nothing below can keep it
     // from running (MeshChatX may be down or hanging, a call may fail).
@@ -418,6 +461,7 @@ class BridgeService {
           final chatId = await store.applySummary(c);
           try {
             await _fetchConversation(chatId, c.peer);
+            await store.dropIfEmpty(chatId);
           } on BridgeError {
             rethrow;
           } on BridgeTransportError {
@@ -540,6 +584,7 @@ class BridgeService {
     for (final m in r.messages) {
       await store.upsertMessage(chatId, m);
     }
+    await store.dropIfEmpty(chatId);
     if (!r.hasMore) await store.setOlderDone(chatId, true);
     return r.hasMore;
   }
@@ -637,6 +682,7 @@ class BridgeService {
           name: m.name,
         );
         await store.upsertMessage(chatId, m);
+        await store.dropIfEmpty(chatId);
         if (isNew && m.incoming) await store.setChatUnread(chatId, true);
       case 'lxmf.state':
         final known = await store.applyState(

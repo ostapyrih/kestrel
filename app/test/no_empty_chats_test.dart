@@ -151,8 +151,8 @@ void main() {
   });
 
   test('the migration is registered and only targets empty chats', () {
-    expect(migrations.last.version, 8);
-    expect(migrations.last.statements, [removeEmptyChatsSql]);
+    final m8 = migrations.firstWhere((m) => m.version == 8);
+    expect(m8.statements, [removeEmptyChatsSql]);
     expect(removeEmptyChatsSql, contains("kind = 'lxmf'"));
     expect(
       RegExp(r'NOT EXISTS \(SELECT 1 FROM messages')

@@ -132,6 +132,14 @@ class VaultSettingsSection extends ConsumerWidget {
                   unawaited(b.resync());
                 },
         ),
+        TextButton.icon(
+          key: const ValueKey('vault-full-resync'),
+          icon: const Icon(Icons.restart_alt),
+          label: Text(s.t('vault_full_resync')),
+          onPressed: st.state == VaultState.syncing
+              ? null
+              : () => unawaited(ref.read(bridgeProvider).fullResync()),
+        ),
         const SizedBox(height: 4),
         Text(s.t('vault_note'), style: text.bodySmall),
       ],

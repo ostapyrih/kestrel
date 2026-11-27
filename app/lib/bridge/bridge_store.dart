@@ -180,6 +180,15 @@ class BridgeStore {
     }
     if (r.isNotEmpty) ex = r.first;
 
+    if (ex == null) {
+      // deleted conversation: its old messages must never come back
+      // (`/get_messages` pages, snapshots, late pushes)
+      final cut = await _tombstoneOfChat(chatId);
+      if (cut != null && tsMs <= cut) {
+        return -1;
+      }
+    }
+
     late int id;
     if (ex != null) {
       id = ex['id']! as int;
@@ -227,6 +236,24 @@ class BridgeStore {
     );
     adb.notify();
     return id;
+  }
+
+  Future<int?> _tombstoneOfChat(int chatId) async {
+    final c = await _db.query(
+      'chats',
+      columns: ['peer_hash'],
+      where: "id = ? AND kind = 'lxmf'",
+      whereArgs: [chatId],
+    );
+    final peer = c.isEmpty ? null : c.first['peer_hash'] as String?;
+    return peer == null ? null : repo.aTombstone(peer);
+  }
+
+  /// Removes the chat again if every message offered for it was refused by a
+  /// tombstone (no empty chats).
+  Future<void> dropIfEmpty(int chatId) async {
+    await _db.execute('$removeEmptyChatsSql AND id = ?', [chatId]);
+    adb.notify();
   }
 
   String _stage(String status) => switch (status) {
