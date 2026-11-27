@@ -5,6 +5,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../l10n/strings.dart';
 import '../lora/lora_screen.dart';
+import '../notifications/notification_settings.dart';
 import '../platform.dart';
 import '../providers.dart';
 import '../storage/database.dart';
@@ -306,6 +307,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const PropagationSettingsSection(),
           const SizedBox(height: 8),
           Text(s.t('bridge_note'), style: text.bodySmall),
+          const NotificationSettingsSection(),
           const UpdateSettingsSection(),
           const DesktopSettingsSection(),
         ],
