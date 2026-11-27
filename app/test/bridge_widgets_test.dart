@@ -4,8 +4,8 @@ import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kestrel/bridge/bridge_connection.dart';
-import 'package:kestrel/bridge/bridge_service.dart';
 import 'package:kestrel/bridge/codec.dart';
+import 'package:kestrel/bridge/vault_service.dart';
 import 'package:kestrel/node/node_service.dart';
 import 'package:kestrel/platform.dart';
 import 'package:kestrel/main.dart';
@@ -542,7 +542,7 @@ void main() {
       await show(tester, const AddDeviceScreen());
       await tester.tap(find.byKey(const ValueKey('other-options')));
       await tester.pump();
-      bridge.approveError = VaultKeysUnsupported();
+      bridge.approveError = VaultKeyMissing();
       await tester.enterText(
         find.byKey(const ValueKey('pair-input')),
         encodePairingQr(payload()),
@@ -551,10 +551,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('confirm-approve')));
       await tester.pumpAndSettle();
-      expect(
-        find.textContaining('Ключі сховища ще не підтримуються'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('не має ключа сховища'), findsOneWidget);
     });
 
     testWidgets('new device: QR and copyable text, waiting for approval', (

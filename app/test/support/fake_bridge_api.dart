@@ -26,6 +26,26 @@ class FakeBridgeApi implements BridgeApi {
   bool fastRetry = false;
   int retries = 0;
 
+  FakeBridgeApi({bool vaultStubs = true}) {
+    if (!vaultStubs) return;
+    // an idle vault nobody activated: tests that do not care about the
+    // vault never see it fail
+    handlers['/vault/key'] = (a) => {
+      'key_epoch': 1,
+      'in_use': false,
+      'wrapped_epoch': null,
+      'wrapped_group_key': null,
+      'wrap': null,
+    };
+    handlers['/vault/set_keys'] = (a) => {'key_epoch': 1};
+    handlers['/vault/list'] = (a) => {
+      'blobs': <Object?>[],
+      'cursor': 0,
+      'more': false,
+      'key_epoch': 1,
+    };
+  }
+
   @override
   BridgeStatus get status => _s;
   @override

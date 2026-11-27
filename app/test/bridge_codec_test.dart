@@ -212,6 +212,35 @@ void main() {
       );
     });
 
+    test('invite QR carries the invite_secret only when given', () {
+      final base = InvitePayload(
+        bridgePubkey: Uint8List.fromList(List.filled(64, 7)),
+        token: Uint8List(16),
+        inviterName: 'x',
+        expiresAt: 1,
+      );
+      expect(decodeInviteQr(encodeInviteQr(base)).inviteSecret, isNull);
+      final secret = Uint8List.fromList(List.generate(32, (i) => 255 - i));
+      final withSecret = InvitePayload(
+        bridgePubkey: base.bridgePubkey,
+        token: base.token,
+        inviterName: 'x',
+        expiresAt: 1,
+        inviteSecret: secret,
+      );
+      expect(decodeInviteQr(encodeInviteQr(withSecret)).inviteSecret, secret);
+      final bad = packb({
+        'bridge_pubkey': base.bridgePubkey,
+        'token': base.token,
+        'expires_at': 1,
+        'invite_secret': Uint8List(5),
+      });
+      expect(
+        () => decodeInviteQr('$invitePrefix${base64UrlNoPad(bad)}'),
+        throwsFormatException,
+      );
+    });
+
     test('invite QR (spec 5.4): round trip, unknown keys ignored, junk refused', () {
       final p = InvitePayload(
         bridgePubkey: Uint8List.fromList(List.filled(64, 7)),
