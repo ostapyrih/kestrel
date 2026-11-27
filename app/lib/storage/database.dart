@@ -458,11 +458,16 @@ class AppDatabase {
   static Future<AppDatabase> open(
     String path, {
     DatabaseFactory? factory,
+
+    /// `false` gives an independent handle even for the same path (two
+    /// in-memory databases in one test); the app always uses the default.
+    bool singleInstance = true,
   }) async {
     final f = factory ?? databaseFactory;
     final db = await f.openDatabase(
       path,
       options: OpenDatabaseOptions(
+        singleInstance: singleInstance,
         version: latestSchemaVersion,
         onConfigure: (d) => d.execute('PRAGMA foreign_keys = ON'),
         onCreate: (d, v) => migrate(d, 0, v),

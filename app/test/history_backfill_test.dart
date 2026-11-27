@@ -8,7 +8,13 @@ void main() {
   setUpAll(sqfliteFfiInit);
 
   Future<Repo> open() async => Repo(
-    await AppDatabase.open(inMemoryDatabasePath, factory: databaseFactoryFfi),
+    // Independent in-memory databases: with the default single instance both
+    // repos would be the very same database (source == destination).
+    await AppDatabase.open(
+      inMemoryDatabasePath,
+      factory: databaseFactoryFfi,
+      singleInstance: false,
+    ),
   );
 
   test('history streams in batches into a fresh repo, once', () async {
