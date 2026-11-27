@@ -65,7 +65,17 @@ class LxmRouterConfig {
     this.nodeWait = const Duration(seconds: 60),
     this.autoSyncMinGap = const Duration(seconds: 30),
     this.propagationStampCostOverride,
+    this.slowInterfaceBitrate = 50000,
+    this.slowInterfaceMaxResource = 16 * 1024,
   });
+
+  /// Interfaces with a bitrate below this (bit/s, e.g. LoRa) count as slow.
+  final int slowInterfaceBitrate;
+
+  /// Largest outbound message sent as a Resource over a slow interface
+  /// (bytes); bigger ones fail with `too_large_for_slow_link` instead of
+  /// occupying the channel for minutes. 0 = no limit.
+  final int slowInterfaceMaxResource;
 
   /// LXMRouter.MAX_DELIVERY_ATTEMPTS.
   final int maxDeliveryAttempts;
@@ -142,7 +152,11 @@ class LxmOutboundEvent {
     this.tag,
     this.attempt = 0,
     this.progress,
+    this.interface,
   });
+
+  /// The interface carrying the message (null while none is chosen).
+  final RnsInterface? interface;
 
   final Uint8List hash;
   final LxmState state;
@@ -197,7 +211,11 @@ class LxmReceived {
     required this.receivedAt,
     this.stampValid,
     this.stampValue,
+    this.interface,
   });
+
+  /// The interface the message arrived on (null for propagation downloads).
+  final RnsInterface? interface;
 
   final LXMessage message;
 
@@ -400,7 +418,7 @@ class LxmRouter {
     destination
       ..proofStrategy = ProofStrategy.all
       ..onPacket = (data, packet) {
-        _onOpportunistic(data);
+        _onOpportunistic(data, packet.receivingInterface);
       }
       ..onLinkEstablished = (l) {
         _wireLink(l as Link);
@@ -516,9 +534,9 @@ class LxmRouter {
 
   // ------------------------------------------------------------------- inbound
 
-  void _onOpportunistic(Uint8List data) {
+  void _onOpportunistic(Uint8List data, [RnsInterface? iface]) {
     final bytes = LXMessage.fromOpportunisticPayload(destination.hash, data);
-    unawaited(_deliver(bytes, LxmfMethod.opportunistic));
+    unawaited(_deliver(bytes, LxmfMethod.opportunistic, iface));
   }
 
   void _wireLink(Link link) {
@@ -526,7 +544,8 @@ class LxmRouter {
     if (!_wired.add(k)) return;
     link
       ..onPacket = (data, packet) {
-        unawaited(_deliver(Uint8List.fromList(data), LxmfMethod.direct));
+        unawaited(_deliver(
+            Uint8List.fromList(data), LxmfMethod.direct, link.attachedInterface));
       }
       ..resourceStrategy = ResourceStrategy.app
       ..onResourceAdvertised = (adv) {
@@ -534,7 +553,7 @@ class LxmRouter {
       }
       ..onResourceConcluded = (res) {
         if (res.status == ResourceStatus.complete && res.data != null) {
-          unawaited(_deliver(res.data!, LxmfMethod.direct));
+          unawaited(_deliver(res.data!, LxmfMethod.direct, link.attachedInterface));
         }
       }
       ..onRemoteIdentified = (l, id) {
@@ -547,11 +566,13 @@ class LxmRouter {
     };
   }
 
-  Future<void> _deliver(Uint8List bytes, int method) async {
-    await _deliverResult(bytes, method);
+  Future<void> _deliver(Uint8List bytes, int method,
+      [RnsInterface? iface]) async {
+    await _deliverResult(bytes, method, iface);
   }
 
-  Future<_Inbound> _deliverResult(Uint8List bytes, int method) async {
+  Future<_Inbound> _deliverResult(Uint8List bytes, int method,
+      [RnsInterface? iface]) async {
     try {
       if (bytes.length < 16 + 16 + 64 + 1) return _Inbound.dropped;
       final dest = Uint8List.sublistView(bytes, 0, 16);
@@ -582,6 +603,7 @@ class LxmRouter {
         receivedAt: DateTime.now(),
         stampValid: stampValid,
         stampValue: stampValue,
+        interface: iface,
       );
       final persist = inboundPersister;
       if (persist != null) {
@@ -705,6 +727,15 @@ class LxmRouter {
   /// Handles of messages still in the queue.
   List<LxmOutbound> get pending => [for (final o in _pending) o.handle];
 
+  RnsInterface? _ifaceOf(_Out o) {
+    final l = _links[toHex(o.msg.destinationHash)];
+    final li = l?.attachedInterface;
+    if (li != null) return li;
+    final pn = o.pn?.node;
+    if (pn != null) return rns.transport.nextHopInterface(fromHex(pn));
+    return rns.transport.nextHopInterface(o.msg.destinationHash);
+  }
+
   void _emit(_Out o, LxmState s, String stage, {String? error}) {
     final h = o.handle..state = s;
     if (error != null) h.error = error;
@@ -722,6 +753,7 @@ class LxmRouter {
         tag: h.tag,
         attempt: h.attempts,
         progress: h.progress,
+        interface: _ifaceOf(o),
       ));
     }
     if (_pending.contains(o) && !s.terminal) {
@@ -979,6 +1011,18 @@ class LxmRouter {
         }
       }));
     } else {
+      final ai = link.attachedInterface;
+      final lim = config.slowInterfaceMaxResource;
+      if (ai != null &&
+          lim > 0 &&
+          ai.bitrate > 0 &&
+          ai.bitrate < config.slowInterfaceBitrate &&
+          o.msg.packed!.length > lim) {
+        await link.teardown();
+        _conclude(o, LxmState.failed, 'too_large_for_slow_link',
+            error: 'message is too large to send over a slow (LoRa) link');
+        return;
+      }
       h.progress = 0.1;
       final res = await Resource.send(
         link,

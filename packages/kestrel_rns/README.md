@@ -145,6 +145,39 @@ Interop is tested against a real Python LXMF 1.3.1 propagation node and client o
 Python and Python to Dart through the node, stamp enforcement, resource uploads, limits, crash
 safety of the haves, dedup, fallback.
 
+### RNode / LoRa interface (Phase 6)
+
+`RNodeInterface` (`lib/src/interfaces/rnode.dart`) is the Dart port of `RNodeInterface.py` (RNS 1.6.1)
+on top of an abstract byte pipe, `RNodeLink` (`write`, `received`, `closed`, `close`; no Flutter
+dependency, the app provides BLE and USB-serial links). It plugs into `Reticulum` next to
+`TcpClientInterface`: Transport broadcasts on, and answers from, every online interface.
+
+* **Handshake** like the reference: wait (2 s), `detect` + firmware + platform + MCU in one write,
+  firmware >= 1.52 check, then frequency, bandwidth, TX power, SF, CR (+ optional airtime limits),
+  radio on, wait and **validate the reported values** (frequency within 100 Hz, bandwidth, TX power,
+  SF, radio state). A mismatch, an old firmware, a missing detect response or a hardware error
+  (`CMD_ERROR`) takes the interface offline with `status.error`, and it retries every 5 s.
+* **Framing**: `Kiss` / `KissDecoder` with the read-timeout behaviour of the reference (a partial frame
+  is dropped after 100 ms, BLE 1.25 s). `RNodeTiming.ble()` carries the BLE delays.
+* **Flow control** (`RNodeConfig.flowControl`, off by default like Python): one packet in flight, the rest
+  queued until `CMD_READY` (with a safety timeout). `MTU` is 508 and not auto-raised.
+* **Reporting**: RSSI/SNR of each received packet (`packets`, `status`), link quality, firmware, platform,
+  on-air bitrate (`sf * (4/cr) / (2^sf / bw)`, also what Transport uses for timeouts), airtime and channel
+  load, battery, temperature; `airtime(bytes)` estimates time on air.
+* **Live reconfigure**: `reconfigure(RNodeConfig)` re-sends and re-validates the parameters without
+  reconnecting. `stop()` switches the radio off and sends "leave".
+* Not implemented: callsign beacon (`id_interval`/`id_callsign`), display framebuffer, multi-radio RNodes.
+* **Router awareness**: `LxmReceived.interface` / `LxmOutboundEvent.interface` say which interface carried a
+  message (the app turns that into the `LoRa` badge). Over an interface slower than
+  `LxmRouterConfig.slowInterfaceBitrate` (50 kbit/s) a message that would need a Resource larger than
+  `slowInterfaceMaxResource` (16 KiB) fails early with `too_large_for_slow_link`.
+
+Tests: `test/rnode_test.dart` (golden vectors in `test/vectors/rnode.json`, generated from the real Python
+`RNodeInterface` by `tools/gen_vectors.py`: the bytes it writes for detect, configuration with several
+parameter sets, data frames, flow control and shutdown, and what its read loop makes of device output),
+`test/support/rnode_emulator.dart` (firmware-side emulator + `FakeAir`) and `test/rnode_lxmf_test.dart`
+(two Dart nodes exchange LXMF over two emulated RNodes).
+
 ## Compatibility matrix
 
 | This package | RNS | LXMF | Python (vector generation) |

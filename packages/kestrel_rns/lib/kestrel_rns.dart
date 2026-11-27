@@ -12,6 +12,8 @@ export 'src/framing/hdlc.dart';
 export 'src/framing/kiss.dart';
 export 'src/identity.dart';
 export 'src/interfaces/interface.dart';
+export 'src/interfaces/rnode.dart';
+export 'src/interfaces/rnode_link.dart';
 export 'src/interfaces/tcp_client.dart';
 export 'src/link/link.dart';
 export 'src/link/resource.dart';

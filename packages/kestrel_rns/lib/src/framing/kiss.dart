@@ -25,7 +25,41 @@ abstract final class Kiss {
   static const int cmdRadioState = 0x06;
   static const int cmdRadioLock = 0x07;
   static const int cmdDetect = 0x08;
+  static const int cmdLeave = 0x0A;
+  static const int cmdStAlock = 0x0B;
+  static const int cmdLtAlock = 0x0C;
+  static const int cmdReady = 0x0F;
+  static const int cmdStatRx = 0x21;
+  static const int cmdStatTx = 0x22;
+  static const int cmdStatRssi = 0x23;
+  static const int cmdStatSnr = 0x24;
+  static const int cmdStatChtm = 0x25;
+  static const int cmdStatPhyprm = 0x26;
+  static const int cmdStatBat = 0x27;
+  static const int cmdStatCsma = 0x28;
+  static const int cmdStatTemp = 0x29;
+  static const int cmdPlatform = 0x48;
+  static const int cmdMcu = 0x49;
   static const int cmdFwVersion = 0x50;
+  static const int cmdReset = 0x55;
+  static const int cmdError = 0x90;
+
+  static const int detectReq = 0x73;
+  static const int detectResp = 0x46;
+
+  static const int radioStateOff = 0x00;
+  static const int radioStateOn = 0x01;
+
+  static const int errorInitRadio = 0x01;
+  static const int errorTxFailed = 0x02;
+  static const int errorEepromLocked = 0x03;
+  static const int errorQueueFull = 0x04;
+  static const int errorMemoryLow = 0x05;
+  static const int errorModemTimeout = 0x06;
+
+  static const int platformAvr = 0x90;
+  static const int platformEsp32 = 0x80;
+  static const int platformNrf52 = 0x70;
 
   /// RNodeInterface.HW_MTU (:195).
   static const int rnodeHwMtu = 508;
@@ -75,6 +109,18 @@ class KissDecoder {
   bool _escape = false;
   int _command = Kiss.cmdUnknown;
   final BytesBuilder _buf = BytesBuilder();
+
+  /// True while a frame carries payload bytes (RNodeInterface drops such a
+  /// partial frame after its read timeout, see [reset]).
+  bool get hasPartialData => _inFrame && _buf.isNotEmpty;
+
+  /// Forgets the frame in progress (RNodeInterface read-timeout behaviour).
+  void reset() {
+    _inFrame = false;
+    _escape = false;
+    _command = Kiss.cmdUnknown;
+    _buf.clear();
+  }
 
   /// Feeds received bytes; returns completed frames.
   List<KissFrame> feed(List<int> chunk) {

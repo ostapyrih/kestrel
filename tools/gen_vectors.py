@@ -1427,6 +1427,159 @@ def gen_network():
     write("network.json", out)
 
 
+class _CaptureSerial:
+    """Stands in for the serial port of RNodeInterface: records writes, feeds scripted device bytes."""
+
+    def __init__(self, incoming=b""):
+        self.written = []
+        self._in = bytearray(incoming)
+        self.is_open = True
+
+    @property
+    def in_waiting(self):
+        if not self._in:
+            self.is_open = False  # drained: end the read loop
+        return len(self._in)
+
+    def read(self, n):
+        out = bytes(self._in[:n])
+        del self._in[:n]
+        return out
+
+    def write(self, data):
+        self.written.append(bytes(data))
+        return len(data)
+
+    def close(self):
+        self.is_open = False
+
+
+def _rnode(freq, bw, txp, sf, cr, st=None, lt=None, flow=False, incoming=b""):
+    from RNS.Interfaces.RNodeInterface import RNodeInterface
+    r = RNodeInterface.__new__(RNodeInterface)
+    r.frequency, r.bandwidth, r.txpower, r.sf, r.cr = freq, bw, txp, sf, cr
+    r.st_alock, r.lt_alock = st, lt
+    r.state = KISS.RADIO_STATE_OFF
+    r.serial = _CaptureSerial(incoming)
+    r.use_ble = r.use_tcp = False
+    r.online = True
+    r.detached = True
+    r.reconnecting = False
+    r.flow_control = flow
+    r.interface_ready = True
+    r.packet_queue = []
+    r.id_interval = r.id_callsign = None
+    r.first_tx = None
+    r.HW_MTU = 508
+    r.timeout = 100
+    r.platform = None
+    r.display = None
+    r.hw_errors = []
+    for k in ("r_frequency", "r_bandwidth", "r_txpower", "r_sf", "r_cr", "r_state", "r_lock", "r_stat_rx",
+              "r_stat_tx", "r_stat_rssi", "r_stat_snr", "r_stat_q", "r_st_alock", "r_lt_alock", "mcu",
+              "r_symbol_time_ms", "r_symbol_rate", "r_preamble_symbols", "r_premable_time_ms",
+              "r_csma_slot_time_ms", "r_csma_difs_ms", "r_csma_cw_band", "r_csma_cw_min", "r_csma_cw_max",
+              "r_temperature", "r_current_rssi", "r_noise_floor", "r_interference", "r_interference_l"):
+        setattr(r, k, None)
+    r.r_airtime_short = r.r_airtime_long = r.r_channel_load_short = r.r_channel_load_long = 0.0
+    r.r_battery_state, r.r_battery_percent = 0, 0
+    r.detected = False
+    r.firmware_ok = False
+    r.maj_version = r.min_version = 0
+    r.bitrate = 0
+    r.inbound_data = []
+    r.owner = types.SimpleNamespace(inbound=lambda data, iface: r.inbound_data.append(bytes(data)))
+    r.rxb = r.txb = 0
+    r.__class__.__str__ = lambda self: "RNodeInterface[vec]"
+    return r
+
+
+def gen_rnode():
+    """Exact bytes RNodeInterface writes (detect, config, data, shutdown) and how it parses device output."""
+    RI = RNS.Interfaces.RNodeInterface.RNodeInterface
+    configs = [
+        {"name": "reticulum_manual_eu", "freq": 867200000, "bw": 125000, "txp": 7, "sf": 8, "cr": 5},
+        {"name": "fast_sf7", "freq": 868100000, "bw": 250000, "txp": 14, "sf": 7, "cr": 5},
+        {"name": "long_range", "freq": 867200000, "bw": 62500, "txp": 14, "sf": 12, "cr": 8},
+        {"name": "airtime_limits", "freq": 868000000, "bw": 125000, "txp": 10, "sf": 9, "cr": 6, "st": 10.0, "lt": 1.5},
+        # bytes that need KISS escaping inside the 4-byte frequency (0xC0 / 0xDB)
+        {"name": "escaping_frequency", "freq": 0xC0DB00C0, "bw": 125000, "txp": 7, "sf": 8, "cr": 5},
+    ]
+    out_configs = []
+    for c in configs:
+        r = _rnode(c["freq"], c["bw"], c["txp"], c["sf"], c["cr"], c.get("st"), c.get("lt"))
+        r.initRadio()
+        r.r_sf, r.r_cr, r.r_bandwidth = c["sf"], c["cr"], c["bw"]
+        r.updateBitrate()
+        out_configs.append({**c, "frames": [hx(w) for w in r.serial.written], "bitrate": r.bitrate})
+    r = _rnode(867200000, 125000, 7, 8, 5)
+    r.detect()
+    detect = hx(r.serial.written[0])
+    r = _rnode(867200000, 125000, 7, 8, 5)
+    r.setRadioState(KISS.RADIO_STATE_OFF)
+    r.leave()
+    shutdown = [hx(w) for w in r.serial.written]
+
+    # data frames as process_outgoing writes them (incl. flow control bookkeeping)
+    data_out = []
+    for p in [b"hi", bytes([0xC0, 0xDB, 0xDC, 0xDD, 0x00]), det("rnode/tx", 300)]:
+        r = _rnode(867200000, 125000, 7, 8, 5, flow=True)
+        r.process_outgoing(p)
+        data_out.append({"payload": hx(p), "frame": hx(r.serial.written[0]), "ready_after": r.interface_ready})
+    # a second packet while waiting for READY is queued, then released by CMD_READY
+    r = _rnode(867200000, 125000, 7, 8, 5, flow=True)
+    r.process_outgoing(b"one")
+    r.process_outgoing(b"two")
+    flow = {"written_before_ready": [hx(w) for w in r.serial.written], "queued": [hx(q) for q in r.packet_queue]}
+    r.process_queue()
+    flow["written_after_ready"] = [hx(w) for w in r.serial.written]
+
+    # what the reference makes of device output
+    def fr(cmd, payload):
+        return bytes([KISS.FEND, cmd]) + KISS.escape(payload) + bytes([KISS.FEND])
+
+    scripts = []
+
+    def script(name, stream, sf=8):
+        r = _rnode(867200000, 125000, 7, sf, 5, incoming=stream)
+        r.readLoop()
+        scripts.append({
+            "name": name, "stream": hx(stream),
+            "detected": r.detected, "fw": [r.maj_version, r.min_version], "platform": r.platform, "mcu": r.mcu,
+            "r_frequency": r.r_frequency, "r_bandwidth": r.r_bandwidth, "r_txpower": r.r_txpower,
+            "r_sf": r.r_sf, "r_cr": r.r_cr, "r_state": r.r_state,
+            "rssi": r.r_stat_rssi, "snr": r.r_stat_snr, "quality": r.r_stat_q,
+            "bitrate": r.bitrate, "data": [hx(d) for d in r.inbound_data],
+            "airtime": [r.r_airtime_short, r.r_airtime_long, r.r_channel_load_short, r.r_channel_load_long,
+                        r.r_current_rssi, r.r_noise_floor],
+            "battery": [r.r_battery_state, r.r_battery_percent], "temp": r.r_temperature,
+        })
+
+    hello = (fr(KISS.CMD_DETECT, bytes([KISS.DETECT_RESP])) + fr(KISS.CMD_FW_VERSION, bytes([1, 82]))
+             + fr(KISS.CMD_PLATFORM, bytes([KISS.PLATFORM_ESP32])) + fr(KISS.CMD_MCU, bytes([0x81])))
+    script("detect_response", hello)
+    echo = (fr(KISS.CMD_FREQUENCY, struct.pack(">I", 867200000)) + fr(KISS.CMD_BANDWIDTH, struct.pack(">I", 125000))
+            + fr(KISS.CMD_TXPOWER, bytes([7])) + fr(KISS.CMD_SF, bytes([8])) + fr(KISS.CMD_CR, bytes([5]))
+            + fr(KISS.CMD_RADIO_STATE, bytes([1])))
+    script("config_echo", echo)
+    # RSSI / SNR precede the data frame they belong to
+    rx = (fr(KISS.CMD_STAT_RSSI, bytes([157 - 80])) + fr(KISS.CMD_STAT_SNR, bytes([0xE4]))
+          + fr(KISS.CMD_DATA, bytes([0xC0, 0xDB, 1, 2, 3])))
+    script("rx_with_rssi_snr", echo + rx)
+    echo12 = echo.replace(bytes([KISS.FEND, KISS.CMD_SF, 8]), bytes([KISS.FEND, KISS.CMD_SF, 12]))
+    script("rx_snr_positive_sf12", echo12 + fr(KISS.CMD_STAT_SNR, bytes([26])), sf=12)
+    script("channel_time_battery_temp",
+           fr(KISS.CMD_STAT_CHTM, bytes([0, 150, 3, 232, 0, 50, 1, 244, 120, 40, 0xFF]))
+           + fr(KISS.CMD_STAT_BAT, bytes([1, 87])) + fr(KISS.CMD_STAT_TEMP, bytes([145])))
+    script("escaped_frequency", fr(KISS.CMD_FREQUENCY, struct.pack(">I", 0xC0DB00C0)))
+
+    write("rnode.json", {
+        "detect": detect, "shutdown": shutdown, "configs": out_configs, "data_out": data_out, "flow": flow,
+        "scripts": scripts, "required_fw": [RI.REQUIRED_FW_VER_MAJ, RI.REQUIRED_FW_VER_MIN],
+        "rssi_offset": RI.RSSI_OFFSET,
+    })
+
+
 def main():
     gen_identity()
     gen_token()
@@ -1436,6 +1589,7 @@ def main():
     gen_announce()
     gen_hdlc()
     gen_kiss()
+    gen_rnode()
     gen_msgpack()
     gen_lxmf()
     gen_network()
