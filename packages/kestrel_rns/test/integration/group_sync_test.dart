@@ -33,8 +33,24 @@ class Dev {
   final storage = MemoryStorage();
   final seen = <String>{};
   final texts = <String>[];
+  final history = <Map<String, Object?>>[];
+  late DeviceBackfill bf;
+  final retiredG = <String>[];
   final records = <SyncRecord>[];
   var stopped = false;
+
+  /// Stores a message once (by LXMF hash); false if it was already known.
+  bool note(Map<Object?, Object?> d) {
+    if (!seen.add(d['hash']! as String)) return false;
+    texts.add(d['text']! as String);
+    history.add({
+      'hash': d['hash'],
+      'text': d['text'],
+      'peer': d['peer'],
+      'incoming': d['incoming'],
+    });
+    return true;
+  }
 
   String get id => toHex(key.hash);
   bool get announcing => ann.isAnnouncer;
@@ -61,28 +77,32 @@ class Dev {
       store: KestrelSyncStore(storage),
       group: groupRouter.destination,
       gapDelay: const Duration(seconds: 1),
+      onIdentity: switchIdentity,
     );
     await sync.start();
+    bf = DeviceBackfill(
+      sync: sync,
+      storage: storage,
+      source: _Source(this),
+      sink: _Sink(this),
+      retry: const Duration(seconds: 4),
+    );
+    await bf.init();
     sync.rememberSiblings();
     sync.records.listen((r) {
       records.add(r);
-      if (r.kind == SyncKind.messages) {
-        final d = r.data! as Map;
-        if (seen.add(d['hash']! as String)) texts.add(d['text']! as String);
-      }
+      if (r.kind == SyncKind.messages) note(r.data! as Map);
     });
     groupRouter.inboundPersister = (rx) async {
       final h = toHex(rx.message.hash!);
-      if (!seen.add(h)) return;
-      texts.add(rx.message.contentAsString);
-      if (ann.isAnnouncer) {
-        await sync.publish(SyncKind.messages, {
-          'hash': h,
-          'text': rx.message.contentAsString,
-          'peer': toHex(rx.message.sourceHash),
-          'incoming': true,
-        });
-      }
+      final d = {
+        'hash': h,
+        'text': rx.message.contentAsString,
+        'peer': toHex(rx.message.sourceHash),
+        'incoming': true,
+      };
+      if (!note(d)) return;
+      if (ann.isAnnouncer) await sync.publish(SyncKind.messages, d);
     };
     ann = GroupAnnouncer(
       rns: rns,
@@ -111,20 +131,98 @@ class Dev {
   Future<void> sendTo(String peer, String text) async {
     final o =
         await groupRouter.send(destinationHash: fromHex(peer), content: text);
-    final h = toHex(o.hash);
-    seen.add(h);
-    texts.add(text);
-    await sync.publish(SyncKind.messages,
-        {'hash': h, 'text': text, 'peer': peer, 'incoming': false});
+    final d = {
+      'hash': toHex(o.hash),
+      'text': text,
+      'peer': peer,
+      'incoming': false
+    };
+    note(d);
+    await sync.publish(SyncKind.messages, d);
+  }
+
+  /// Moves this device to the identity of [c]: the old G stops answering
+  /// (router stopped, destination deregistered), the new one starts silent
+  /// and announces at once when this device is the announcer.
+  Future<void> switchIdentity(IdentityChange c) async {
+    final old = groupRouter;
+    retiredG.add(toHex(old.address));
+    rns.transport.deregisterDestination(old.destination);
+    await old.stop();
+    g = await Identity.fromPrivateKey(c.privateKey);
+    groupRouter =
+        await LxmRouter.start(rns, g, displayName: 'Alice', config: _fast);
+    if (c.ratchets.isNotEmpty) {
+      await groupRouter.destination.mergeRatchets(c.ratchets);
+    }
+    groupRouter
+      ..inboxSyncEnabled = ann.isAnnouncer
+      ..destination.ratchetRotationAllowed = ann.isAnnouncer
+      ..destination.announceTimebase = AnnounceTimebase()
+      ..inboundPersister = old.inboundPersister
+      ..silent = !ann.isAnnouncer;
+    sync.group = groupRouter.destination;
+    if (ann.isAnnouncer) unawaited(sync.announceGroup(groupRouter));
+  }
+
+  /// "Change address" typed on this device: the new G is adopted here and
+  /// sent to every sibling.
+  Future<String> changeAddress() async {
+    final fresh = await Identity.generate();
+    final old = toHex(g.hash);
+    final gen = state.identityGen + 1;
+    final change = IdentityChange(
+      privateKey: fresh.privateKey!,
+      gen: gen,
+      replaces: old,
+      name: state.displayName,
+      nameRev: state.nameRev,
+      ratchets: [RatchetEntry(Identity.generateRatchet(), 1)],
+    );
+    state.adoptIdentity(gen, toHex(fresh.hash));
+    await switchIdentity(change);
+    await sync.publishIdentity(change);
+    return gHex;
   }
 
   Future<void> kill() async {
     stopped = true;
+    await bf.stop();
     await ann.stop();
     await sync.stop();
     await groupRouter.stop();
     await deviceRouter.stop();
     await rns.stop();
+  }
+}
+
+/// The device's message history as a backfill source (2 per batch).
+class _Source implements BackfillSource {
+  _Source(this.d);
+  final Dev d;
+
+  @override
+  Future<BackfillBatch> read(String? phase, int cursor) async {
+    final end = cursor + 2 < d.history.length ? cursor + 2 : d.history.length;
+    return BackfillBatch(
+      phase: 'msg',
+      items: d.history.sublist(cursor, end),
+      nextPhase: end < d.history.length ? 'msg' : null,
+      nextCursor: end,
+      total: d.history.length,
+    );
+  }
+}
+
+class _Sink implements BackfillSink {
+  _Sink(this.d);
+  final Dev d;
+
+  @override
+  Future<void> apply(String phase, List<Object?> items) async {
+    for (final m in items) {
+      d.note(m! as Map);
+    }
   }
 }
 
@@ -184,6 +282,7 @@ void main() {
     d.state = r.bundle.state;
     devs.add(d);
     await d.run(ratchets: r.bundle.ratchets);
+    await d.bf.start(from: r.host?.id ?? host.id);
     return d;
   }
 
@@ -308,4 +407,78 @@ void main() {
     await Future<void>.delayed(const Duration(seconds: 3));
     expect(removed.records.any((r) => r.kind == SyncKind.browser), isFalse);
   }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('change address on one device moves the whole group to the new G',
+      () async {
+    final d1 = await creator();
+    await d1.run();
+    final d2 = await joiner(d1, 'D2');
+    final d3 = await joiner(d1, 'D3');
+    await until(() => d2.state.devices.active.length == 3,
+        timeout: const Duration(seconds: 30));
+    await until(() => d3.state.devices.active.length == 3,
+        timeout: const Duration(seconds: 30));
+    await until(() => announcers() == 1, timeout: const Duration(seconds: 30));
+    final oldG = d1.gHex;
+    expect(d2.gHex, oldG);
+
+    // device 1 (not necessarily the announcer) changes the address
+    final newG = await d1.changeAddress();
+    expect(newG, isNot(oldG));
+    await until(() => d2.gHex == newG && d3.gHex == newG,
+        timeout: const Duration(seconds: 40));
+    for (final d in devs) {
+      expect(d.state.identityGen, 1, reason: d.name);
+      expect(d.retiredG, [oldG], reason: d.name);
+    }
+    expect(announcers(), 1, reason: 'still exactly one announcer');
+    for (final d in devs.where((d) => !d.announcing)) {
+      expect(d.groupRouter.silent, isTrue, reason: d.name);
+    }
+
+    // the old address is gone: a message to it is not delivered anywhere
+    p.send({'cmd': 'send', 'dest_hash': oldG, 'content': 'to old'});
+    // a message to the new G is delivered once and synced to every device
+    await peerSend(announcer(), 'to new');
+    await until(() => devs.every((d) => d.texts.contains('to new')),
+        timeout: const Duration(seconds: 40));
+    for (final d in devs) {
+      expect(d.texts.where((t) => t == 'to new').length, 1, reason: d.name);
+      expect(d.texts.contains('to old'), isFalse, reason: d.name);
+    }
+  }, timeout: const Timeout(Duration(minutes: 4)));
+
+  test('a newly paired device receives the earlier history once', () async {
+    final d1 = await creator();
+    await d1.run();
+    final d2 = await joiner(d1, 'D2');
+    await until(() => d2.state.devices.active.length == 2,
+        timeout: const Duration(seconds: 30));
+    await until(() => announcers() == 1, timeout: const Duration(seconds: 30));
+
+    await peerSend(announcer(), 'old 1');
+    await peerSend(announcer(), 'old 2');
+    await d2.sendTo(p.destHash, 'old 3');
+    await until(
+        () =>
+            d1.texts.toSet().containsAll(['old 1', 'old 2', 'old 3']) &&
+            d2.texts.toSet().containsAll(['old 1', 'old 2', 'old 3']),
+        timeout: const Duration(seconds: 40));
+
+    final d3 = await joiner(d1, 'D3');
+    await until(() => d3.bf.progress.done,
+        timeout: const Duration(seconds: 60));
+    expect(d3.texts.toSet(), containsAll(['old 1', 'old 2', 'old 3']));
+    expect(d3.bf.progress.applied, greaterThanOrEqualTo(3));
+
+    // new traffic after the backfill reaches it too, and nothing is doubled
+    await peerSend(announcer(), 'new 1');
+    await until(() => d3.texts.contains('new 1'),
+        timeout: const Duration(seconds: 40));
+    await Future<void>.delayed(const Duration(seconds: 2));
+    for (final t in ['old 1', 'old 2', 'old 3', 'new 1']) {
+      expect(d3.texts.where((x) => x == t).length, 1, reason: t);
+      expect(d3.history.where((m) => m['text'] == t).length, 1, reason: t);
+    }
+  }, timeout: const Timeout(Duration(minutes: 4)));
 }
