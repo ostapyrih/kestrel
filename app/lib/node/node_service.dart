@@ -23,7 +23,7 @@ const defaultPropagationIntervalMinutes = 15;
 /// Destination hash of the owner's public propagation node (a public, announced
 /// address). It is the selection on a fresh install and whenever the user has
 /// not chosen a node; see [PropagationChoice].
-const kDefaultPropagationNode = 'bcf824c99c6a61f0b6de26bdfc2bd5f3';
+const kDefaultPropagationNode = '9e0328edbea2a4e8bae44bccb5427d5a';
 
 /// How the propagation node is chosen. Stored in
 /// `SettingKeys.propagationNode`: absent or empty = [defaultNode] (also what
