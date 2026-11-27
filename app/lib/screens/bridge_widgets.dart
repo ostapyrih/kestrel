@@ -6,6 +6,7 @@ import 'package:material_ui/material_ui.dart';
 import '../bridge/bridge_connection.dart';
 import '../bridge/bridge_service.dart';
 import '../bridge/codec.dart';
+import '../bridge/vault_service.dart';
 import '../l10n/strings.dart';
 import '../providers.dart';
 import '../storage/repo.dart';
@@ -95,7 +96,7 @@ class BridgeIndicator extends StatelessWidget {
 
 /// Message text for an error of a bridge action.
 String bridgeErrorText(Strings s, Object e) {
-  if (e is VaultKeysUnsupported) return s.t('vault_unsupported');
+  if (e is VaultKeyMissing) return s.t('vault_key_missing');
   if (e is RrcCommandBlocked) return s.t('room_send_blocked');
   if (e is InviteExpired) return s.t('invite_expired_local');
   if (e is BridgeNotConfigured || e is BridgeTransportError) {
@@ -108,6 +109,7 @@ String bridgeErrorText(Strings s, Object e) {
       'pairing_invalid' => s.t('pair_invalid'),
       'device_exists' => s.t('pair_exists'),
       'vault_in_use' => s.t('pair_invite_unavailable'),
+      'key_epoch_stale' => s.t('pair_stale'),
       _ => s.t('error_code', {'code': e.code}),
     };
   }

@@ -17,6 +17,7 @@ import msgpack
 import RNS
 
 from kestrel_bridge.devices import decode_pairing_qr, pairing_sign_message
+from tests import it_vault as V
 
 
 T0 = time.time()
@@ -121,17 +122,56 @@ def main() -> None:
     wait(lambda: any(p.get("event") == "device_added" for p in pushes), 30, "device_added push")
     out("device_added_push", [p for p in pushes if p.get("event") == "device_added"][0])
     out("PAIRED", True)
-    # invite pairing: create an invite for device B3 (the driver starts it_client_b3 when the token file exists)
-    inv = request(link, "/devices/invite", {})
+    b2_rec = next(p for p in pushes if p.get("event") == "device_added")["data"]["device"]
+
+    # vault: activate with a group key wrapped for B1 and B2, upload one blob
+    gk1 = os.urandom(32)
+    chain = {1: gk1}
+    out("vault_key_before", request(link, "/vault/key", {}))
+    out("vault_set_keys", request(link, "/vault/set_keys", {"key_epoch": 1, "wrapped_group_keys": {
+        my_id: V.wrap_identity(chain, b.get_public_key()),
+        b2_rec["device_id"]: V.wrap_identity(chain, bytes.fromhex(b2_rec["public_key"]))}}))
+    blob_id = os.urandom(16).hex()
+    put = {"blob_id": blob_id, "device_id": my_id, "seq": 1, "key_epoch": 1,
+           "ciphertext": V.encrypt_blob(gk1, blob_id, my_id, 1, 1, "messages",
+                                        {"records": [{"hash": "ab" * 16, "peer": peer, "text": "vault hello"}]})}
+    out("vault_put", request(link, "/vault/put", put))
+    out("vault_put_dup", request(link, "/vault/put", put))
+
+    # invite pairing while the vault is in use: the chain is wrapped to an invite secret that never reaches the bridge
+    invite_secret = os.urandom(32)
+    bad_inv = request(link, "/devices/invite", {})
+    out("invite_without_key", bad_inv)
+    inv = request(link, "/devices/invite", {"key_epoch": 1, "wrapped_group_key": V.wrap_invite(chain, invite_secret)})
     out("invite", {"ok": inv["ok"], "keys": sorted(inv["result"]) if inv["ok"] else None})
+    with open(os.path.join(os.path.dirname(qr_file), "invite.secret"), "w") as f:
+        f.write(invite_secret.hex())
     with open(os.path.join(os.path.dirname(qr_file), "invite.token"), "w") as f:
         f.write(inv["result"]["token"].hex())
     wait(lambda: sum(1 for p in pushes if p.get("event") == "device_added") >= 2, 60, "device_added push for B3")
+    b3_rec = [p for p in pushes if p.get("event") == "device_added"][1]["data"]["device"]
     out("invite_added_push", [p for p in pushes if p.get("event") == "device_added"][1])
     out("INVITED", True)
     wait(lambda: os.path.exists(revoke_file), 120, "revoke file")
-    b2_id = next(p for p in pushes if p.get("event") == "device_added")["data"]["device"]["device_id"]
-    out("revoke", request(link, "/devices/revoke", {"device_id": b2_id, "reason": "integration test"}))
+    b2_id = b2_rec["device_id"]
+    # revocation rotates the group key: GK2 is wrapped for the remaining devices (B1 and the invited B3)
+    gk2 = os.urandom(32)
+    chain2 = {1: gk1, 2: gk2}
+    out("revoke_without_keys", request(link, "/devices/revoke", {"device_id": b2_id}))
+    out("revoke", request(link, "/devices/revoke", {"device_id": b2_id, "reason": "integration test", "key_epoch": 2,
+                                                     "wrapped_group_keys": {
+                                                         my_id: V.wrap_identity(chain2, b.get_public_key()),
+                                                         b3_rec["device_id"]: V.wrap_identity(
+                                                             chain2, bytes.fromhex(b3_rec["public_key"]))}}))
+    out("vault_put_old_epoch", request(link, "/vault/put", {
+        "blob_id": os.urandom(16).hex(), "device_id": my_id, "seq": 2, "key_epoch": 1, "ciphertext": b"x" * 40}))
+    blob2 = os.urandom(16).hex()
+    out("vault_put_new_epoch", request(link, "/vault/put", {
+        "blob_id": blob2, "device_id": my_id, "seq": 2, "key_epoch": 2,
+        "ciphertext": V.encrypt_blob(gk2, blob2, my_id, 2, 2, "messages", {"records": []})}))
+    out("vault_key_after", request(link, "/vault/key", {}))
+    out("vault_key_after_unwrapped", sorted(V.unwrap_identity(request(link, "/vault/key", {})["result"]
+                                                              ["wrapped_group_key"], b)))
     out("devices_after", request(link, "/devices/list", {}))
     wait(lambda: any(p.get("event") == "device_revoked" for p in pushes), 15, "device_revoked push")
     out("revoked_push", [p for p in pushes if p.get("event") == "device_revoked"])

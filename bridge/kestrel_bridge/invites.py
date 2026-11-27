@@ -25,9 +25,12 @@ def token_hash(token: bytes) -> str:
 
 
 class _Invite:
-    __slots__ = ("invite_id", "inviter", "created", "expires_at", "used_at", "redeemed_by")
+    __slots__ = ("invite_id", "inviter", "created", "expires_at", "used_at", "redeemed_by", "epoch", "wrapped")
 
-    def __init__(self, invite_id: str, inviter: str, created: float, expires_at: float):
+    def __init__(self, invite_id: str, inviter: str, created: float, expires_at: float,
+                 epoch: int | None = None, wrapped: bytes | None = None):
+        self.epoch = epoch              # vault key epoch of ``wrapped`` (None: the vault was not in use)
+        self.wrapped = wrapped          # key chain wrapped to the invite secret (opaque to the bridge)
         self.invite_id = invite_id
         self.inviter = inviter
         self.created = created
@@ -51,6 +54,10 @@ class InviteStore:
         for h in [h for h, i in self._invites.items() if now > i.expires_at]:
             del self._invites[h]
 
+    def _drop(self, inv: _Invite) -> None:
+        for h in [h for h, i in self._invites.items() if i is inv]:
+            del self._invites[h]
+
     def open_count(self, inviter: str) -> int:
         now = self._clock()
         with self._lock:
@@ -58,10 +65,8 @@ class InviteStore:
             return sum(1 for i in self._invites.values() if i.inviter == inviter and i.used_at is None)
 
     # ---- /devices/invite ---------------------------------------------------------------------
-    def create(self, inviter: str) -> dict:
-        if self.vault.in_use():
-            raise BridgeError(errors.VAULT_IN_USE, "invites are not available while the vault is in use; "
-                                                   "use QR pairing from the new device (/devices/approve)")
+    def create(self, inviter: str, args: dict | None = None) -> dict:
+        key = self.vault.check_invite_key(args or {})
         now = self._clock()
         with self._lock:
             self._purge(now)
@@ -70,7 +75,8 @@ class InviteStore:
                 raise BridgeError(errors.RATE_LIMITED, "too many open invites", retry_after=60,
                                   max=self.limits.max_open_invites)
             token = secrets.token_bytes(TOKEN_BYTES)
-            inv = _Invite(secrets.token_hex(16), inviter, now, now + self.limits.invite_ttl)
+            inv = _Invite(secrets.token_hex(16), inviter, now, now + self.limits.invite_ttl,
+                          *(key if key else (None, None)))
             self._invites[token_hash(token)] = inv
         return {"invite_id": inv.invite_id, "token": token, "expires_at": inv.expires_at}
 
@@ -121,11 +127,24 @@ class InviteStore:
             raise BridgeError(errors.PAIRING_EXPIRED, "the invite expired", server_time=now)
         if self.registry.trusted(inv.inviter) is None:
             raise BridgeError(errors.PAIRING_INVALID, "the inviting device is no longer trusted")
-        if self.vault.in_use():
-            raise BridgeError(errors.VAULT_IN_USE, "invites are not available while the vault is in use")
+        if inv.wrapped is not None and inv.epoch != self.vault.epoch():
+            # a revocation happened since the invite was made: its wrapped chain misses the new epoch
+            self._drop(inv)
+            raise BridgeError(errors.KEY_EPOCH_STALE, "the group key was rotated; create a new invite",
+                              key_epoch=self.vault.epoch())
+        if inv.wrapped is None and self.vault.in_use():
+            raise BridgeError(errors.VAULT_IN_USE, "the vault was activated after this invite was made; "
+                                                   "create a new invite")
         name = validate_name(args.get("name"))
         platform = validate_platform(args.get("platform", "unknown"))
-        dev = self.registry.add(public_key, name, platform, [], inv.inviter, emit=False)
+        try:
+            with self.vault.state.transaction():
+                dev = self.registry.add(public_key, name, platform, [], inv.inviter, emit=False)
+                if inv.wrapped is not None:
+                    self.vault.store_device_key(dev.device_id, inv.wrapped, "invite")
+        except BaseException:
+            self.registry.load()      # the cache must not keep a change that was rolled back
+            raise
         inv.used_at = now
         inv.redeemed_by = dev.device_id
         return dev

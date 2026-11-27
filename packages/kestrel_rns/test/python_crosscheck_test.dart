@@ -159,7 +159,50 @@ void main() {
         hdlc.add({'payload': hex(payload), 'frame': hex(Hdlc.frame(payload))});
       }
 
+      // Vault envelope (docs/bridge-protocol.md 9.4) produced by Dart with real randomness.
+      final chain = {
+        1: VaultCrypto.generateGroupKey(),
+        2: VaultCrypto.generateGroupKey(),
+      };
+      final inviteSecret = rnd(r, 32);
+      final blobData = {
+        'messages': [
+          {'hash': hex(rnd(r, 16)), 'text': 'Привіт ☃', 'ts': 1.5, 'n': -4}
+        ]
+      };
+      final blobId = hex(rnd(r, 16));
+      final deviceId = hex(rnd(r, 16));
+      final vault = {
+        'recipient': 'b',
+        'chain_packed': hex(VaultCrypto.packChain(chain)),
+        'wrapped_identity': hex(await VaultCrypto.wrapToIdentity(
+            chain, Identity.fromPublicKey(b.publicKey))),
+        'wrapped_invite': hex(await VaultCrypto.wrapToInvite(chain, inviteSecret)),
+        'invite_secret': hex(inviteSecret),
+        'group_keys': {for (final e in chain.entries) '${e.key}': hex(e.value)},
+        'blob': {
+          'blob_id': blobId,
+          'device_id': deviceId,
+          'seq': 3,
+          'key_epoch': 2,
+          'kind': 'messages',
+          'ts': 1700000000.5,
+          'data_packed': hex(packb(blobData)),
+          'ciphertext': hex(await VaultCrypto.encryptBlob(
+            groupKey: chain[2]!,
+            blobId: blobId,
+            deviceId: deviceId,
+            seq: 3,
+            keyEpoch: 2,
+            kind: 'messages',
+            ts: 1700000000.5,
+            data: blobData,
+          )),
+        },
+      };
+
       final out = {
+        'vault': vault,
         'identities': [
           for (final e in named.entries)
             {

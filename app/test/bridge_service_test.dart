@@ -786,19 +786,6 @@ void main() {
       },
     );
 
-    test(
-      'revoking while the vault is in use is blocked with a clear error',
-      () async {
-        api.connect(helloFor(me, vaultInUse: true));
-        await svc.flushEvents();
-        await expectLater(
-          svc.revokeDevice('d1' * 16),
-          throwsA(isA<VaultKeysUnsupported>()),
-        );
-        expect(api.callsTo('/devices/revoke'), isEmpty);
-      },
-    );
-
     test('revoke, rename and role calls follow the spec', () async {
       await up();
       api.handlers['/devices/revoke'] = (a) => {
@@ -865,22 +852,6 @@ void main() {
         );
       },
     );
-
-    test('approving while the vault is in use is blocked', () async {
-      api.connect(helloFor(me, vaultInUse: true));
-      await svc.flushEvents();
-      final p = PairingPayload(
-        pubkey: Uint8List(64),
-        name: 'x',
-        platform: 'linux',
-        nonce: Uint8List(16),
-        ts: 1,
-      );
-      await expectLater(
-        svc.approveDevice(decodePairingQr(encodePairingQr(p))),
-        throwsA(isA<VaultKeysUnsupported>()),
-      );
-    });
   });
 
   group('RRC', () {

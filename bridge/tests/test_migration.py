@@ -76,7 +76,7 @@ class MigrationTest(unittest.TestCase):
         s = State(self.path)
         self.addCleanup(s.close)
         self.assertEqual(s.migrated_from, 1)
-        self.assertEqual(self.version(), 2)
+        self.assertEqual(self.version(), SCHEMA_VERSION)
         # cursors and conversations survive: devices keep their cursors valid across the upgrade
         self.assertEqual(s.cursor(), 41)
         self.assertEqual(s.conv_cursor("lxmf:" + "aa" * 16), 40)
@@ -128,7 +128,7 @@ class MigrationTest(unittest.TestCase):
         self.assertEqual(db.execute("SELECT phone FROM journal WHERE cmd_id='cmd-old-0001'").fetchone()[0], PHONE_KEY)
         db.close()
         State(self.path).close()                                            # and the next start migrates fine
-        self.assertEqual(self.version(), 2)
+        self.assertEqual(self.version(), SCHEMA_VERSION)
 
     def test_newer_schema_is_refused(self):
         State(self.path).close()

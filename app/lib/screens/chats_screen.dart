@@ -146,6 +146,13 @@ class AccountSwitcher extends ConsumerWidget {
                   onSelected: configured ? (_) => notifier.select('A') : null,
                 ),
               ),
+              if (ref.watch(hasRemoteChatsProvider).value ?? false)
+                ChoiceChip(
+                  key: const ValueKey('chip-R'),
+                  label: Text(s.t('account_other')),
+                  selected: sel == 'R',
+                  onSelected: (_) => notifier.select('R'),
+                ),
               ChoiceChip(
                 key: const ValueKey('chip-all'),
                 label: Text(s.t('account_all')),
@@ -194,6 +201,7 @@ class ChatTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final s = Strings.of(context);
     final title = chat.displayTitle;
     final bridgeMode = ref.watch(bridgeModeProvider);
     return ListTile(
@@ -212,7 +220,14 @@ class ChatTile extends ConsumerWidget {
           ),
           if (bridgeMode) ...[
             const SizedBox(width: 8),
-            IdentityBadge(chat.accountIdentity),
+            if (chat.isRemote)
+              IdentityBadge(
+                'B',
+                key: const ValueKey('badge-remote'),
+                label: s.account('B', device: chat.remoteDeviceName),
+              )
+            else
+              IdentityBadge(chat.accountIdentity),
           ],
         ],
       ),

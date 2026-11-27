@@ -5,6 +5,7 @@ import 'package:kestrel/bridge/bridge_connection.dart';
 import 'package:kestrel/bridge/bridge_service.dart';
 import 'package:kestrel/bridge/bridge_store.dart';
 import 'package:kestrel/bridge/codec.dart';
+import 'package:kestrel/bridge/vault_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kestrel/node/node_service.dart';
 import 'package:kestrel/providers.dart';
@@ -62,6 +63,38 @@ final fixtureChats = [
     lastTs: _t0 - 60000,
     unread: 2,
     lastText: 'Через міст',
+  ),
+];
+
+/// A history synced from the user's iPhone (vault): read only.
+final fixtureRemoteChat = ChatRow(
+  id: -1,
+  accountIdentity: 'B',
+  kind: 'lxmf',
+  peerHash: 'cc' * 16,
+  title: 'Remote peer',
+  lastTs: _t0 - 120000,
+  unread: 0,
+  lastText: 'Написано на айфоні',
+  remoteDeviceId: 'd1' * 16,
+  remoteDeviceName: 'iPhone',
+);
+
+final fixtureRemoteMessages = [
+  MessageRow(
+    id: -1,
+    chatId: -1,
+    direction: 'out',
+    lxmfHash: 'ee' * 16,
+    text: 'Написано на айфоні',
+    ts: _t0 - 120000,
+    senderIdentity: 'B',
+    route: 'direct',
+    transport: 'tcp',
+    status: 'delivered',
+    error: null,
+    signatureValid: null,
+    originDevice: 'd1' * 16,
   ),
 ];
 
@@ -343,7 +376,13 @@ List<Override> fixtureOverrides({
   bool? bridgeEnabled,
   Stream<bool>? bridgeEnabledStream,
   List<DeviceRecord>? devices,
+
+  /// Adds the read-only history of another device to the chat list.
+  bool withRemote = false,
+  VaultStatus vaultStatus = const VaultStatus(state: VaultState.idle),
 }) => [
+  hasRemoteChatsProvider.overrideWith((ref) => Stream.value(withRemote)),
+  vaultStatusProvider.overrideWith((ref) => Stream.value(vaultStatus)),
   bridgeProvider.overrideWithValue(bridge ?? FakeBridge()),
   bridgeStatusProvider.overrideWith((ref) => Stream.value(bridgeStatus)),
   bridgeConfiguredProvider.overrideWith(
@@ -372,17 +411,22 @@ List<Override> fixtureOverrides({
     final mode = ref.watch(bridgeModeProvider);
     final eff = mode ? f : 'B';
     return Stream.value([
+      if (withRemote && mode && (eff == null || eff == 'R')) fixtureRemoteChat,
       for (final c in fixtureChats)
-        if (eff == null || c.accountIdentity == eff) c,
+        if (eff != 'R' && (eff == null || c.accountIdentity == eff)) c,
     ]);
   }),
   chatProvider.overrideWith(
-    (ref, id) => Stream.value(fixtureChats.firstWhere((c) => c.id == id)),
+    (ref, id) => Stream.value(
+      [...fixtureChats, fixtureRemoteChat].firstWhere((c) => c.id == id),
+    ),
   ),
   messagesProvider.overrideWith(
     (ref, id) => Stream.value(
       id == 1
           ? fixtureMessages
+          : id == -1
+          ? fixtureRemoteMessages
           : id == 2
           ? fixtureAMessages
           : const <MessageRow>[],

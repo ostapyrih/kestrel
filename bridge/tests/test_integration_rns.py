@@ -314,6 +314,33 @@ tcp_port = {tcp_port}
         self.assertEqual(res["push"]["data"]["text"], "pushed hello")
 
         # pairing: B1 approved B2 (listed nowhere in the config)
+        # vault: B1 activated it for B1 + B2, B2 decrypted what B1 uploaded; the bridge never saw plaintext
+        self.assertFalse(res["vault_key_before"]["result"]["in_use"])
+        self.assertTrue(res["vault_set_keys"]["ok"], res["vault_set_keys"])
+        self.assertTrue(res["vault_put"]["ok"], res["vault_put"])
+        self.assertTrue(res["vault_put_dup"]["result"]["duplicate"])
+        self.assertEqual(res2["b2_vault"]["wrap"], "identity")
+        self.assertEqual(res2["b2_vault"]["records"][0]["text"], "vault hello")
+        # an invite while the vault is in use needs the key fields; the bridge keeps no invite secret
+        self.assertEqual(res["invite_without_key"]["error"]["code"], "bad_request")
+        self.assertTrue(res["invite"]["ok"])
+        self.assertNotIn("invite_secret", res["invite"]["keys"])
+        # B3 joined by invite and decrypts the blob with the key chain wrapped to the invite secret
+        self.assertEqual(res3["b3_vault"]["wrap"], "invite")
+        self.assertTrue(res3["b3_vault"]["in_use"])
+        self.assertEqual(res3["b3_vault"]["chain_epochs"], [1])
+        self.assertEqual(res3["b3_vault"]["records"][0]["text"], "vault hello")
+        # revocation rotates the epoch: it needs the new keys, the old epoch is refused for everyone
+        self.assertEqual(res["revoke_without_keys"]["error"]["code"], "bad_request")
+        self.assertEqual(res["vault_put_old_epoch"]["error"]["code"], "key_epoch_stale")
+        self.assertTrue(res["vault_put_new_epoch"]["ok"], res["vault_put_new_epoch"])
+        self.assertEqual(res["vault_key_after"]["result"]["wrap"], "identity")
+        self.assertEqual(res["vault_key_after"]["result"]["wrapped_epoch"], 2)
+        self.assertEqual(res["vault_key_after_unwrapped"], [1, 2])
+        # the revoked device cannot upload any more (rejected on its new Link)
+        pa = res2["b2_put_after"]
+        self.assertTrue(pa is None or pa.get("ok") is False, pa)
+
         self.assertTrue(res["approve"]["ok"], res["approve"])
         dev = res["approve"]["result"]["device"]
         self.assertEqual((dev["device_id"], dev["added_by"], dev["bootstrap"], dev["roles"], dev["name"]),
@@ -356,6 +383,7 @@ tcp_port = {tcp_port}
         self.assertEqual(res3["b3_hello"]["result"]["device"]["name"], "Invited PC 2")   # /hello renames itself
         self.assertEqual(res3["b3_hello"]["result"]["device"]["platform"], "windows")
         self.assertIn("pairing_invite", res3["b3_hello"]["result"]["capabilities"])
+        self.assertIn("vault_invite", res3["b3_hello"]["result"]["capabilities"])
         self.assertIn(b3_hash, {x["device_id"] for x in res3["b3_list"]["result"]["devices"]})
         self.assertTrue(res3["b3_still_up"])
         self.assertTrue(res3["b3_hello_late"]["ok"])

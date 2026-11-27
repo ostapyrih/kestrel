@@ -29,9 +29,10 @@ Future<void> main() async {
   final repo = Repo(adb);
   final rnsDir = Directory(p.join(dir.path, 'rns'));
   await rnsDir.create(recursive: true);
+  final secrets = SecureSecretStore();
   final node = NodeService(
     repo: repo,
-    secrets: SecureSecretStore(),
+    secrets: secrets,
     rnsStorage: JsonFileStorage(rnsDir),
   );
   final bridge = BridgeService(
@@ -39,6 +40,7 @@ Future<void> main() async {
     ownDeviceId: () => toHex(node.identity.hash),
     identity: () => node.identity,
     sendAsB: node.sendMessage,
+    secrets: secrets,
     apiFactory: (key, allowFallback) => BridgeConnection(
       rns: node.rns,
       identity: node.identity,

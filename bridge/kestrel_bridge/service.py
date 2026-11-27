@@ -273,7 +273,7 @@ class Service(DeviceMixin):
             "cursor": self.state.cursor(),
             "device": dev.to_wire(),
             "capabilities": ["lxmf", "rrc", "push", "lxmf_transport", "devices", "pairing", "read_state",
-                             "origin_device", "vault", "pairing_invite"],
+                             "origin_device", "vault", "pairing_invite", "vault_invite"],
             "compat": {"ok": self.compat_ok, "meshchatx_version": self.client.version,
                        "api_version": self.client.api_version,
                        "checked": self.compat_checked, "error": self.last_compat_error},

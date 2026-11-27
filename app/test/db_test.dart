@@ -104,7 +104,7 @@ void main() {
     final a = await _open(path);
     expect(
       Sqflite.firstIntValue(await a.db.rawQuery('PRAGMA user_version')),
-      3,
+      latestSchemaVersion,
     );
     expect(await _count(a, 'peers'), 0); // table from migration 2 exists
     expect(await _count(a, 'bridge_devices'), 0); // migration 3 tables
@@ -184,9 +184,10 @@ void main() {
   );
 
   test('the only code that deletes chats or messages is '
-      'Repo.purgeBridgeAccountData, and it only touches account A', () {
+      'Repo.purgeBridgeAccountData (and the vault cache reset), and it only '
+      'touches account A', () {
     final re = RegExp(
-      r'''(DELETE\s+FROM\s+(chats|messages|outbox|delivery_log)|\.delete\(\s*['"](chats|messages|outbox|delivery_log)['"]|DROP\s+TABLE)''',
+      r'''(DELETE\s+FROM\s+(chats|messages|outbox|delivery_log|vault_chats|vault_messages)\b|\.delete\(\s*['"](chats|messages|outbox|delivery_log|vault_chats|vault_messages)['"]|DROP\s+TABLE)''',
       caseSensitive: false,
     );
     final offenders = <String>[];
@@ -203,6 +204,19 @@ void main() {
         final end = src.indexOf('\n  }\n', start);
         purge = src.substring(start, end);
         src = src.substring(0, start) + src.substring(end);
+        // the second allowed place: it only drops vault caches (the
+        // downloaded histories of other devices), never own B data
+        final rs = src.indexOf('Future<void> resetVaultForNewBridge()');
+        expect(rs, greaterThan(0), reason: 'the vault reset method exists');
+        final re2 = src.indexOf('\n  }\n', rs);
+        final reset = src.substring(rs, re2);
+        expect(
+          RegExp(r'DELETE FROM (chats|messages|outbox|delivery_log)\b')
+              .hasMatch(reset),
+          isFalse,
+          reason: 'the vault reset must not touch chats or messages',
+        );
+        src = src.substring(0, rs) + src.substring(re2);
       }
       if (re.hasMatch(src)) offenders.add(f.path);
     }
@@ -280,6 +294,30 @@ void main() {
       'ts': 1,
     });
     await a.db.insert('bridge_devices', {'device_id': 'dd', 'name': 'x'});
+    // vault: a downloaded remote history, and this device's upload progress
+    final vc = await a.db.insert('vault_chats', {
+      'device_id': 'dd',
+      'peer_hash': 'ee' * 16,
+      'peer_name': 'Remote peer',
+      'last_ts': 5,
+    });
+    await a.db.insert('vault_messages', {
+      'chat_id': vc,
+      'device_id': 'dd',
+      'lxmf_hash': 'h-remote',
+      'direction': 'in',
+      'text': 'remote text',
+      'ts': 5,
+      'rts': 5.0,
+      'status': 'received',
+    });
+    await a.db.insert('vault_seen', {'device_id': 'dd', 'last_seq': 4});
+    await a.db.insert('vault_upload', {
+      'message_id': outB.messageId,
+      'status': 'sent',
+    });
+    await repo.setSetting(SettingKeys.vaultCursor, '9');
+    await repo.setSetting(SettingKeys.vaultLastSeq, '12');
     await repo.setSetting(SettingKeys.bridgePubkey, 'ab' * 64);
     await repo.setSetting(SettingKeys.bridgeCursor, '42');
     await repo.setSetting(SettingKeys.bridgeStateId, 'st');
@@ -314,6 +352,15 @@ void main() {
     expect(await _count(a, 'rrc_rooms'), 0);
     expect(await _count(a, 'rrc_messages'), 0);
     expect(await _count(a, 'bridge_devices'), 0);
+    // downloaded histories of other devices are gone, the vault cursor reset
+    expect(await _count(a, 'vault_chats'), 0);
+    expect(await _count(a, 'vault_messages'), 0);
+    expect(await _count(a, 'vault_seen'), 0);
+    expect(await repo.getSetting(SettingKeys.vaultCursor), '0');
+    expect(await repo.remoteChats(), isEmpty);
+    // this device's upload progress survives, so re-enabling continues
+    expect(await _count(a, 'vault_upload'), 1);
+    expect(await repo.getSetting(SettingKeys.vaultLastSeq), '12');
     expect(await repo.getSetting(SettingKeys.bridgeCursor), '0');
     expect(await repo.getSetting(SettingKeys.bridgeStateId), '');
     // the pairing and the user's settings stay
