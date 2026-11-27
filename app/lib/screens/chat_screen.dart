@@ -9,6 +9,7 @@ import '../l10n/strings.dart';
 import '../providers.dart';
 import '../storage/repo.dart';
 import 'bridge_widgets.dart';
+import 'delete_chat.dart';
 import 'vault_widgets.dart';
 import 'widgets.dart';
 
@@ -95,8 +96,43 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         : ref.watch(ownDeviceNameProvider);
     final bridgeMode = ref.watch(bridgeModeProvider);
     final olderItem = isA && !(chat?.olderDone ?? true);
+    final deleteBlock = ref.watch(deleteBlockProvider(widget.chatId)).value;
     return Scaffold(
       appBar: AppBar(
+        actions: [
+          if (chat != null && isDeletable(chat))
+            PopupMenuButton<String>(
+              key: const ValueKey('chat-menu'),
+              onSelected: (v) async {
+                if (v != 'delete') return;
+                final done = await deleteChatsFlow(context, ref, [chat]);
+                if (!done || !context.mounted) return;
+                if (ref.read(selectedChatProvider) == widget.chatId) {
+                  ref.read(selectedChatProvider.notifier).select(null);
+                } else if (Navigator.of(context).canPop()) {
+                  Navigator.of(context).pop();
+                }
+              },
+              itemBuilder: (_) => [
+                PopupMenuItem(
+                  key: const ValueKey('menu-delete-chat'),
+                  value: 'delete',
+                  enabled: deleteBlock == null,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(s.t('delete_chat')),
+                      if (deleteBlock != null)
+                        Text(
+                          s.t(deleteBlock),
+                          style: Theme.of(context).textTheme.labelSmall,
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+        ],
         title: Row(
           children: [
             Flexible(

@@ -184,14 +184,17 @@ void main() {
   );
 
   test('the only code that deletes chats or messages is '
-      'Repo.purgeBridgeAccountData (and the vault cache reset), and it only '
-      'touches account A', () {
+      'Repo.purgeBridgeAccountData (account A), the vault cache reset, '
+      'Repo._deleteChatRows (scoped by account) and removeVaultHistory '
+      '(scoped by device)', () {
     final re = RegExp(
       r'''(DELETE\s+FROM\s+(chats|messages|outbox|delivery_log|vault_chats|vault_messages)\b|\.delete\(\s*['"](chats|messages|outbox|delivery_log|vault_chats|vault_messages)['"]|DROP\s+TABLE)''',
       caseSensitive: false,
     );
     final offenders = <String>[];
     String? purge;
+    String? deleteRows;
+    String? vaultRemoval;
     for (final f
         in Directory('lib')
             .listSync(recursive: true)
@@ -217,6 +220,18 @@ void main() {
           reason: 'the vault reset must not touch chats or messages',
         );
         src = src.substring(0, rs) + src.substring(re2);
+        // chat deletion: exactly these two methods may delete chat rows
+        String take(String signature) {
+          final i = src.indexOf(signature);
+          expect(i, greaterThan(0), reason: '$signature exists');
+          final j = src.indexOf('\n  }\n', i);
+          final body = src.substring(i, j);
+          src = src.substring(0, i) + src.substring(j);
+          return body;
+        }
+
+        deleteRows = take('Future<_Deleted> _deleteChatRows(');
+        vaultRemoval = take('Future<void> removeVaultHistory(');
       }
       if (re.hasMatch(src)) offenders.add(f.path);
     }
@@ -236,6 +251,42 @@ void main() {
         tail,
         contains('account_id = ?'),
         reason: 'DELETE FROM ${m.group(1)} must be limited to account A',
+      );
+    }
+    // the chat deletion: four statements, each scoped by the account of the
+    // chat being deleted (never another account's rows) ...
+    expect(deleteRows, isNotNull);
+    final dels = RegExp(
+      r'DELETE FROM (chats|messages|outbox|delivery_log)\b',
+    ).allMatches(deleteRows!).toList();
+    expect(dels.map((m) => m.group(1)).toSet(), {
+      'chats',
+      'messages',
+      'outbox',
+      'delivery_log',
+    });
+    expect(dels, hasLength(4));
+    for (final m in dels) {
+      final tail = deleteRows.substring(
+        m.start,
+        (m.start + 200).clamp(0, deleteRows.length),
+      );
+      expect(
+        tail,
+        contains('account_id = ?'),
+        reason: 'DELETE FROM ${m.group(1)} must be scoped by account_id',
+      );
+    }
+    // ... and the other-device history removal only touches one device's rows
+    expect(vaultRemoval, isNotNull);
+    final vdels = RegExp(
+      r'DELETE FROM (vault_chats|vault_messages)',
+    ).allMatches(vaultRemoval!).toList();
+    expect(vdels, hasLength(2));
+    for (final m in vdels) {
+      expect(
+        vaultRemoval.substring(m.start, m.start + 120),
+        contains('device_id = ?'),
       );
     }
   });

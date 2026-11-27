@@ -272,6 +272,16 @@ class MeshChatXClient:
         _need(body["lxmf_message"], ("hash",), "/lxmf-messages/send.lxmf_message")
         return body["lxmf_message"]
 
+    async def delete_conversation(self, peer: str) -> None:
+        """``DELETE /lxmf-messages/conversation/{peer}``: removes the whole conversation from MeshChatX.
+        A 404 means MeshChatX has no such conversation (``not_found``)."""
+        try:
+            await self.request("DELETE", f"/lxmf-messages/conversation/{quote(peer, safe='')}")
+        except BridgeError as e:
+            if e.code == errors.UPSTREAM_ERROR and e.details.get("status") == 404:
+                raise BridgeError(errors.NOT_FOUND, "no such conversation") from None
+            raise
+
     async def mark_read(self, peer: str) -> None:
         await self.request("POST", f"/lxmf/conversations/{quote(peer, safe='')}/mark-as-read")
 

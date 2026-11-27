@@ -362,6 +362,11 @@ class BridgeService {
           stateId = r.stateId;
           continue;
         }
+        // deletions first: a chat that was deleted and started again shows
+        // up in `lxmf` too and must end up with the new messages only
+        for (final d in r.deleted) {
+          await repo.applyChatDeleted(d.peer, d.beforeTs);
+        }
         for (final c in r.lxmf) {
           final chatId = await store.applySummary(c);
           await _fetchConversation(chatId, c.peer);
@@ -481,6 +486,35 @@ class BridgeService {
     return r.hasMore;
   }
 
+  /// The bridge can delete a conversation for all devices and is connected.
+  bool get canDeleteChat =>
+      (_api?.linkUp ?? false) &&
+      (_statusNow.hello?.canDeleteChat ?? false);
+
+  /// "Delete for all devices and in MeshChatX": asks the bridge to delete the
+  /// conversation (MeshChatX), then removes the chat, its messages and its
+  /// unsent messages from this device. Throws [BridgeError] /
+  /// [BridgeTransportError] without changing anything when the bridge
+  /// refuses (`not_found` counts as already deleted). The other devices
+  /// delete theirs on the `chat_deleted` push.
+  Future<void> deleteAChat(int chatId) async {
+    final chat = await repo.chat(chatId);
+    if (chat == null || chat.accountIdentity != 'A' || chat.peerHash == null) {
+      return;
+    }
+    final api = _api;
+    if (api == null) throw BridgeNotConfigured();
+    if (!canDeleteChat) {
+      throw BridgeError('unsupported', 'the bridge cannot delete chats');
+    }
+    try {
+      await api.call('/delete_chat', {'peer': chat.peerHash});
+    } on BridgeError catch (e) {
+      if (e.code != 'not_found') rethrow;
+    }
+    await repo.deleteChats([chatId]);
+  }
+
   /// Opening an A chat: clears the local unread flag and tells the bridge.
   Future<void> markRead(int chatId) async {
     final chat = await repo.chat(chatId);
@@ -524,6 +558,12 @@ class BridgeService {
           method: d['method'] as String?,
         );
         if (!known) unawaited(Future(() => resync()));
+      case 'chat_deleted':
+        final peer = d['peer'];
+        final before = asDouble(d['before_ts']);
+        if (peer is String && before != null) {
+          await repo.applyChatDeleted(peer, before);
+        }
       case 'read_state':
         final id = await store.chatIdForPeer((d['peer'] as String?) ?? '');
         if (id != null) await store.setChatUnread(id, false);

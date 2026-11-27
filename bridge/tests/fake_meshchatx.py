@@ -37,6 +37,9 @@ class FakeMeshChatX:
         self.sent: list[dict] = []
         self.rrc_sent: list[dict] = []
         self.marked_read: list[str] = []
+        self.deleted_conversations: list[str] = []
+        self.deleted_messages: list[str] = []
+        self.delete_error: tuple[int, dict] | None = None   # make DELETE conversation fail (status, body)
         self.active_cleared = 0
         self.ws_clients: list[web.WebSocketResponse] = []
         self.ws_inbound: list[dict] = []
@@ -99,6 +102,8 @@ class FakeMeshChatX:
         r.add_get(f"{API}/app/info", self.app_info)
         r.add_get(f"{API}/lxmf/conversations", self.list_conversations)
         r.add_get(f"{API}/lxmf-messages/conversation/{{peer}}", self.conv_messages)
+        r.add_delete(f"{API}/lxmf-messages/conversation/{{peer}}", self.delete_conversation)
+        r.add_delete(f"{API}/lxmf-messages/{{msg_hash}}", self.delete_message)
         r.add_post(f"{API}/lxmf-messages/send", self.send)
         r.add_post(f"{API}/lxmf/conversations/{{peer}}/mark-as-read", self.mark_read)
         r.add_get(f"{API}/rrc/hubs", self.rrc_hubs)
@@ -160,6 +165,28 @@ class FakeMeshChatX:
             rows = [m for m in rows if (m["id"] > after if order == "asc" else m["id"] < after)]
         rows.sort(key=lambda m: m["id"], reverse=True)   # always newest first
         return web.json_response({"lxmf_messages": rows[:count]})
+
+    async def delete_conversation(self, request):
+        peer = request.match_info["peer"]
+        if self.delete_error is not None:
+            status, body = self.delete_error
+            return web.json_response(body, status=status)
+        if peer not in self.messages and not any(c["destination_hash"] == peer for c in self.conversations):
+            return web.json_response({"error": "Conversation not found"}, status=404)
+        self.messages.pop(peer, None)
+        self.conversations[:] = [c for c in self.conversations if c["destination_hash"] != peer]
+        self.deleted_conversations.append(peer)
+        return web.json_response({"message": "Conversation deleted"})
+
+    async def delete_message(self, request):
+        h = request.match_info["msg_hash"]
+        for rows in self.messages.values():
+            for m in rows:
+                if m["hash"] == h:
+                    rows.remove(m)
+                    self.deleted_messages.append(h)
+                    return web.json_response({"message": "Message deleted"})
+        return web.json_response({"error": "Message not found"}, status=404)
 
     async def send(self, request):
         body = await request.json()

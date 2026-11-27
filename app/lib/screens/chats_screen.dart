@@ -10,24 +10,104 @@ import '../providers.dart';
 import '../storage/repo.dart';
 import 'chat_screen.dart';
 import 'bridge_widgets.dart';
+import 'delete_chat.dart';
 import 'new_chat_screen.dart';
 import 'rooms_screen.dart';
 import 'settings_screen.dart';
 import 'widgets.dart';
 
-class ChatsScreen extends ConsumerWidget {
+class ChatsScreen extends ConsumerStatefulWidget {
   const ChatsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ChatsScreen> createState() => _ChatsScreenState();
+}
+
+class _ChatsScreenState extends ConsumerState<ChatsScreen> {
+  /// Multi-select mode: ids of the selected chats (null = not selecting).
+  Set<int>? _sel;
+
+  void _toggle(int id) {
+    final sel = {...?_sel};
+    if (!sel.remove(id)) sel.add(id);
+    setState(() => _sel = sel.isEmpty ? null : sel);
+  }
+
+  Future<void> _deleteSelected(List<ChatRow> all) async {
+    final chats = [
+      for (final c in all)
+        if (_sel?.contains(c.id) ?? false) c,
+    ];
+    final done = await deleteChatsFlow(context, ref, chats);
+    if (done && mounted) setState(() => _sel = null);
+  }
+
+  /// Right click (desktop): a context menu with the delete action.
+  Future<void> _contextMenu(ChatRow chat, Offset at) async {
+    final s = Strings.of(context);
+    final reason = await ref.read(nodeProvider).deleteBlockReason([chat.id]);
+    if (!mounted) return;
+    final pick = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
+      items: [
+        PopupMenuItem(
+          key: const ValueKey('menu-select'),
+          value: 'select',
+          child: Text(s.t('select')),
+        ),
+        PopupMenuItem(
+          key: const ValueKey('menu-delete'),
+          value: 'delete',
+          enabled: reason == null,
+          child: Text(
+            reason == null
+                ? s.t('delete_chat')
+                : '${s.t('delete_chat')} · ${s.t(reason)}',
+          ),
+        ),
+      ],
+    );
+    if (!mounted) return;
+    if (pick == 'select') _toggle(chat.id);
+    if (pick == 'delete') {
+      final wide = MediaQuery.sizeOf(context).width >= wideLayoutBreakpoint;
+      final done = await deleteChatsFlow(context, ref, [chat]);
+      if (done && wide && ref.read(selectedChatProvider) == chat.id) {
+        ref.read(selectedChatProvider.notifier).select(null);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final s = Strings.of(context);
     final conn = ref.watch(connectionProvider).value ?? NodeConnection.offline;
     final chats = ref.watch(chatsProvider);
     final wide = MediaQuery.sizeOf(context).width >= wideLayoutBreakpoint;
     final selected = ref.watch(selectedChatProvider);
     final bridgeMode = ref.watch(bridgeModeProvider);
+    final sel = _sel;
+    final chatList = chats.value ?? const <ChatRow>[];
     final list = Scaffold(
-      appBar: AppBar(
+      appBar: sel != null
+          ? AppBar(
+              leading: IconButton(
+                key: const ValueKey('select-close'),
+                icon: const Icon(Icons.close),
+                onPressed: () => setState(() => _sel = null),
+              ),
+              title: Text(s.t('selected_n', {'n': '${sel.length}'})),
+              actions: [
+                IconButton(
+                  key: const ValueKey('select-delete'),
+                  tooltip: s.t('delete_chat'),
+                  icon: const Icon(Icons.delete_outline),
+                  onPressed: () => _deleteSelected(chatList),
+                ),
+              ],
+            )
+          : AppBar(
         title: Text(s.t('app_title')),
         actions: [
           Center(child: ConnectionIndicator(conn)),
@@ -80,7 +160,19 @@ class ChatsScreen extends ConsumerWidget {
                       itemBuilder: (_, i) => ChatTile(
                         chat: list[i],
                         selected: wide && selected == list[i].id,
-                        onTap: wide
+                        selecting: sel != null,
+                        checked: sel?.contains(list[i].id) ?? false,
+                        onLongPress: isDeletable(list[i])
+                            ? () => _toggle(list[i].id)
+                            : null,
+                        onSecondaryTap: isDeletable(list[i])
+                            ? (at) => _contextMenu(list[i], at)
+                            : null,
+                        onTap: sel != null
+                            ? () => isDeletable(list[i])
+                                  ? _toggle(list[i].id)
+                                  : null
+                            : wide
                             ? () => ref
                                   .read(selectedChatProvider.notifier)
                                   .select(list[i].id)
@@ -93,7 +185,9 @@ class ChatsScreen extends ConsumerWidget {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
+      floatingActionButton: sel != null
+          ? null
+          : FloatingActionButton.extended(
         icon: const Icon(Icons.edit_outlined),
         label: Text(s.t('new_chat')),
         onPressed: () => Navigator.of(
@@ -202,9 +296,21 @@ class ChatTile extends ConsumerWidget {
     required this.chat,
     this.selected = false,
     this.onTap,
+    this.selecting = false,
+    this.checked = false,
+    this.onLongPress,
+    this.onSecondaryTap,
   });
   final ChatRow chat;
   final bool selected;
+
+  /// Multi-select mode: a check mark replaces the avatar.
+  final bool selecting;
+  final bool checked;
+  final VoidCallback? onLongPress;
+
+  /// Right click / secondary tap, with the global position.
+  final void Function(Offset at)? onSecondaryTap;
 
   /// Overrides the default push navigation (two-pane layout).
   final VoidCallback? onTap;
@@ -214,15 +320,21 @@ class ChatTile extends ConsumerWidget {
     final s = Strings.of(context);
     final title = chat.displayTitle;
     final bridgeMode = ref.watch(bridgeModeProvider);
-    return ListTile(
-      selected: selected,
-      leading: CircleAvatar(
-        child: Text(
-          title.isEmpty
-              ? '?'
-              : String.fromCharCode(title.runes.first).toUpperCase(),
-        ),
-      ),
+    final tile = ListTile(
+      selected: selected || checked,
+      onLongPress: onLongPress,
+      leading: selecting && checked
+          ? const CircleAvatar(
+              key: ValueKey('chat-checked'),
+              child: Icon(Icons.check),
+            )
+          : CircleAvatar(
+              child: Text(
+                title.isEmpty
+                    ? '?'
+                    : String.fromCharCode(title.runes.first).toUpperCase(),
+              ),
+            ),
       title: Row(
         children: [
           Flexible(
@@ -266,6 +378,12 @@ class ChatTile extends ConsumerWidget {
               builder: (_) => ChatScreen(chatId: chat.id),
             ),
           ),
+    );
+    if (onSecondaryTap == null) return tile;
+    return GestureDetector(
+      key: ValueKey('chat-tile-${chat.id}'),
+      onSecondaryTapUp: (d) => onSecondaryTap!(d.globalPosition),
+      child: tile,
     );
   }
 }
