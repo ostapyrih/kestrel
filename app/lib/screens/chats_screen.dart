@@ -109,36 +109,42 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
               ],
             )
           : AppBar(
-        title: Text(s.t('app_title')),
-        actions: [
-          Center(child: ConnectionIndicator(conn)),
-          if (bridgeMode &&
-              (ref.watch(bridgeConfiguredProvider).value ?? false))
-            IconButton(
-              key: const ValueKey('open-rooms'),
-              tooltip: s.t('rooms'),
-              icon: const Icon(Icons.forum_outlined),
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(builder: (_) => const RoomsScreen()),
-              ),
+              title: Text(s.t('app_title')),
+              actions: [
+                Center(child: ConnectionIndicator(conn)),
+                if (bridgeMode &&
+                    (ref.watch(bridgeConfiguredProvider).value ?? false))
+                  IconButton(
+                    key: const ValueKey('open-rooms'),
+                    tooltip: s.t('rooms'),
+                    icon: const Icon(Icons.forum_outlined),
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const RoomsScreen(),
+                      ),
+                    ),
+                  ),
+                IconButton(
+                  key: const ValueKey('open-pages'),
+                  tooltip: nt(context, 'nn_title'),
+                  icon: const Icon(Icons.public),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const NomadScreen(),
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: s.t('settings'),
+                  icon: const Icon(Icons.settings_outlined),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const SettingsScreen(),
+                    ),
+                  ),
+                ),
+              ],
             ),
-          IconButton(
-            key: const ValueKey('open-pages'),
-            tooltip: nt(context, 'nn_title'),
-            icon: const Icon(Icons.public),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => const NomadScreen()),
-            ),
-          ),
-          IconButton(
-            tooltip: s.t('settings'),
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
-            ),
-          ),
-        ],
-      ),
       body: Column(
         children: [
           // bridge off = a plain messenger: no account chips at all
@@ -200,12 +206,12 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
       floatingActionButton: sel != null
           ? null
           : FloatingActionButton.extended(
-        icon: const Icon(Icons.edit_outlined),
-        label: Text(s.t('new_chat')),
-        onPressed: () => Navigator.of(
-          context,
-        ).push(MaterialPageRoute<void>(builder: (_) => const NewChatScreen())),
-      ),
+              icon: const Icon(Icons.edit_outlined),
+              label: Text(s.t('new_chat')),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const NewChatScreen()),
+              ),
+            ),
     );
     if (!wide) return list;
     return Row(
@@ -246,9 +252,7 @@ class AccountSwitcher extends ConsumerWidget {
             children: [
               ChoiceChip(
                 key: const ValueKey('chip-B'),
-                label: Text(
-                  s.account('B'),
-                ),
+                label: Text(s.account('B')),
                 selected: sel == 'B',
                 onSelected: (_) => notifier.select('B'),
               ),
@@ -355,13 +359,15 @@ class ChatTile extends ConsumerWidget {
           if (bridgeMode) ...[
             const SizedBox(width: 8),
             if (chat.isRemote)
-              IdentityBadge(
-                'B',
-                key: const ValueKey('badge-remote'),
-                label: s.account('B', device: chat.remoteDeviceName),
+              Flexible(
+                child: IdentityBadge(
+                  'B',
+                  key: const ValueKey('badge-remote'),
+                  label: s.account('B', device: chat.remoteDeviceName),
+                ),
               )
             else if (chat.accountIdentity == 'A')
-              IdentityBadge(chat.accountIdentity),
+              Flexible(child: IdentityBadge(chat.accountIdentity)),
           ],
         ],
       ),

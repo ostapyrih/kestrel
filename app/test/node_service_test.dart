@@ -99,7 +99,17 @@ void main() {
     // Same private key (from the secret store) gives the same address.
     final again = await IdentityStore(secrets).loadOrCreate();
     expect(toHex(again.hash), toHex(node.identity.hash));
-    expect(secrets.data.length, 1);
+    // Exactly the intended secrets, by name: the group identity G (stored
+    // under the former identity-B key), the hidden device key and the
+    // group state. No second identity, no legacy B copy on a fresh install.
+    expect(
+      secrets.data.keys,
+      unorderedEquals([
+        'kestrel.identity_b.private_key',
+        'kestrel.device.private_key',
+        'kestrel.group.state',
+      ]),
+    );
   });
 
   test(

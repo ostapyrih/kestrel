@@ -8,7 +8,13 @@ void main() {
   setUpAll(sqfliteFfiInit);
 
   Future<Repo> open() async => Repo(
-    await AppDatabase.open(inMemoryDatabasePath, factory: databaseFactoryFfi),
+    // Independent in-memory databases: with the default single instance both
+    // repos would be the very same database (source == destination).
+    await AppDatabase.open(
+      inMemoryDatabasePath,
+      factory: databaseFactoryFfi,
+      singleInstance: false,
+    ),
   );
 
   test('history streams in batches into a fresh repo, once', () async {
@@ -34,6 +40,12 @@ void main() {
     do {
       final batch = await src.read(phase, cursor);
       await sink.apply(batch.phase, batch.items);
+      if (batch.phase == BackfillPhase.messages) {
+        // Backfilled messages never raise unread by themselves.
+        for (final c in await b.chats(accountIdentity: 'B')) {
+          expect(c.unread, 0, reason: 'history is not unread');
+        }
+      }
       phase = batch.nextPhase;
       cursor = batch.nextCursor;
       batches++;
@@ -53,7 +65,11 @@ void main() {
     for (var i = 0; i < 5; i++) {
       expect(await b.hasMessageHash('B', '${i + 10}' * 16), isTrue);
     }
-    expect(chats.single.unread, 0, reason: 'history is not unread');
+    // Only the `read` phase sets unread: the source's own counter (3 incoming
+    // messages were unread there), applied once and never doubled.
+    final srcChat = (await a.chats(accountIdentity: 'B')).single;
+    expect(srcChat.unread, 3);
+    expect(chats.single.unread, srcChat.unread);
     expect(await b.groupTombstone('22' * 16), 5);
   });
 }
