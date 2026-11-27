@@ -65,7 +65,7 @@ docs/      PLAN.md, bridge protocol, ADRs; docs/private/ is not in git
 - `release-bridge.yml` (on `bridge-v*` tags): Docker image `ghcr.io/ostapyrih/kestrel-bridge:<version>` + `:latest` (linux/amd64, arm64), SBOM, digest in the release notes.
 
 ## Environment
-- Development: Windows (`C:\Users\ostap\Projects\meshchatx-mobile`), Flutter installed locally.
+- Development: Windows (`D:\kestrel`), Flutter installed locally. `flutter test` on Windows needs the Visual Studio C++ toolchain (desktop plugins build native code); otherwise rely on CI.
 - iOS builds locally — on a Mac (x86_64); otherwise via CI.
 - The MeshChatX image on the server stays `latest-extra` (user's decision): the bridge checks the MeshChatX version at startup, and CI has API contract tests.
 - Server: MeshChatX in Docker on `amd1` (SSH access, details not in the repo). Any change on the server
