@@ -59,6 +59,9 @@ const _uk = <String, String>{
   'upd_err_permission':
       'Немає прав на запис до місця встановлення. Оновіть вручну.',
   'upd_err_install': 'Не вдалося встановити оновлення.',
+  'upd_failed': 'Оновлення до {v} не встановилося: запущено стару версію.',
+  'upd_failed_log': 'Код інсталятора: {code}. Журнал: {path}',
+  'upd_failed_manual': 'Встановити вручну',
 };
 
 const _en = <String, String>{
@@ -91,4 +94,7 @@ const _en = <String, String>{
   'upd_err_permission':
       'No permission to write to the install location. Update manually.',
   'upd_err_install': 'Could not install the update.',
+  'upd_failed': 'Update to {v} failed: the old version is still running.',
+  'upd_failed_log': 'Installer exit code: {code}. Log: {path}',
+  'upd_failed_manual': 'Install manually',
 };

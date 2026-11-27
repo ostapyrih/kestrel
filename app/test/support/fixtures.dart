@@ -18,6 +18,7 @@ final fakePublicKey = 'fedcba9876543210' * 8;
 class FakeNode extends Fake implements NodeService {
   final List<(int, String)> sent = [];
   final List<String> opened = [];
+  final List<String> openedAs = [];
   final List<String> names = [];
   final List<(String, int)> servers = [];
 
@@ -44,8 +45,13 @@ class FakeNode extends Fake implements NodeService {
   }
 
   @override
-  Future<int> openChat(String peerHashHex, {String? name}) async {
+  Future<int> openChat(
+    String peerHashHex, {
+    String? name,
+    String identity = 'B',
+  }) async {
     opened.add(peerHashHex);
+    openedAs.add(identity);
     return 1;
   }
 

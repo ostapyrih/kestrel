@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -34,6 +36,10 @@ class VaultSettingsSection extends ConsumerWidget {
     final st = ref.watch(vaultStatusProvider).value;
     final text = Theme.of(context).textTheme;
     if (st == null) return const SizedBox.shrink();
+    final names = {
+      for (final d in ref.watch(bridgeDevicesProvider).value ?? const [])
+        d.deviceId: d.name,
+    };
     return Column(
       key: const ValueKey('vault-section'),
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -82,6 +88,49 @@ class VaultSettingsSection extends ConsumerWidget {
           s.t('vault_remote_devices', {'n': '${st.remoteDevices}'}),
           key: const ValueKey('vault-remote-devices'),
           style: text.bodySmall,
+        ),
+        const SizedBox(height: 8),
+        Text(s.t('vault_diag_title'), style: text.labelLarge),
+        Text(
+          s.t('vault_diag_uploaded', {'n': '${st.uploadedBlobs}'}),
+          key: const ValueKey('vault-diag-uploaded'),
+          style: text.bodySmall,
+        ),
+        if (st.downloaded.isEmpty)
+          Text(
+            s.t('vault_diag_none'),
+            key: const ValueKey('vault-diag-none'),
+            style: text.bodySmall,
+          ),
+        for (final e in st.downloaded.entries)
+          Text(
+            s.t('vault_diag_downloaded', {
+              'device': names[e.key] ?? shortHash(e.key),
+              'n': '${e.value}',
+            }),
+            key: ValueKey('vault-diag-from-${e.key}'),
+            style: text.bodySmall,
+          ),
+        if (st.lastError != null)
+          Text(
+            s.t('vault_diag_error', {'err': st.lastError!}),
+            key: const ValueKey('vault-diag-error'),
+            style: text.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.error,
+            ),
+          ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          key: const ValueKey('vault-sync-now'),
+          icon: const Icon(Icons.sync),
+          label: Text(s.t('vault_sync_now')),
+          onPressed: st.state == VaultState.syncing
+              ? null
+              : () {
+                  final b = ref.read(bridgeProvider);
+                  unawaited(b.vault.syncNow());
+                  unawaited(b.resync());
+                },
         ),
         const SizedBox(height: 4),
         Text(s.t('vault_note'), style: text.bodySmall),

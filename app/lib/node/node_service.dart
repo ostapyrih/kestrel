@@ -212,9 +212,20 @@ class NodeService {
 
   // ------------------------------------------------------------------ chats
 
-  /// Opens (or creates) the chat with [peerHashHex] under account B.
-  Future<int> openChat(String peerHashHex, {String? name}) async {
+  /// Opens (or creates) the chat with [peerHashHex] under account B, or under
+  /// account A when [identity] is `'A'` (bridge mode only; the first A message
+  /// queues in the outbox while the bridge or MeshChatX is unavailable).
+  Future<int> openChat(
+    String peerHashHex, {
+    String? name,
+    String identity = 'B',
+  }) async {
     final h = peerHashHex.trim().toLowerCase();
+    if (identity == 'A') {
+      final b = bridge;
+      if (b == null) throw StateError('bridge is not available');
+      return b.openAChat(h, name: name);
+    }
     return repo.findOrCreateChat('B', h, title: name);
   }
 
@@ -234,7 +245,8 @@ class NodeService {
   Future<int> unsentCount(Iterable<int> chatIds) => repo.unsentCount(chatIds);
 
   /// Why [chatIds] cannot be deleted right now (`null` = they can):
-  /// `delete_a_offline` / `delete_a_old_bridge` for account A chats,
+  /// `delete_a_offline` / `delete_a_upstream` (MeshChatX down) /
+  /// `delete_a_old_bridge` for account A chats,
   /// `delete_remote_no_vault` for chats of other devices.
   Future<String?> deleteBlockReason(Iterable<int> chatIds) async {
     var a = false;
@@ -249,6 +261,7 @@ class NodeService {
     final b = bridge;
     if (a) {
       if (b == null || !(b.api?.linkUp ?? false)) return 'delete_a_offline';
+      if (!b.upstreamOk) return 'delete_a_upstream';
       if (!b.canDeleteChat) return 'delete_a_old_bridge';
     }
     if (remote && !(b?.vault.canDeleteRemote ?? false)) {

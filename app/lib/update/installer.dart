@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import 'releases.dart';
+import 'update_outcome.dart';
 
 class InstallException implements Exception {
   InstallException(this.message, {this.noPermission = false});
@@ -46,9 +47,36 @@ UpdatePlatform? currentUpdatePlatform() {
 /// starts the installed app. The installer is per-user (no admin rights).
 class WindowsInstaller implements UpdateInstaller {
   static const script = r'''
-param([int]$AppPid, [string]$Installer, [string]$Exe)
-try { Wait-Process -Id $AppPid -Timeout 60 -ErrorAction SilentlyContinue } catch {}
-$p = Start-Process -FilePath $Installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+param([int]$AppPid, [string]$Installer, [string]$Exe, [string]$Log, [string]$Result)
+$ErrorActionPreference = 'Continue'
+$trace = $Log + '.script.txt'
+function Note([string]$m) { try { Add-Content -Path $trace -Value ((Get-Date -Format o) + ' ' + $m) } catch {} }
+Note ('waiting for pid ' + $AppPid)
+# wait until the app is really gone (it may take a while to close its
+# database and sockets), then stop it: a running process locks its files and
+# the installer would fail without a word
+try { Wait-Process -Id $AppPid -Timeout 180 -ErrorAction SilentlyContinue } catch {}
+if (Get-Process -Id $AppPid -ErrorAction SilentlyContinue) {
+  Note 'still running, stopping it'
+  try { Stop-Process -Id $AppPid -Force -ErrorAction SilentlyContinue } catch {}
+  try { Wait-Process -Id $AppPid -Timeout 20 -ErrorAction SilentlyContinue } catch {}
+}
+Start-Sleep -Seconds 2
+$code = -1
+for ($try = 1; $try -le 2; $try++) {
+  try {
+    $iargs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', '/FORCECLOSEAPPLICATIONS', ('/LOG="' + $Log + '"'))
+    $p = Start-Process -FilePath $Installer -ArgumentList $iargs -Wait -PassThru
+    $code = $p.ExitCode
+  } catch {
+    Note ('installer could not start: ' + $_)
+    $code = -2
+  }
+  Note ('installer exit code ' + $code + ' (attempt ' + $try + ')')
+  if ($code -eq 0) { break }
+  Start-Sleep -Seconds 5
+}
+try { Set-Content -Path $Result -Value $code } catch {}
 if (Test-Path $Exe) { Start-Process -FilePath $Exe }
 ''';
 
@@ -88,6 +116,10 @@ if (Test-Path $Exe) { Start-Process -FilePath $Exe }
       verified.path,
       '-Exe',
       exe,
+      '-Log',
+      updateLogPath(verified),
+      '-Result',
+      updateResultPath(verified),
     ], mode: ProcessStartMode.detached);
     exitApp();
   }

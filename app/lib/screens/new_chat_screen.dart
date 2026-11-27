@@ -2,9 +2,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../bridge/bridge_connection.dart';
 import '../l10n/strings.dart';
 import '../node/node_service.dart';
 import '../providers.dart';
+import '../storage/database.dart';
 import '../storage/repo.dart';
 import 'chat_screen.dart';
 import 'widgets.dart';
@@ -22,11 +24,33 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
   final _name = TextEditingController();
   String? _error;
 
+  /// Identity the chat starts under (only offered in bridge mode).
+  String? _identity;
+
   @override
   void dispose() {
     _address.dispose();
     _name.dispose();
     super.dispose();
+  }
+
+  Future<String> _lastIdentity() async {
+    try {
+      final v = await ref
+          .read(repoProvider)
+          .getSetting(SettingKeys.newChatIdentity);
+      return v == 'A' ? 'A' : 'B';
+    } on Object {
+      return 'B';
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _lastIdentity().then((v) {
+      if (mounted && _identity == null) setState(() => _identity = v);
+    });
   }
 
   Future<void> _paste() async {
@@ -43,11 +67,23 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
       return;
     }
     final nav = Navigator.of(context);
+    final bridgeMode = ref.read(bridgeModeProvider);
+    final identity = bridgeMode ? (_identity ?? await _lastIdentity()) : 'B';
+    if (bridgeMode) {
+      try {
+        await ref
+            .read(repoProvider)
+            .setSetting(SettingKeys.newChatIdentity, identity);
+      } on Object {
+        // remembering the choice is a convenience
+      }
+    }
     final id = await ref
         .read(nodeProvider)
         .openChat(
           a,
           name: _name.text.trim().isEmpty ? null : _name.text.trim(),
+          identity: identity,
         );
     nav.pushReplacement(
       MaterialPageRoute<void>(builder: (_) => ChatScreen(chatId: id)),
@@ -58,6 +94,15 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
   Widget build(BuildContext context) {
     final s = Strings.of(context);
     final peers = ref.watch(peersProvider).value ?? const <PeerRow>[];
+    final bridgeMode = ref.watch(bridgeModeProvider);
+    final identity = _identity ?? 'B';
+    final upstreamDown =
+        bridgeMode &&
+        identity == 'A' &&
+        (ref.watch(bridgeStatusProvider).value?.state !=
+                BridgeState.connected ||
+            ref.watch(bridgeStatusProvider).value?.detail ==
+                'upstream_unavailable');
     return Scaffold(
       appBar: AppBar(title: Text(s.t('new_chat'))),
       body: ListView(
@@ -88,6 +133,42 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
               border: const OutlineInputBorder(),
             ),
           ),
+          if (bridgeMode) ...[
+            const SizedBox(height: 12),
+            Text(
+              s.t('new_chat_as'),
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+            const SizedBox(height: 8),
+            SegmentedButton<String>(
+              key: const ValueKey('new-chat-identity'),
+              segments: [
+                ButtonSegment(
+                  value: 'A',
+                  label: Text(s.account('A')),
+                  icon: const Icon(Icons.hub_outlined),
+                ),
+                ButtonSegment(
+                  value: 'B',
+                  label: Text(
+                    s.account('B', device: ref.watch(ownDeviceNameProvider)),
+                  ),
+                  icon: const Icon(Icons.phone_android),
+                ),
+              ],
+              selected: {identity},
+              onSelectionChanged: (v) => setState(() => _identity = v.first),
+            ),
+            if (upstreamDown)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  s.t('new_chat_a_queued'),
+                  key: const ValueKey('new-chat-a-queued'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+          ],
           const SizedBox(height: 12),
           FilledButton(
             key: const ValueKey('open-chat'),

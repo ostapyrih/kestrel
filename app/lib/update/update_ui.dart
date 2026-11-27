@@ -8,6 +8,7 @@ import '../platform.dart';
 import '../providers.dart';
 import 'release_key.dart';
 import 'releases.dart';
+import 'update_outcome.dart';
 import 'update_service.dart';
 import 'update_strings.dart';
 
@@ -34,10 +35,13 @@ class UpdateHost extends ConsumerWidget {
             (!st.dismissed &&
                 (st.status == UpdateStatus.available ||
                     (st.status == UpdateStatus.error))));
-    if (!show) return child ?? const SizedBox.shrink();
+    final failure = st?.failure;
+    if (!show && failure == null) return child ?? const SizedBox.shrink();
     final scheme = Theme.of(context).colorScheme;
     return Column(
       children: [
+        if (failure != null) UpdateFailedBanner(failure: failure),
+        if (show)
         Material(
           color: scheme.secondaryContainer,
           child: SafeArea(
@@ -81,6 +85,65 @@ class UpdateHost extends ConsumerWidget {
         ),
         Expanded(child: child ?? const SizedBox.shrink()),
       ],
+    );
+  }
+}
+
+/// "The update did not install": shown after a start that still runs the old
+/// version, with the installer log and a way to install by hand.
+class UpdateFailedBanner extends ConsumerWidget {
+  const UpdateFailedBanner({super.key, required this.failure});
+
+  final UpdateOutcome failure;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    final service = ref.read(updateServiceProvider);
+    final u = failure.pending!;
+    final fg = scheme.onErrorContainer;
+    return Material(
+      key: const ValueKey('update-failed-banner'),
+      color: scheme.errorContainer,
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                ut(context, 'upd_failed', {'v': u.target}),
+                style: TextStyle(color: fg, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 4),
+              SelectableText(
+                ut(context, 'upd_failed_log', {
+                  'code': '${failure.exitCode ?? '?'}',
+                  'path': u.logPath,
+                }),
+                key: const ValueKey('update-failed-log'),
+                style: TextStyle(color: fg, fontSize: 12),
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    key: const ValueKey('update-failed-dismiss'),
+                    onPressed: service.dismissFailure,
+                    child: Text(ut(context, 'upd_close')),
+                  ),
+                  FilledButton(
+                    key: const ValueKey('update-failed-manual'),
+                    onPressed: () => service.installManually(failure),
+                    child: Text(ut(context, 'upd_failed_manual')),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:kestrel_rns/kestrel_rns.dart';
 
 import '../node/identity_store.dart';
@@ -94,6 +94,10 @@ class BridgeService {
   final LinkedHashSet<String> _seen = LinkedHashSet();
   bool _flushing = false;
   bool _syncing = false;
+  bool _resyncAgain = false;
+  bool _upstreamUp = true;
+  String? _resyncHello;
+  Timer? _resyncRetry;
   Timer? _retry;
   Timer? _upstreamRetry;
   bool? _fallbackSetting;
@@ -209,6 +213,7 @@ class BridgeService {
   Future<void> _detach() async {
     _retry?.cancel();
     _upstreamRetry?.cancel();
+    _resyncRetry?.cancel();
     for (final s in _subs) {
       await s.cancel();
     }
@@ -314,26 +319,67 @@ class BridgeService {
   // ------------------------------------------------------------ connect/sync
 
   Future<void> _onConnected(HelloResult h) async {
-    _ownField = h.device.isField;
-    await repo.setSetting(SettingKeys.bridgeOwnRoles, h.device.roles.join(','));
-    await repo.setSetting(
-      SettingKeys.bridgeClockOffset,
-      '${h.time - DateTime.now().millisecondsSinceEpoch / 1000}',
-    );
-    await store.upsertDevices([h.device]);
-    await resync(helloStateId: h.stateId);
-    await refreshDevices();
-    await refreshRooms();
-    await _flush();
+    // The history sync (vault) only needs the bridge and its own keys, never
+    // MeshChatX: it starts first, in parallel, and nothing below can keep it
+    // from running (MeshChatX may be down or hanging, a call may fail).
     unawaited(vault.onConnected(h));
+    _upstreamUp = h.compatOk;
+    _ownField = h.device.isField;
+    try {
+      await repo.setSetting(
+        SettingKeys.bridgeOwnRoles,
+        h.device.roles.join(','),
+      );
+      await repo.setSetting(
+        SettingKeys.bridgeClockOffset,
+        '${h.time - DateTime.now().millisecondsSinceEpoch / 1000}',
+      );
+      await store.upsertDevices([h.device]);
+      await resync(helloStateId: h.stateId);
+      await refreshDevices();
+      await refreshRooms();
+      await _flush();
+    } on Object catch (e) {
+      debugPrint('bridge: connect handling failed: $e');
+    }
   }
 
-  /// Pulls every conversation change since the stored cursor.
+  /// Pulls every conversation change since the stored cursor. A call while a
+  /// sync is running is not dropped: the sync runs once more when it ends
+  /// (a reconnect must never skip the catch-up of deletions and messages).
   Future<void> resync({String? helloStateId}) async {
-    final api = _api;
-    if (api == null || _syncing) return;
+    if (_api == null) return;
+    if (_syncing) {
+      _resyncAgain = true;
+      _resyncHello ??= helloStateId;
+      return;
+    }
     _syncing = true;
     if (!_syncCtl.isClosed) _syncCtl.add(true);
+    try {
+      var hello = helloStateId;
+      do {
+        _resyncAgain = false;
+        await _resyncOnce(hello);
+        hello = _resyncHello;
+        _resyncHello = null;
+      } while (_resyncAgain && _api != null && !_stopped);
+    } finally {
+      _syncing = false;
+      if (!_syncCtl.isClosed) _syncCtl.add(false);
+    }
+  }
+
+  void _scheduleResyncRetry(Duration d) {
+    _resyncRetry?.cancel();
+    _resyncRetry = Timer(d, () {
+      if (!_stopped && (_api?.linkUp ?? false)) _chain(() => resync());
+    });
+  }
+
+  Future<void> _resyncOnce(String? helloStateId) async {
+    final api = _api;
+    if (api == null) return;
     try {
       var cursor = await store.cursor();
       var stateId = await store.stateId();
@@ -369,7 +415,16 @@ class BridgeService {
         }
         for (final c in r.lxmf) {
           final chatId = await store.applySummary(c);
-          await _fetchConversation(chatId, c.peer);
+          try {
+            await _fetchConversation(chatId, c.peer);
+          } on BridgeError {
+            rethrow;
+          } on BridgeTransportError {
+            rethrow;
+          } on Object catch (e) {
+            // one broken conversation must not stop the others
+            debugPrint('bridge: sync of a conversation failed: $e');
+          }
         }
         if (r.rrc.isNotEmpty) await store.upsertRooms(r.rrc);
         cursor = r.cursor;
@@ -378,6 +433,8 @@ class BridgeService {
         await store.saveCursor(cursor, stateId);
         if (!r.more) break;
       }
+      _resyncRetry?.cancel();
+      _upstreamUp = true;
       if (_statusNow.detail == 'upstream_unavailable' && _statusNow.connected) {
         _emit(
           BridgeStatus(
@@ -390,16 +447,16 @@ class BridgeService {
     } on BridgeError catch (e) {
       _noteError(e);
     } on BridgeTransportError {
-      // the link will drop and reconnect; resync runs again then
-    } finally {
-      _syncing = false;
-      if (!_syncCtl.isClosed) _syncCtl.add(false);
+      // a timeout on a Link that stays up gets no reconnect: try again soon
+      // (a dropped Link resyncs on its own after reconnecting)
+      _scheduleResyncRetry(const Duration(seconds: 15));
     }
   }
 
   void _noteError(BridgeError e) {
     if (e.code == 'device_revoked') unawaited(_handleRevoked());
     if (e.code == 'upstream_unavailable') {
+      _upstreamUp = false;
       // The bridge is starting or MeshChatX is not reachable yet (spec: not an
       // incompatibility): show it and try again after `retry_after`.
       final st = _statusNow;
@@ -488,15 +545,31 @@ class BridgeService {
 
   /// The bridge can delete a conversation for all devices and is connected.
   bool get canDeleteChat =>
-      (_api?.linkUp ?? false) &&
-      (_statusNow.hello?.canDeleteChat ?? false);
+      (_api?.linkUp ?? false) && (_statusNow.hello?.canDeleteChat ?? false);
+
+  /// MeshChatX answers through the bridge: its last `/hello` said it is
+  /// compatible and no call since then found it unavailable. Everything that
+  /// needs MeshChatX (A chats, deleting them) waits for this; the history
+  /// sync (vault) does not.
+  bool get upstreamOk => _upstreamUp;
+
+  /// How long "delete for all devices" waits for the bridge before it gives
+  /// up with an error (never an endless wait).
+  static const deleteTimeout = Duration(seconds: 20);
+
+  /// Starts a chat as account A with [peerHash]: the local chat row only; the
+  /// first message goes through the outbox (queued while the bridge or
+  /// MeshChatX is not available, sent when it is back).
+  Future<int> openAChat(String peerHash, {String? name}) =>
+      store.ensureChat(peerHash.trim().toLowerCase(), name: name);
 
   /// "Delete for all devices and in MeshChatX": asks the bridge to delete the
   /// conversation (MeshChatX), then removes the chat, its messages and its
   /// unsent messages from this device. Throws [BridgeError] /
   /// [BridgeTransportError] without changing anything when the bridge
-  /// refuses (`not_found` counts as already deleted). The other devices
-  /// delete theirs on the `chat_deleted` push.
+  /// refuses or does not answer within [deleteTimeout] (`not_found` counts as
+  /// already deleted). The other devices delete theirs on the `chat_deleted`
+  /// push, or from `deleted` in `/sync_chats` after a reconnect.
   Future<void> deleteAChat(int chatId) async {
     final chat = await repo.chat(chatId);
     if (chat == null || chat.accountIdentity != 'A' || chat.peerHash == null) {
@@ -507,9 +580,15 @@ class BridgeService {
     if (!canDeleteChat) {
       throw BridgeError('unsupported', 'the bridge cannot delete chats');
     }
+    if (!upstreamOk) {
+      throw BridgeError('upstream_unavailable', 'MeshChatX is not available');
+    }
     try {
-      await api.call('/delete_chat', {'peer': chat.peerHash});
+      await api.call('/delete_chat', {
+        'peer': chat.peerHash,
+      }, timeout: deleteTimeout);
     } on BridgeError catch (e) {
+      if (e.code == 'upstream_unavailable') _noteError(e);
       if (e.code != 'not_found') rethrow;
     }
     await repo.deleteChats([chatId]);

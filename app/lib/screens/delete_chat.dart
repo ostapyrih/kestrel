@@ -1,10 +1,17 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../bridge/codec.dart';
 import '../l10n/strings.dart';
 import '../providers.dart';
 import '../storage/repo.dart';
 import 'bridge_widgets.dart';
+
+/// Upper bound for the whole delete action (the bridge call has its own,
+/// shorter timeout).
+const deleteFlowTimeout = Duration(seconds: 30);
 
 /// Whether [chat] can be deleted at all (RRC rooms have their own leave).
 bool isDeletable(ChatRow chat) => chat.kind == 'lxmf';
@@ -41,10 +48,7 @@ Future<bool> confirmDeleteChats(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (own.isNotEmpty)
-              Text(
-                s.t('delete_b_body'),
-                key: const ValueKey('delete-b-body'),
-              ),
+              Text(s.t('delete_b_body'), key: const ValueKey('delete-b-body')),
             if (own.isNotEmpty && bridgeMode)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
@@ -143,10 +147,52 @@ Future<bool> deleteChatsFlow(
     bridgeMode: ref.read(bridgeModeProvider),
     blockReason: reason,
   );
-  if (!ok) return false;
+  if (!ok || !context.mounted) return false;
+  // a visible, bounded wait: the bridge call times out on its own, so this
+  // never turns into an endless spinner
+  final nav = Navigator.of(context, rootNavigator: true);
+  final working = Strings.of(context).t('delete_progress');
+  var progressShown = true;
+  unawaited(
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          key: const ValueKey('delete-progress'),
+          content: Row(
+            children: [
+              const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: 16),
+              Text(working),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+  void closeProgress() {
+    if (progressShown) {
+      progressShown = false;
+      nav.pop();
+    }
+  }
+
   try {
-    await node.deleteChats(ids);
+    await node
+        .deleteChats(ids)
+        .timeout(
+          deleteFlowTimeout,
+          onTimeout: () => throw BridgeTransportError('request timed out'),
+        );
+    closeProgress();
   } on Object catch (e) {
+    closeProgress();
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(bridgeErrorText(Strings.of(context), e))),
@@ -158,7 +204,10 @@ Future<bool> deleteChatsFlow(
 }
 
 /// Why deleting [chatId] is disabled right now, for menu items.
-final deleteBlockProvider = FutureProvider.family<String?, int>((ref, id) async {
+final deleteBlockProvider = FutureProvider.family<String?, int>((
+  ref,
+  id,
+) async {
   try {
     ref.watch(bridgeStatusProvider);
     return await ref.watch(nodeProvider).deleteBlockReason([id]);

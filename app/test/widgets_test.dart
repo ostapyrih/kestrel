@@ -239,6 +239,40 @@ void main() {
       expect(node.opened, ['a' * 32]);
     });
 
+    testWidgets('bridge mode: pick A or B for the new chat', (tester) async {
+      final node = FakeNode();
+      await show(tester, const NewChatScreen(), node: node, bridgeEnabled: true);
+      final seg = find.byKey(const ValueKey('new-chat-identity'));
+      expect(seg, findsOneWidget);
+      await tester.enterText(
+        find.byKey(const ValueKey('address-field')),
+        'a' * 32,
+      );
+      await tester.ensureVisible(seg);
+      await tester.tap(
+        find.descendant(of: seg, matching: find.text('A (міст)')),
+      );
+      await tester.pump();
+      await tester.ensureVisible(find.byKey(const ValueKey('open-chat')));
+      await tester.tap(find.byKey(const ValueKey('open-chat')));
+      await tester.pump();
+      await tester.pump();
+      expect(node.openedAs, ['A']);
+    });
+
+    testWidgets('bridge off: no identity choice, B only', (tester) async {
+      final node = FakeNode();
+      await show(tester, const NewChatScreen(), node: node);
+      expect(find.byKey(const ValueKey('new-chat-identity')), findsNothing);
+      await tester.enterText(
+        find.byKey(const ValueKey('address-field')),
+        'a' * 32,
+      );
+      await tester.tap(find.byKey(const ValueKey('open-chat')));
+      await tester.pump();
+      expect(node.openedAs, ['B']);
+    });
+
     testWidgets('tapping a known peer fills the address', (tester) async {
       await show(tester, const NewChatScreen());
       await tester.tap(find.text('Alice'));
