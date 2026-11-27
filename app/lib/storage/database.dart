@@ -257,6 +257,8 @@ CREATE TABLE vault_delete_out (
   peer_hash TEXT NOT NULL,
   owner_device TEXT,
   before_ts INTEGER NOT NULL
+)''',
+  ]),
   // NomadNet browser (Phase N): nodes learned from announces (or visited by
   // address), bookmarks, visit history and the page cache (#!c= expiry).
   Migration(6, [

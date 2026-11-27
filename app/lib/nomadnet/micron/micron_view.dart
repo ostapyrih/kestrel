@@ -141,17 +141,28 @@ class MicronViewState extends State<MicronView> {
     }
   }
 
-  void _revealIndex(int idx) {
-    // expand folded headings that hide [idx]
+  /// End (exclusive) of the section folded under heading [i]: up to the
+  /// first row of a lower level or the next heading of the same or a higher
+  /// level (`Browser.init_folds`).
+  int _sectionEnd(int i) {
     final blocks = widget.document.blocks;
+    final depth = blocks[i].depth;
+    for (var k = i + 1; k < blocks.length; k++) {
+      final b = blocks[k];
+      if (b.depth < depth ||
+          (b.kind == MicronBlockKind.heading && b.depth <= depth)) {
+        return k;
+      }
+    }
+    return blocks.length;
+  }
+
+  void _revealIndex(int idx) {
+    // unfold headings whose folded section contains [idx]
     var changed = false;
-    for (var i = idx - 1; i >= 0; i--) {
-      final b = blocks[i];
-      if (b.kind == MicronBlockKind.heading &&
-          b.collapsible &&
-          _collapsed.contains(i) &&
-          b.depth < blocks[idx].depth) {
-        _collapsed.remove(i);
+    for (final h in [..._collapsed]) {
+      if (h < idx && idx < _sectionEnd(h)) {
+        _collapsed.remove(h);
         changed = true;
       }
     }
@@ -198,18 +209,16 @@ class MicronViewState extends State<MicronView> {
   List<int> _visible() {
     final blocks = widget.document.blocks;
     final out = <int>[];
-    int? hide;
-    for (var i = 0; i < blocks.length; i++) {
-      final b = blocks[i];
-      if (hide != null) {
-        if (b.depth > hide) continue;
-        hide = null;
-      }
+    var i = 0;
+    while (i < blocks.length) {
       out.add(i);
+      final b = blocks[i];
       if (b.kind == MicronBlockKind.heading &&
           b.collapsible &&
           _collapsed.contains(i)) {
-        hide = b.depth;
+        i = _sectionEnd(i);
+      } else {
+        i++;
       }
     }
     return out;

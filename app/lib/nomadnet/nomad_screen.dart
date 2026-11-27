@@ -96,11 +96,13 @@ class NomadScreen extends ConsumerStatefulWidget {
 }
 
 class _NomadScreenState extends ConsumerState<NomadScreen> {
+  late final BrowserController _browser;
+
   @override
   void initState() {
     super.initState();
-    final c = ref.read(nomadServiceProvider).browser;
-    c.onOpenChat = _openChat;
+    _browser = ref.read(nomadServiceProvider).browser;
+    _browser.onOpenChat = _openChat;
   }
 
   Future<void> _openChat(String hash) async {
@@ -121,8 +123,7 @@ class _NomadScreenState extends ConsumerState<NomadScreen> {
 
   @override
   void dispose() {
-    final c = ref.read(nomadServiceProvider).browser;
-    if (c.onOpenChat == _openChat) c.onOpenChat = null;
+    if (_browser.onOpenChat == _openChat) _browser.onOpenChat = null;
     super.dispose();
   }
 
