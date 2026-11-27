@@ -25,18 +25,19 @@ log = logging.getLogger("kestrel.service")
 COMPAT_RETRY_AFTER = 10.0   # seconds; hint for clients while the first MeshChatX compat check is pending
 MUTATING = frozenset({"/send_lxmf", "/send_rrc"})
 PATHS = ("/hello", "/sync_chats", "/get_messages", "/list_rooms", "/get_room_messages",
-         "/send_lxmf", "/send_rrc", "/subscribe", "/mark_read",
+         "/send_lxmf", "/send_rrc", "/subscribe", "/mark_read", "/delete_chat",
          "/devices/list", "/devices/approve", "/devices/rename", "/devices/set_role", "/devices/revoke",
          "/devices/invite", "/devices/redeem",
          "/vault/put", "/vault/list", "/vault/get", "/vault/key", "/vault/set_keys")
 # Paths that only exist on the Link transport (binary payloads, interactive, or too chatty for LoRa).
-LINK_ONLY = frozenset({"/subscribe", "/devices/list", "/devices/approve", "/devices/rename", "/devices/set_role",
+LINK_ONLY = frozenset({"/subscribe", "/delete_chat", "/devices/list", "/devices/approve", "/devices/rename", "/devices/set_role",
                        "/devices/revoke", "/devices/invite", "/devices/redeem",
                        "/vault/put", "/vault/list", "/vault/get", "/vault/key", "/vault/set_keys"})
 CMD_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 HEX32_RE = re.compile(r"^[0-9a-f]{32}$")
 METHODS = (None, "direct", "opportunistic", "propagated")
 UPSTREAM_MAX_COUNT = 1000
+CONV_LIST_LIMIT = 500        # MeshChatXClient.list_conversations default; a full list may be truncated
 PREVIEW_BYTES = 80
 
 
@@ -199,6 +200,8 @@ class Service(DeviceMixin):
             raise BridgeError(errors.BAD_REQUEST, "LXMF commands must pass through the command validator")
         if path == "/mark_read":
             return codec.ok(await self._mark_read(args, ctx))
+        if path == "/delete_chat":
+            return codec.ok(await self._delete_chat(args, ctx))
         handler = {"/sync_chats": self._sync_chats, "/get_messages": self._get_messages,
                    "/list_rooms": self._list_rooms, "/get_room_messages": self._get_room_messages}[path]
         return codec.ok(await handler(args))
@@ -273,7 +276,7 @@ class Service(DeviceMixin):
             "cursor": self.state.cursor(),
             "device": dev.to_wire(),
             "capabilities": ["lxmf", "rrc", "push", "lxmf_transport", "devices", "pairing", "read_state",
-                             "origin_device", "vault", "pairing_invite", "vault_invite"],
+                             "origin_device", "vault", "pairing_invite", "vault_invite", "delete_chat"],
             "compat": {"ok": self.compat_ok, "meshchatx_version": self.client.version,
                        "api_version": self.client.api_version,
                        "checked": self.compat_checked, "error": self.last_compat_error},
@@ -349,9 +352,46 @@ class Service(DeviceMixin):
                                             "unread": unread, "mention": mention}
                     self.state.touch_conv(key, f"{unread}|{int(mention)}")
             self._last_refresh = self._clock()
+            vanished = [p for p in previous if p not in self._lxmf_cache] if len(convs) < CONV_LIST_LIMIT else []
+            for peer in vanished:     # deleted in the MeshChatX web UI?
+                if await self._confirm_deleted(peer):
+                    self._record_deletion(peer, None)
             for peer in flipped:     # read in MeshChatX (web UI or another device's /mark_read)
                 self._publish("read_state", {"peer": peer, "unread": False, "cursor": self.state.cursor(),
                                              "by_device": self._read_by.pop(peer, None)})
+
+    async def _confirm_deleted(self, peer: str) -> bool:
+        """A conversation left the list: it is deleted only if MeshChatX holds no message for the peer any more
+        (guards against list truncation and transient glitches)."""
+        try:
+            return not await self.client.conversation_messages(peer, 1, "desc", None)
+        except BridgeError:
+            return False
+
+    def _record_deletion(self, peer: str, by_device: str | None, before_ts: float | None = None) -> float:
+        """Forget a deleted conversation everywhere, store the tombstone and tell every device."""
+        before_ts = float(before_ts) if before_ts is not None else self._clock()
+        self._lxmf_cache.pop(peer, None)
+        with self.state.transaction():
+            self.state.forget_peer(peer)
+            cursor = self.state.tombstone_put(peer, before_ts)
+        self._publish("chat_deleted", {"peer": peer, "before_ts": before_ts, "cursor": cursor,
+                                       "by_device": by_device})
+        return before_ts
+
+    async def _delete_chat(self, args: dict, ctx: Ctx) -> dict:
+        """Delete an account-A conversation in MeshChatX for all devices (``DELETE /lxmf-messages/conversation``)."""
+        peer = _hex32(args, "peer")
+        if not self.rate_ok("device_admin", ctx.device_id, self.cfg.limits.device_admin_rate_per_minute):
+            raise BridgeError(errors.RATE_LIMITED, "too many delete requests", retry_after=60)
+        async with self._refresh_lock:
+            newest = await self.client.conversation_messages(peer, 1, "desc", None)
+            if not newest and peer not in self._lxmf_cache:
+                raise BridgeError(errors.NOT_FOUND, "no such conversation")
+            await self.client.delete_conversation(peer)
+            ts = [float(m["timestamp"]) for m in newest if isinstance(m.get("timestamp"), (int, float))]
+            before_ts = self._record_deletion(peer, ctx.device_id, max([self._clock()] + ts))
+        return {"peer": peer, "before_ts": before_ts, "cursor": self.state.cursor()}
 
     @staticmethod
     def _joined_rooms(hub: dict) -> list[str]:
@@ -379,9 +419,13 @@ class Service(DeviceMixin):
         if reset:
             cursor = 0
         keys, more = self.state.convs_since(cursor, "", limit)
-        lxmf, rrc = [], []
+        lxmf, rrc, deleted = [], [], []
         for k in keys:
-            if k.startswith("lxmf:"):
+            if k.startswith("del:"):
+                ts = self.state.tombstone_ts(k)
+                if ts is not None:
+                    deleted.append({"peer": k[4:], "before_ts": ts})
+            elif k.startswith("lxmf:"):
                 c = self._lxmf_cache.get(k[5:])
                 if c is None:
                     continue
@@ -396,7 +440,7 @@ class Service(DeviceMixin):
                     rrc.append(dict(r))
         out_cursor = self.state.conv_cursor(keys[-1]) if more and keys else server
         return {"state_id": self.state.state_id(), "cursor": out_cursor, "reset": reset, "more": more,
-                "lxmf": lxmf, "rrc": rrc}
+                "lxmf": lxmf, "rrc": rrc, "deleted": deleted}
 
     # ---- /get_messages -------------------------------------------------------------------------
     async def _get_messages(self, args: dict) -> dict:
@@ -595,6 +639,10 @@ class Service(DeviceMixin):
             h = (ev.get("lxmf_message") or {}).get("hash") or ev.get("hash")
             if h:
                 self._publish("lxmf.deleted", {"hash": h})
+            try:     # a conversation deleted in MeshChatX's own UI vanishes from the list: tell the devices
+                await self.refresh(force=True)
+            except BridgeError:
+                pass
         elif t == "rrc.message":
             msg = ev.get("message") or {}
             hub, room = ev.get("hub_hash"), ev.get("room") or msg.get("room")

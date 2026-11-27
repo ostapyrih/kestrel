@@ -268,6 +268,9 @@ class HelloResult {
   final int cursor;
   final DeviceRecord device;
   final List<String> capabilities;
+
+  /// The bridge can delete a conversation for all devices (`/delete_chat`).
+  bool get canDeleteChat => capabilities.contains('delete_chat');
   final bool compatOk;
 
   /// False while the bridge has not completed its first MeshChatX check (it
@@ -347,8 +350,18 @@ class RrcRoomSummary {
   final bool mention;
 }
 
+/// A conversation deleted for all devices (`/sync_chats` `deleted`).
+class DeletedConv {
+  DeletedConv(this.peer, this.beforeTs);
+  final String peer;
+
+  /// Unix seconds: messages up to this time are deleted.
+  final double beforeTs;
+}
+
 class SyncResult {
   SyncResult({
+    this.deleted = const [],
     required this.stateId,
     required this.cursor,
     required this.reset,
@@ -364,7 +377,15 @@ class SyncResult {
     more: m['more'] == true,
     lxmf: [for (final c in asMapList(m['lxmf'])) ConvSummary.fromMap(c)],
     rrc: [for (final r in asMapList(m['rrc'])) RrcRoomSummary.fromMap(r)],
+    deleted: [
+      for (final d in asMapList(m['deleted']))
+        if (d['peer'] is String && asDouble(d['before_ts']) != null)
+          DeletedConv(d['peer']! as String, asDouble(d['before_ts'])!),
+    ],
   );
+
+  /// Conversations deleted (by a device or in MeshChatX) since the cursor.
+  final List<DeletedConv> deleted;
 
   final String stateId;
   final int cursor;

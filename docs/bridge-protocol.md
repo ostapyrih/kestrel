@@ -29,6 +29,8 @@ v1 had a flat whitelist of phone keys and one global view. v2 (breaking, no v1 c
 - LXMF commands use `"v": 2`; `/devices/*` (including `invite` and `redeem`) and `/vault/*` exist only on the Link transport.
 - **Invite pairing** (`/devices/invite`, `/devices/redeem`, capability `pairing_invite`): the trusted device shows a QR code, the new
   device scans it and joins in one step (section 5.4). Additive within v2.
+- **Chat deletion** (`/delete_chat`, push `chat_deleted`, `deleted` in `/sync_chats`, capability `delete_chat`, section 6.7) and the vault blob
+  kind `delete_chat` with optional `owner_device` (9.5). Additive within v2.
 - `/hello` accepts optional `name` and `platform` and updates the caller's own device record (section 6.1).
 - `kestrel.reject` reason packet for rejected/revoked Links (section 2.4; additive).
 - Config: `[[devices]]` replaces `[whitelist]` (the old key is still read as bootstrap devices, with a warning).
@@ -126,7 +128,7 @@ printed by `--print-address`). Commands are LXMF messages D -> S, responses and 
 - Response: `{"v": 2, "cmd_id": "<id>", "ok": true, "result": {...}}` or `"ok": false, "error": {...}`.
 - Push: the envelope of 2.3 as `kestrel.push`.
 - Available paths over LXMF: `/hello`, `/sync_chats`, `/get_messages`, `/list_rooms`, `/get_room_messages`,
-  `/send_lxmf`, `/send_rrc`, `/mark_read`. **Not available** (`unsupported_transport`): `/subscribe`, `/devices/*`, `/vault/*`.
+  `/send_lxmf`, `/send_rrc`, `/mark_read`. **Not available** (`unsupported_transport`): `/subscribe`, `/delete_chat`, `/devices/*`, `/vault/*`.
 - Responses are limited to `limits.lxmf_max_response_bytes` (default 8192). S replies with OPPORTUNISTIC delivery (upgraded to a
   link when too large) and, if `push.propagation_node` is configured, retries via that node.
 - Fallback push: see 7.3.
@@ -284,7 +286,7 @@ caller's own record and pushes `device_updated`. A `/hello` without them (keepal
 ```
 {"protocol_version": 2, "min_protocol_version": 2, "max_protocol_version": 2, "server": "kestrel-bridge/<ver>",
  "time": <float>, "state_id": "<hex16>", "cursor": <int>, "device": <device record>,
- "capabilities": ["lxmf","rrc","push","lxmf_transport","devices","pairing","read_state","origin_device","vault","pairing_invite","vault_invite"],
+ "capabilities": ["lxmf","rrc","push","lxmf_transport","devices","pairing","read_state","origin_device","vault","pairing_invite","vault_invite","delete_chat"],
  "compat": {"ok": bool, "meshchatx_version": str|null, "api_version": int|null, "checked": bool, "error": str|null},
  "profile": "full"|"constrained"|null,
  "vault": {"key_epoch": int, "in_use": bool, "used_bytes": int},
@@ -306,12 +308,13 @@ Request: `{"cursor": int?, "limit": int?, "state_id": str?}`. Result:
 ```
 {"state_id": "<hex16>", "cursor": int, "reset": bool, "more": bool,
  "lxmf": [{"peer": hash32, "name": str, "last_ts": any, "unread": bool, "failed": int, "preview": str(<=80 bytes), "last_id": int}],
- "rrc":  [{"hub": hash32, "hub_name": str, "room": str, "unread": int, "mention": bool}]}
+ "rrc":  [{"hub": hash32, "hub_name": str, "room": str, "unread": int, "mention": bool}],
+ "deleted": [{"peer": hash32, "before_ts": float}]}
 ```
 **Exact cursor semantics** (the bridge keeps ONE global change counter `C`, no per-device state):
 - Every observed change of a conversation (a new/changed message, `unread` flipping, failed count, a **delivery-state change of an
   outgoing message**, an RRC counter change) assigns the conversation the next value of `C`; the conversation keeps only its latest value.
-  Values are unique and strictly increasing, and conversation rows are never deleted, so any old cursor stays valid forever
+  Values are unique and strictly increasing, and conversation rows are never deleted (a deleted conversation leaves a tombstone, 6.7), so any old cursor stays valid forever
   (a device offline for weeks needs no special handling).
 - `/sync_chats(cursor=c)` returns the conversations with value `> c`, **oldest change first**, at most `limit`, each **once** with its current
   state. `cursor` in the result is the value of the last returned conversation when `more` is true, else the current `C`.
@@ -355,6 +358,25 @@ subscribed Link** (the caller included) receives `read_state` (7.2) with `by_dev
 bridge's periodic conversation refresh (about every 30 s while a device is subscribed) and pushed the same way with `by_device: null`.
 Devices SHOULD call `/mark_read` when the user opens a conversation with unread messages.
 
+### 6.7 Deleting a conversation: `/delete_chat`
+Capability `delete_chat`. Link only (`unsupported_transport` over LXMF). Request `{"peer": hash32}` (account A, LXMF conversations only; RRC rooms are not
+affected). The bridge deletes the conversation in MeshChatX (`DELETE /api/v1/lxmf-messages/conversation/{peer}`), so it is gone for **every** device and for the
+MeshChatX web UI. Result `{"peer", "before_ts": float, "cursor": int}`. `before_ts` is the bridge's time of the deletion (or the newest message time if later): the
+messages of the conversation with `ts <= before_ts` are deleted, anything newer is a new conversation. Rate limit: the device-admin bucket (section 10).
+Errors: `not_found` (MeshChatX has no such conversation, also when it answers 404; the client SHOULD treat it as "already deleted"), `bad_request`,
+`rate_limited`, `upstream_unavailable`, `upstream_error` (nothing was deleted or forgotten), `unsupported_transport`.
+
+The bridge then forgets the conversation (cursor row, origin-device map, pending acks), stores a **tombstone** and pushes `chat_deleted` (7.2) to all subscribed Links, the
+caller's included. A conversation that disappears from MeshChatX's conversation list **without** a `/delete_chat` (deleted in the MeshChatX web UI; the bridge also
+refreshes the index on MeshChatX's `lxmf_message_deleted` event) is recognised the same way, once MeshChatX holds no message for that peer any more (a truncated
+or glitching list is never taken for a deletion); the push then has `by_device: null`.
+
+Resurrection: a tombstone is a change like any other (own cursor value, never removed), so `/sync_chats` returns it in `deleted` to every device whose cursor is
+older, including after `reset: true`, and a device that missed the push converges. A device applies a tombstone by deleting its local copy of that peer's account-A
+messages with `ts <= before_ts` (and the chat if none is left). MeshChatX no longer holds the messages, so no later `/get_messages` or snapshot can bring them back. A new
+message from/to the peer starts a fresh conversation (`ts > before_ts`); the tombstone stays and is harmless. If the bridge database is recreated (`state_id` change) the
+tombstones are lost, but the deleted conversations are not in MeshChatX either.
+
 ### 6.6 RRC
 `/list_rooms` and `/get_room_messages` are unchanged from v1:
 `/list_rooms {}` -> `{"hubs": [{"hub","name","connected","status","rooms":[{"room","unread","mention"}]}]}`;
@@ -390,6 +412,7 @@ belongs to a trusted device (else no reply); 3. valid payload (`v == 2`, known n
 | `lxmf.state` | lxmf | `{hash, state, progress?, method?, cmd_id?}` |
 | `lxmf.deleted` | lxmf | `{hash}` |
 | `read_state` | lxmf | `{peer, unread: false, cursor, by_device: hash32\|null}` |
+| `chat_deleted` | lxmf | `{peer, before_ts, cursor, by_device: hash32\|null}` the conversation was deleted (6.7): delete the local copy (messages with `ts <= before_ts`) |
 | `rrc.message` | rrc | `{hub, room, seq, kind, nick, text, ts, mention, src}` |
 | `rrc.change` | rrc | `{hub}` refetch `/list_rooms` |
 | `vault.blob` | vault | `{blob_id, device_id, seq, key_epoch, size, vcursor}` (not sent to the uploader) |
@@ -416,7 +439,7 @@ client's `/subscribe` hint (a device that knows it is on LoRa/BLE SHOULD send `c
 - `rrc.message` with `mention: true` reduced to `{hub, room, seq, ts, nick, mention, text, truncated}`;
 - `lxmf.state` only for messages sent through the bridge, terminal states, as `{hash, state, cmd_id}`;
 - `resync` and `device_revoked`.
-Everything else (`read_state`, `device_added`, `device_updated`, `vault.blob`, ...) is dropped; the next `/sync_chats`/`/devices/list` on a fast link catches up.
+Everything else (`read_state`, `chat_deleted`, `device_added`, `device_updated`, `vault.blob`, ...) is dropped; the next `/sync_chats`/`/devices/list` on a fast link catches up.
 
 ## 8. MeshChatX compatibility (informative)
 The bridge checks `GET /api/v1/status` (`version`, allowlist default prefix `4.12.`) and `GET /api/v1/app/info` (`api_version`) at start and every 5 minutes, and verifies
@@ -483,11 +506,25 @@ uploading device (account A data is never uploaded): `{"hash": hex32, "peer": he
 Plaintext is kept small enough that the ciphertext stays within `vault_max_blob_bytes`. A device uploads its whole existing history (oldest first) when it
 activates sync, then new records incrementally.
 
+Kind `delete_chat`: `data = {"peer": hex32, "owner_device": hex32?, "before_ts": float}`. It deletes a Standalone (B) chat on **every** device. `owner_device` is the
+device whose B chat is deleted; omitted = the uploader's own chat. `before_ts` (Unix seconds) is the newest message time of the chat known to the uploader; messages with
+`ts <= before_ts` are deleted, newer ones survive and the chat continues normally. A device that applies the blob (blobs of other devices only; the uploader acted locally
+when it queued the blob):
+- is the **owner** (`owner_device` equals its own id): hard-deletes its own B messages with that peer and `ts <= before_ts` (including delivery log; unsent outbox entries in
+  that range are cancelled), drops a vault blob that was built from them, and never uploads them again (they are gone);
+- is **any other device**: deletes its read-only copy of the owner's chat for `ts <= before_ts`.
+
+Both record a **tombstone** `(owner, peer, before_ts)` and skip records of the owner that are not newer when `messages` blobs are applied later (a re-download, or a stale record
+uploaded after the deletion), so nothing is resurrected. A tombstone for an unknown or revoked `owner_device` still removes local copies. The uploader's deletion is queued
+durably and uploaded after every earlier blob (readers apply blobs of one device in `seq` order). Cases: (1) a device deletes its own chat: no `owner_device`; (2) a device
+deletes the read-only chat of another device Y: `owner_device = Y`, `before_ts` = newest message of that chat it knows; Y and all other devices delete too. The vault is
+append-only, so earlier `messages` blobs stay as ciphertext; readers that do not know the kind ignore the blob. Deleting a read-only chat needs an active vault (a group key).
+
 ## 10. Rate limits (per device, one-minute sliding window)
 | bucket | config key | default | paths |
 |---|---|---|---|
 | send | `send_rate_per_minute` | 30 | `/send_lxmf`, `/send_rrc` |
-| device admin | `device_admin_rate_per_minute` | 20 | `/devices/approve|rename|set_role|revoke` |
+| device admin | `device_admin_rate_per_minute` | 20 | `/devices/approve|rename|set_role|revoke`, `/delete_chat` |
 | mark read | `mark_read_rate_per_minute` | 60 | `/mark_read` |
 | vault put | `vault_put_rate_per_minute` | 120 | `/vault/put` |
 
@@ -501,9 +538,10 @@ Exceeding one gives `rate_limited` with `details.retry_after` (seconds). Other l
 | `unauthorized` | link not identified with a trusted device key / unknown device (also the code of the `kestrel.reject` packet) | - |
 | `device_revoked` | the device (or the pairing identity) was revoked (also a `kestrel.reject` code) | - |
 | `unknown_path` | path not defined | - |
-| `unsupported_transport` | path needs a Link (`/subscribe`, `/devices/*`, `/vault/*`) | - |
+| `unsupported_transport` | path needs a Link (`/subscribe`, `/delete_chat`, `/devices/*`, `/vault/*`) | - |
 | `protocol_mismatch` | version outside range; `details: server_version, min_version, max_version, client_version` | - |
 | `request_too_large` / `response_too_large` | over the limit | yes / - |
+| `not_found` | `/delete_chat`: MeshChatX has no such conversation | - |
 | `rate_limited` | `details.retry_after` | yes |
 | `replay` | `cmd_id` already used; `details.cached` | no |
 | `ts_out_of_window` | LXMF `ts` outside the window (never sent) | - |
