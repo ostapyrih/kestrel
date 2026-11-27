@@ -1,6 +1,7 @@
 ; Inno Setup script for the Kestrel Windows installer (per-user, no admin rights).
 ; Build: ISCC /DAppVersion=0.6.0 /DSourceDir=<Flutter Release dir> /DOutDir=<dir> kestrel.iss
-; The in-app updater runs the installer with /VERYSILENT /SUPPRESSMSGBOXES /NORESTART.
+; The in-app updater runs the installer directly with /VERYSILENT /SUPPRESSMSGBOXES
+; /NORESTART /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /LOG=<file>.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -32,8 +33,9 @@ UninstallDisplayIcon={app}\kestrel.exe
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-; Close a running Kestrel so its files can be replaced; the updater relaunches it.
-CloseApplications=yes
+; Close a running Kestrel so its files can be replaced (the in-app updater
+; starts this installer and exits); the silent [Run] entry below relaunches it.
+CloseApplications=force
 RestartApplications=no
 
 [Languages]
@@ -48,3 +50,5 @@ Name: "{autoprograms}\Kestrel"; Filename: "{app}\kestrel.exe"
 
 [Run]
 Filename: "{app}\kestrel.exe"; Description: "{cm:LaunchProgram,Kestrel}"; Flags: nowait postinstall skipifsilent
+; Silent (in-app update) installs relaunch the app as the original user.
+Filename: "{app}\kestrel.exe"; Flags: nowait runasoriginaluser; Check: WizardSilent

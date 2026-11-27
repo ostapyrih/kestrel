@@ -14,7 +14,6 @@ class PendingUpdate {
     required this.target,
     required this.installerPath,
     required this.logPath,
-    required this.resultPath,
     required this.startedAt,
   });
 
@@ -23,7 +22,6 @@ class PendingUpdate {
     target: '${m['target']}',
     installerPath: '${m['installer']}',
     logPath: '${m['log']}',
-    resultPath: '${m['result']}',
     startedAt: DateTime.fromMillisecondsSinceEpoch(
       (m['started'] as num?)?.toInt() ?? 0,
     ),
@@ -36,8 +34,6 @@ class PendingUpdate {
   /// The Inno Setup `/LOG=` file (Windows).
   final String logPath;
 
-  /// The file the update script writes the installer's exit code to.
-  final String resultPath;
   final DateTime startedAt;
 
   Map<String, Object?> toJson() => {
@@ -45,7 +41,6 @@ class PendingUpdate {
     'target': target,
     'installer': installerPath,
     'log': logPath,
-    'result': resultPath,
     'started': startedAt.millisecondsSinceEpoch,
   };
 }
@@ -62,13 +57,16 @@ enum UpdateOutcomeKind {
 }
 
 class UpdateOutcome {
-  const UpdateOutcome(this.kind, {this.pending, this.exitCode});
+  const UpdateOutcome(this.kind, {this.pending, this.log});
 
   final UpdateOutcomeKind kind;
   final PendingUpdate? pending;
 
-  /// The installer's exit code, when the script got to write it.
-  final int? exitCode;
+  /// What the installer log says (null when it was not read).
+  final InstallerLogInfo? log;
+
+  /// The installer's exit code, only when the log states it.
+  int? get exitCode => log?.exitCode;
 
   bool get failed => kind == UpdateOutcomeKind.failed;
 }
@@ -82,28 +80,69 @@ UpdateOutcome evaluateUpdateOutcome({
   required PendingUpdate? pending,
   required AppVersion running,
   required DateTime now,
-  int? exitCode,
+  InstallerLogInfo? log,
 }) {
   if (pending == null) return const UpdateOutcome(UpdateOutcomeKind.none);
   final target = AppVersion.tryParse(pending.target);
-  if (target == null || now.difference(pending.startedAt) > pendingUpdateMaxAge) {
+  if (target == null ||
+      now.difference(pending.startedAt) > pendingUpdateMaxAge) {
     return const UpdateOutcome(UpdateOutcomeKind.none);
   }
   if (!(target > running)) {
     return UpdateOutcome(UpdateOutcomeKind.succeeded, pending: pending);
   }
-  return UpdateOutcome(
-    UpdateOutcomeKind.failed,
-    pending: pending,
-    exitCode: exitCode,
-  );
+  return UpdateOutcome(UpdateOutcomeKind.failed, pending: pending, log: log);
 }
 
-/// Where the installer log and the exit code go: next to the download.
+/// What was found in an Inno Setup `/LOG=` file.
+class InstallerLogInfo {
+  const InstallerLogInfo({this.exists = false, this.exitCode, this.reason});
+
+  /// False when the installer never got to create its log (it did not start).
+  final bool exists;
+  final int? exitCode;
+
+  /// The last line of the log that looks like an error, if any.
+  final String? reason;
+}
+
+final _logStamp = RegExp(r'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(\.\d+)?\s+');
+final _exitCode = RegExp(
+  r'exit(?:ing)? with code[: ]+(-?\d+)|exit code[: ]+(-?\d+)',
+  caseSensitive: false,
+);
+final _errorLine = RegExp(
+  r'error|fail|exception|abort|cannot|could not|denied|in use|not allowed',
+  caseSensitive: false,
+);
+
+/// Reads the interesting part from the tail of an Inno Setup log: the exit
+/// code when stated and the last error-looking line.
+InstallerLogInfo parseInstallerLog(String text, {int tailLines = 60}) {
+  final lines = text
+      .split(RegExp(r'\r?\n'))
+      .map((l) => l.trim())
+      .where((l) => l.isNotEmpty)
+      .toList();
+  final tail = lines.length > tailLines
+      ? lines.sublist(lines.length - tailLines)
+      : lines;
+  int? code;
+  String? reason;
+  for (final raw in tail) {
+    final line = raw.replaceFirst(_logStamp, '');
+    final m = _exitCode.firstMatch(line);
+    if (m != null) code = int.tryParse(m.group(1) ?? m.group(2) ?? '');
+    if (_errorLine.hasMatch(line) && !_exitCode.hasMatch(line)) {
+      reason = line.length > 200 ? line.substring(0, 200) : line;
+    }
+  }
+  return InstallerLogInfo(exists: true, exitCode: code, reason: reason);
+}
+
+/// Where the installer log goes: next to the download.
 String updateLogPath(File installer) =>
     p.join(installer.parent.path, 'kestrel-update.log');
-String updateResultPath(File installer) =>
-    p.join(installer.parent.path, 'kestrel-update-result.txt');
 
 /// The marker file lives in the temp directory itself (a stable place the next
 /// start can find), not in the per-update subfolder.
@@ -134,13 +173,35 @@ Future<PendingUpdate?> readPendingUpdate(Directory tempDir) async {
   }
 }
 
-/// The installer's exit code from the result file, or null.
-Future<int?> readInstallerExitCode(PendingUpdate u) async {
+/// Reads the installer log of [u]; `exists: false` when there is none.
+Future<InstallerLogInfo> readInstallerLog(PendingUpdate u) async {
   try {
-    final f = File(u.resultPath);
-    if (!await f.exists()) return null;
-    return int.tryParse((await f.readAsString()).trim());
+    final f = File(u.logPath);
+    if (!await f.exists()) return const InstallerLogInfo();
+    final len = await f.length();
+    final raf = await f.open();
+    try {
+      // only the tail matters; logs can be large
+      const keep = 64 * 1024;
+      if (len > keep) await raf.setPosition(len - keep);
+      final bytes = await raf.read(keep);
+      return parseInstallerLog(String.fromCharCodes(bytes));
+    } finally {
+      await raf.close();
+    }
   } on Object {
-    return null;
+    return const InstallerLogInfo();
+  }
+}
+
+/// Removes the per-update temp directory (installer, log) after a success.
+/// Only directories created by the updater (`kestrel-update*`) are touched.
+Future<void> deleteUpdateDir(PendingUpdate u) async {
+  try {
+    final dir = Directory(p.dirname(u.installerPath));
+    if (!p.basename(dir.path).startsWith('kestrel-update')) return;
+    if (await dir.exists()) await dir.delete(recursive: true);
+  } on FileSystemException {
+    // best effort
   }
 }

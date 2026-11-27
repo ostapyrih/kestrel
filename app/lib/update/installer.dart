@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 
 import 'releases.dart';
 import 'update_outcome.dart';
+import 'windows_launch.dart';
 
 class InstallException implements Exception {
   InstallException(this.message, {this.noPermission = false});
@@ -43,84 +44,43 @@ UpdatePlatform? currentUpdatePlatform() {
 
 // ------------------------------------------------------------------ Windows
 
-/// Runs the Inno Setup installer silently once this process has exited, then
-/// starts the installed app. The installer is per-user (no admin rights).
-class WindowsInstaller implements UpdateInstaller {
-  static const script = r'''
-param([int]$AppPid, [string]$Installer, [string]$Exe, [string]$Log, [string]$Result)
-$ErrorActionPreference = 'Continue'
-$trace = $Log + '.script.txt'
-function Note([string]$m) { try { Add-Content -Path $trace -Value ((Get-Date -Format o) + ' ' + $m) } catch {} }
-Note ('waiting for pid ' + $AppPid)
-# wait until the app is really gone (it may take a while to close its
-# database and sockets), then stop it: a running process locks its files and
-# the installer would fail without a word
-try { Wait-Process -Id $AppPid -Timeout 180 -ErrorAction SilentlyContinue } catch {}
-if (Get-Process -Id $AppPid -ErrorAction SilentlyContinue) {
-  Note 'still running, stopping it'
-  try { Stop-Process -Id $AppPid -Force -ErrorAction SilentlyContinue } catch {}
-  try { Wait-Process -Id $AppPid -Timeout 20 -ErrorAction SilentlyContinue } catch {}
-}
-Start-Sleep -Seconds 2
-$code = -1
-for ($try = 1; $try -le 2; $try++) {
-  try {
-    $iargs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', '/FORCECLOSEAPPLICATIONS', ('/LOG="' + $Log + '"'))
-    $p = Start-Process -FilePath $Installer -ArgumentList $iargs -Wait -PassThru
-    $code = $p.ExitCode
-  } catch {
-    Note ('installer could not start: ' + $_)
-    $code = -2
-  }
-  Note ('installer exit code ' + $code + ' (attempt ' + $try + ')')
-  if ($code -eq 0) { break }
-  Start-Sleep -Seconds 5
-}
-try { Set-Content -Path $Result -Value $code } catch {}
-if (Test-Path $Exe) { Start-Process -FilePath $Exe }
-''';
+/// Starts a command line as an independent process (injectable for tests).
+typedef DetachedLauncher = void Function(String commandLine);
 
-  /// The per-user install location of the Inno Setup installer.
-  static String installedExe() => p.join(
-    Platform.environment['LOCALAPPDATA'] ?? '',
-    'Programs',
-    'Kestrel',
-    'kestrel.exe',
-  );
+/// The command line that runs the Inno Setup installer silently. Paths are
+/// quoted so that spaces in the temp directory or user name are safe.
+String windowsInstallerCommandLine(String installer, String log) =>
+    '"$installer" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART '
+    '/CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /LOG="$log"';
+
+/// Runs the verified Inno Setup installer directly (no script in between) and
+/// exits. Setup closes this process through the Restart Manager if it lingers
+/// and relaunches the app itself (a silent-only `[Run]` entry in kestrel.iss).
+/// The installer is per-user (no admin rights).
+class WindowsInstaller implements UpdateInstaller {
+  WindowsInstaller({
+    DetachedLauncher? launch,
+    this.exitDelay = const Duration(seconds: 2),
+  }) : _launch = launch ?? launchDetachedWindows;
+
+  final DetachedLauncher _launch;
+
+  /// Time left to flush the database before the process exits.
+  final Duration exitDelay;
 
   @override
   Future<void> install(
     File verified, {
     required void Function() exitApp,
   }) async {
-    final dir = verified.parent.path;
-    final ps1 = File(p.join(dir, 'kestrel-update.ps1'));
-    await ps1.writeAsString(script);
-    // Relaunch the copy the user runs if it is the installed one, otherwise the
-    // freshly installed copy.
-    final running = Platform.resolvedExecutable;
-    final exe = p.isWithin(p.dirname(installedExe()), running)
-        ? running
-        : installedExe();
-    await Process.start('powershell.exe', [
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-WindowStyle',
-      'Hidden',
-      '-File',
-      ps1.path,
-      '-AppPid',
-      '$pid',
-      '-Installer',
-      verified.path,
-      '-Exe',
-      exe,
-      '-Log',
-      updateLogPath(verified),
-      '-Result',
-      updateResultPath(verified),
-    ], mode: ProcessStartMode.detached);
+    try {
+      _launch(
+        windowsInstallerCommandLine(verified.path, updateLogPath(verified)),
+      );
+    } on LaunchException catch (e) {
+      throw InstallException(e.message);
+    }
+    await Future<void>.delayed(exitDelay);
     exitApp();
   }
 }

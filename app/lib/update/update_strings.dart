@@ -60,7 +60,9 @@ const _uk = <String, String>{
       'Немає прав на запис до місця встановлення. Оновіть вручну.',
   'upd_err_install': 'Не вдалося встановити оновлення.',
   'upd_failed': 'Оновлення до {v} не встановилося: запущено стару версію.',
-  'upd_failed_log': 'Код інсталятора: {code}. Журнал: {path}',
+  'upd_failed_log': 'Журнал: {path}',
+  'upd_failed_code': 'Код інсталятора: {code}.',
+  'upd_failed_nostart': 'Інсталятор не запустився.',
   'upd_failed_manual': 'Встановити вручну',
 };
 
@@ -95,6 +97,8 @@ const _en = <String, String>{
       'No permission to write to the install location. Update manually.',
   'upd_err_install': 'Could not install the update.',
   'upd_failed': 'Update to {v} failed: the old version is still running.',
-  'upd_failed_log': 'Installer exit code: {code}. Log: {path}',
+  'upd_failed_log': 'Log: {path}',
+  'upd_failed_code': 'Installer exit code: {code}.',
+  'upd_failed_nostart': 'The installer did not start.',
   'upd_failed_manual': 'Install manually',
 };

@@ -42,47 +42,50 @@ class UpdateHost extends ConsumerWidget {
       children: [
         if (failure != null) UpdateFailedBanner(failure: failure),
         if (show)
-        Material(
-          color: scheme.secondaryContainer,
-          child: SafeArea(
-            bottom: false,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.system_update_alt,
-                    color: scheme.onSecondaryContainer,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      key: const ValueKey('update-banner'),
-                      ut(context, 'upd_banner', {'v': '${release.version}'}),
-                      style: TextStyle(color: scheme.onSecondaryContainer),
+          Material(
+            color: scheme.secondaryContainer,
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 4,
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.system_update_alt,
+                      color: scheme.onSecondaryContainer,
+                      size: 20,
                     ),
-                  ),
-                  TextButton(
-                    key: const ValueKey('update-details'),
-                    onPressed: () {
-                      final ctx = navigatorKey.currentContext;
-                      if (ctx != null) showUpdateDialog(ctx);
-                    },
-                    child: Text(ut(context, 'upd_details')),
-                  ),
-                  if (!working)
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 18),
-                      tooltip: ut(context, 'upd_later'),
-                      onPressed: () =>
-                          ref.read(updateServiceProvider).dismiss(),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        key: const ValueKey('update-banner'),
+                        ut(context, 'upd_banner', {'v': '${release.version}'}),
+                        style: TextStyle(color: scheme.onSecondaryContainer),
+                      ),
                     ),
-                ],
+                    TextButton(
+                      key: const ValueKey('update-details'),
+                      onPressed: () {
+                        final ctx = navigatorKey.currentContext;
+                        if (ctx != null) showUpdateDialog(ctx);
+                      },
+                      child: Text(ut(context, 'upd_details')),
+                    ),
+                    if (!working)
+                      IconButton(
+                        icon: const Icon(Icons.close, size: 18),
+                        tooltip: ut(context, 'upd_later'),
+                        onPressed: () =>
+                            ref.read(updateServiceProvider).dismiss(),
+                      ),
+                  ],
+                ),
               ),
             ),
           ),
-        ),
         Expanded(child: child ?? const SizedBox.shrink()),
       ],
     );
@@ -118,10 +121,7 @@ class UpdateFailedBanner extends ConsumerWidget {
               ),
               const SizedBox(height: 4),
               SelectableText(
-                ut(context, 'upd_failed_log', {
-                  'code': '${failure.exitCode ?? '?'}',
-                  'path': u.logPath,
-                }),
+                updateFailureDetail(context, failure),
                 key: const ValueKey('update-failed-log'),
                 style: TextStyle(color: fg, fontSize: 12),
               ),
@@ -315,4 +315,19 @@ class UpdateSettingsSection extends ConsumerWidget {
       ],
     );
   }
+}
+
+/// One line for the failure banner: the reason and exit code only when known.
+String updateFailureDetail(BuildContext context, UpdateOutcome failure) {
+  final log = failure.log;
+  final parts = <String>[
+    if (log != null && !log.exists)
+      ut(context, 'upd_failed_nostart')
+    else if (log?.reason != null)
+      log!.reason!,
+    if (failure.exitCode != null)
+      ut(context, 'upd_failed_code', {'code': '${failure.exitCode}'}),
+    ut(context, 'upd_failed_log', {'path': failure.pending!.logPath}),
+  ];
+  return parts.join(' ');
 }
