@@ -211,6 +211,7 @@ class _LoraScreenState extends ConsumerState<LoraScreen> {
             key: const ValueKey('lora-preset'),
             child: DropdownButtonFormField<String>(
               key: ValueKey('preset-$_preset'),
+              isExpanded: true,
               initialValue: _preset,
               decoration: InputDecoration(
                 labelText: lt(context, 'lora_preset'),
@@ -254,6 +255,7 @@ class _LoraScreenState extends ConsumerState<LoraScreen> {
                   key: const ValueKey('lora-sf'),
                   child: DropdownButtonFormField<int>(
                     key: ValueKey('sf-$_sf'),
+                    isExpanded: true,
                     initialValue: _sf,
                     decoration: InputDecoration(
                       labelText: lt(context, 'lora_sf'),
@@ -276,6 +278,7 @@ class _LoraScreenState extends ConsumerState<LoraScreen> {
                   key: const ValueKey('lora-cr'),
                   child: DropdownButtonFormField<int>(
                     key: ValueKey('cr-$_cr'),
+                    isExpanded: true,
                     initialValue: _cr,
                     decoration: InputDecoration(
                       labelText: lt(context, 'lora_cr'),
@@ -581,14 +584,11 @@ class LoraSettingsTile extends ConsumerWidget {
     final v = ref.watch(loraViewProvider).value;
     final subtitle = v == null || !v.settings.enabled
         ? lt(context, 'lora_subtitle_off')
-        : lt(
-            context,
-            switch (v.state) {
-              InterfaceState.online => 'lora_state_online',
-              InterfaceState.connecting => 'lora_state_connecting',
-              InterfaceState.offline => 'lora_state_offline',
-            },
-          );
+        : lt(context, switch (v.state) {
+            InterfaceState.online => 'lora_state_online',
+            InterfaceState.connecting => 'lora_state_connecting',
+            InterfaceState.offline => 'lora_state_offline',
+          });
     return ListTile(
       key: const ValueKey('lora-settings'),
       contentPadding: EdgeInsets.zero,
@@ -596,9 +596,8 @@ class LoraSettingsTile extends ConsumerWidget {
       title: Text(lt(context, 'lora_title')),
       subtitle: Text(subtitle),
       trailing: const Icon(Icons.chevron_right),
-      onTap: () => Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => const LoraScreen()),
-      ),
+      onTap: () => Navigator.of(context)
+          .push(MaterialPageRoute<void>(builder: (_) => const LoraScreen())),
     );
   }
 }
