@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.3](https://github.com/ostapyrih/kestrel/compare/app-v0.8.2...app-v0.8.3) (2026-11-27)
+
+
+### Bug Fixes
+
+* **app:** catch up on deletions missed by older versions; durable A tombstones; full resync ([#34](https://github.com/ostapyrih/kestrel/issues/34)) ([781828d](https://github.com/ostapyrih/kestrel/commit/781828dc076d561338abc2b968af107817ea35b9))
+* **app:** Windows updater launches the installer directly and relaunches after install ([#37](https://github.com/ostapyrih/kestrel/issues/37)) ([a3f36ff](https://github.com/ostapyrih/kestrel/commit/a3f36ffacd2769b0a1b72270faa00e2cebd342a9))
+
 ## [0.8.2](https://github.com/ostapyrih/kestrel/compare/app-v0.8.1...app-v0.8.2) (2026-11-27)
 
 
