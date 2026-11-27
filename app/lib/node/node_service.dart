@@ -15,6 +15,19 @@ enum NodeConnection { offline, connecting, online }
 /// Default interval of the periodic mail check, minutes.
 const defaultPropagationIntervalMinutes = 15;
 
+/// Destination hash of the owner's public propagation node (a public, announced
+/// address). It is the selection on a fresh install and whenever the user has
+/// not chosen a node; see [PropagationChoice].
+const kDefaultPropagationNode = 'bcf824c99c6a61f0b6de26bdfc2bd5f3';
+
+/// How the propagation node is chosen. Stored in
+/// `SettingKeys.propagationNode`: absent or empty = [defaultNode] (also what
+/// installs that never pinned a node migrate to), `auto` = [automatic], a
+/// 32-char hash = [pinned].
+enum PropagationChoice { defaultNode, automatic, pinned }
+
+const propagationAutoSetting = 'auto';
+
 /// Snapshot of the propagation ("mail via node") state for the UI.
 class PropagationView {
   const PropagationView({
@@ -25,7 +38,29 @@ class PropagationView {
     required this.lastSync,
     required this.fallback,
     required this.intervalMinutes,
+    this.defaultNode,
+    this.usingDefault = false,
+    this.defaultUnreachable = false,
   });
+
+  /// The default node (null if the selection never uses one).
+  final Uint8List? defaultNode;
+
+  /// True while the user has not chosen a node, so the default is preferred.
+  final bool usingDefault;
+
+  /// The default node failed recently and is being skipped for now.
+  final bool defaultUnreachable;
+
+  /// [defaultNode], or the built-in default when the view has none.
+  Uint8List get defaultNodeOrConst =>
+      defaultNode ?? fromHex(kDefaultPropagationNode);
+
+  PropagationChoice get choice => pinned != null
+      ? PropagationChoice.pinned
+      : (usingDefault
+            ? PropagationChoice.defaultNode
+            : PropagationChoice.automatic);
 
   final List<LxmPropagationNode> nodes;
 
@@ -238,10 +273,18 @@ class NodeService {
 
   Future<void> _applyPropagationSettings() async {
     final r = _router!;
-    final pinned = await repo.getSetting(SettingKeys.propagationNode);
-    r.setPinnedNode(
-      (pinned == null || !isValidAddress(pinned)) ? null : fromHex(pinned),
-    );
+    final stored = await repo.getSetting(SettingKeys.propagationNode);
+    switch (propagationChoiceOf(stored)) {
+      case PropagationChoice.pinned:
+        r.setDefaultNode(null);
+        r.setPinnedNode(fromHex(stored!.trim().toLowerCase()));
+      case PropagationChoice.automatic:
+        r.setDefaultNode(null);
+        r.setPinnedNode(null);
+      case PropagationChoice.defaultNode:
+        r.setDefaultNode(fromHex(kDefaultPropagationNode));
+        r.setPinnedNode(null);
+    }
     r.fallbackToPropagation =
         (await repo.getSetting(SettingKeys.propagationFallback)) != '0';
     final iv = await _intervalSetting();
@@ -255,6 +298,15 @@ class NodeService {
     return v == null || v < 0 ? defaultPropagationIntervalMinutes : v;
   }
 
+  /// Maps the stored setting to a choice. Anything that is not `auto` or a
+  /// valid hash (absent, the old "automatic" empty string) is the default.
+  static PropagationChoice propagationChoiceOf(String? stored) {
+    final v = stored?.trim().toLowerCase();
+    if (v == propagationAutoSetting) return PropagationChoice.automatic;
+    if (v != null && isValidAddress(v)) return PropagationChoice.pinned;
+    return PropagationChoice.defaultNode;
+  }
+
   int _intervalMinutes = defaultPropagationIntervalMinutes;
   Stream<PropagationView>? _propView;
 
@@ -265,6 +317,10 @@ class NodeService {
       nodes: r.propagationNodes,
       active: r.activeNode,
       pinned: r.pinnedNode,
+      defaultNode: r.defaultNode,
+      usingDefault: r.defaultNode != null && r.pinnedNode == null,
+      defaultUnreachable:
+          r.defaultNode != null && r.isNodeUnreachable(r.defaultNode!),
       progress: r.syncProgress,
       lastSync: r.lastSync,
       fallback: r.fallbackToPropagation,
@@ -287,13 +343,26 @@ class NodeService {
     return r;
   }
 
-  /// Pins [hashHex] as the propagation node; null = automatic.
+  /// Pins [hashHex] as the propagation node; null = automatic selection
+  /// (an explicit choice that overrides the default node).
   Future<void> setPropagationNode(String? hashHex) async {
     final h = hashHex?.trim().toLowerCase();
     final valid = h != null && isValidAddress(h);
-    await repo.setSetting(SettingKeys.propagationNode, valid ? h : '');
+    await repo.setSetting(
+      SettingKeys.propagationNode,
+      valid ? h : propagationAutoSetting,
+    );
     await ready;
+    router.setDefaultNode(null);
     router.setPinnedNode(valid ? fromHex(h) : null);
+  }
+
+  /// Back to the default node ([kDefaultPropagationNode]).
+  Future<void> resetPropagationNode() async {
+    await repo.setSetting(SettingKeys.propagationNode, '');
+    await ready;
+    router.setPinnedNode(null);
+    router.setDefaultNode(fromHex(kDefaultPropagationNode));
   }
 
   Future<void> setPropagationFallback(bool on) async {

@@ -97,6 +97,7 @@ class FakeNode extends Fake implements NodeService {
     intervalMinutes: 15,
   );
   final pinnedCalls = <String?>[];
+  int resetCalls = 0;
   final fallbackCalls = <bool>[];
   final intervalCalls = <int>[];
   int syncCalls = 0;
@@ -120,6 +121,9 @@ class FakeNode extends Fake implements NodeService {
   @override
   Future<void> setPropagationNode(String? hashHex) async =>
       pinnedCalls.add(hashHex);
+
+  @override
+  Future<void> resetPropagationNode() async => resetCalls++;
 
   @override
   Future<void> setPropagationFallback(bool on) async => fallbackCalls.add(on);

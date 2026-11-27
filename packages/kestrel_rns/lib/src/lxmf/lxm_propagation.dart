@@ -198,11 +198,17 @@ abstract final class PropagationNodeSelector {
     Iterable<LxmPropagationNode> nodes, {
     required DateTime now,
     Uint8List? pinned,
+    Uint8List? preferred,
     Uint8List? current,
     Duration maxAge = const Duration(days: 2),
     Set<String> unreachable = const {},
   }) {
     if (pinned != null) return pinned;
+    // The default node wins even if it has not been heard yet (a path request
+    // is sent for it), until it is marked unreachable.
+    if (preferred != null && !unreachable.contains(toHex(preferred))) {
+      return preferred;
+    }
     final c = candidates(
       nodes,
       now: now,

@@ -381,7 +381,8 @@ abstract final class SettingKeys {
   static const serverPort = 'server_port';
   static const deviceName = 'device_name';
 
-  // Mail via a propagation node. The pinned node is a hash (empty = auto);
+  // Mail via a propagation node. The node setting is a hash (pinned), `auto`,
+  // or absent/empty (= the default node);
   // the interval is in minutes (0 = off).
   static const propagationNode = 'propagation_node';
   static const propagationFallback = 'propagation_fallback';

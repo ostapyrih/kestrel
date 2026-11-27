@@ -306,6 +306,7 @@ class LxmRouter {
   // ---- propagation (client side) ----
   final Map<String, LxmPropagationNode> _nodes = {};
   Uint8List? _pinnedNode;
+  Uint8List? _defaultNode;
   Uint8List? _currentNode;
   final Map<String, int> _nodeFailures = {};
   final Map<String, DateTime> _nodeUnreachable = {};
@@ -1058,6 +1059,7 @@ class LxmRouter {
       nodes,
       now: now,
       pinned: _pinnedNode,
+      preferred: _defaultNode,
       current: _currentNode,
       maxAge: config.propagationNodeMaxAge,
       unreachable: _nodeUnreachable.keys.toSet(),
@@ -1069,11 +1071,39 @@ class LxmRouter {
       current: _currentNode,
       maxAge: config.propagationNodeMaxAge,
     );
+    // Nothing else known: try the (unreachable) default anyway.
+    n ??= _defaultNode;
     final changed = (n == null) != (_currentNode == null) ||
         (n != null && toHex(n) != toHex(_currentNode!));
     _currentNode = n;
     if (changed) _notify();
     return n;
+  }
+
+  /// Node preferred while nothing is pinned (null = none: plain automatic
+  /// selection). Falls back to automatic selection for as long as it is
+  /// marked unreachable, then is retried.
+  Uint8List? get defaultNode => _defaultNode;
+
+  /// Whether [hash] is currently skipped after repeated failures.
+  bool isNodeUnreachable(List<int> hash) {
+    final t = _nodeUnreachable[toHex(hash)];
+    return t != null && t.isAfter(DateTime.now());
+  }
+
+  /// Sets the default node (see [defaultNode]); asks for a path to it if it
+  /// has not been heard yet.
+  void setDefaultNode(List<int>? hash) {
+    _defaultNode = hash == null ? null : Uint8List.fromList(hash);
+    _currentNode = null;
+    if (_defaultNode != null &&
+        _pinnedNode == null &&
+        !_nodes.containsKey(toHex(_defaultNode!))) {
+      unawaited(rns.requestPath(_defaultNode!).catchError((_) {}));
+    }
+    _notify();
+    _kick();
+    _maybeAutoSync();
   }
 
   /// Pins [hash] as the propagation node (null = automatic selection).
@@ -1087,8 +1117,9 @@ class LxmRouter {
       unawaited(l.teardown());
       _pnLink = null;
     }
-    if (_pinnedNode != null && !_nodes.containsKey(toHex(_pinnedNode!))) {
-      unawaited(rns.requestPath(_pinnedNode!).catchError((_) {}));
+    final want = _pinnedNode ?? _defaultNode;
+    if (want != null && !_nodes.containsKey(toHex(want))) {
+      unawaited(rns.requestPath(want).catchError((_) {}));
     }
     _syncWanted = true;
     _notify();
