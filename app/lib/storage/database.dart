@@ -333,6 +333,18 @@ CREATE TABLE browser_sync (
 )''',
     'ALTER TABLE nomad_history ADD COLUMN synced INTEGER NOT NULL DEFAULT 0',
   ]),
+  // Device group (phase S): a device that joins a group retires its old
+  // identity B. Its chats move to the read-only histories (`vault_chats`)
+  // under the old device id and are labelled with this device's name, kept in
+  // `group_legacy_devices` (it survives turning the bridge off, unlike the
+  // bridge device cache the other devices are named from).
+  Migration(11, [
+    '''
+CREATE TABLE group_legacy_devices (
+  device_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL
+)''',
+  ]),
 ];
 
 /// Version of the SYNC SEMANTICS this app implements (what the bridge change

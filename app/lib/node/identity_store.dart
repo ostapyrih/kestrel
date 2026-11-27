@@ -72,14 +72,28 @@ class MemorySecretStore implements SecretStore {
   Future<void> write(String key, String value) async => data[key] = value;
 }
 
-/// Identity B (the phone): generated on first launch, private key stored only
-/// in the [SecretStore]. Never written to the database or to logs.
+/// Key material of this device (docs/device-sync.md):
+///  * the **group identity G** ("my address"), shared by all devices of the
+///    user and the only identity used for chats. It lives under the key that
+///    held identity B in earlier versions, so an existing install keeps its
+///    address and chats;
+///  * the hidden **device key**, per device: never shown, never used for
+///    chats, used between the user's own devices and to authenticate to the
+///    bridge;
+///  * the **legacy B key**, a copy of the old identity B kept only until this
+///    device's bridge registration moved to the device key.
+///
+/// Private keys are stored only in the [SecretStore]. Never written to the
+/// database or to logs.
 class IdentityStore {
   IdentityStore(this.secrets);
   final SecretStore secrets;
 
   static const _key = 'kestrel.identity_b.private_key';
+  static const _deviceKey = 'kestrel.device.private_key';
+  static const _legacyKey = 'kestrel.legacy_b.private_key';
 
+  /// The group identity G (created on a fresh install).
   Future<Identity> loadOrCreate() async {
     final existing = await secrets.read(_key);
     if (existing != null && existing.isNotEmpty) {
@@ -89,4 +103,32 @@ class IdentityStore {
     await secrets.write(_key, base64.encode(id.privateKey!));
     return id;
   }
+
+  /// Replaces G (joining a group, "Change address").
+  Future<void> saveGroupIdentity(Identity id) =>
+      secrets.write(_key, base64.encode(id.privateKey!));
+
+  /// The hidden device key (created on first use).
+  Future<Identity> loadOrCreateDeviceKey() async {
+    final existing = await secrets.read(_deviceKey);
+    if (existing != null && existing.isNotEmpty) {
+      return Identity.fromPrivateKey(base64.decode(existing));
+    }
+    final id = await Identity.generate();
+    await secrets.write(_deviceKey, base64.encode(id.privateKey!));
+    return id;
+  }
+
+  /// The old identity B, if it must still be used towards the bridge.
+  Future<Identity?> loadLegacy() async {
+    final v = await secrets.read(_legacyKey);
+    if (v == null || v.isEmpty) return null;
+    return Identity.fromPrivateKey(base64.decode(v));
+  }
+
+  Future<void> saveLegacy(Identity id) =>
+      secrets.write(_legacyKey, base64.encode(id.privateKey!));
+
+  /// Forgets the legacy key (an empty value; the store has no delete).
+  Future<void> clearLegacy() => secrets.write(_legacyKey, '');
 }

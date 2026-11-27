@@ -299,8 +299,16 @@ class Repo {
     await _db.transaction((txn) async {
       // downloaded histories of the other devices and the download position;
       // this device's own B data, the upload sequence and the key chain stay
-      await txn.rawDelete('DELETE FROM vault_messages');
-      await txn.rawDelete('DELETE FROM vault_chats');
+      // (histories of retired own identities, `group_legacy_devices`, stay:
+      // they are not re-downloadable)
+      await txn.rawDelete(
+        'DELETE FROM vault_messages WHERE device_id NOT IN '
+        '(SELECT device_id FROM group_legacy_devices)',
+      );
+      await txn.rawDelete(
+        'DELETE FROM vault_chats WHERE device_id NOT IN '
+        '(SELECT device_id FROM group_legacy_devices)',
+      );
       await txn.rawDelete('DELETE FROM vault_seen');
       await txn.rawDelete(
         'DELETE FROM delivery_log WHERE message_id IN '
@@ -433,6 +441,67 @@ class Repo {
     if (removed) adb.notify();
     return removed;
   }
+
+  /// Joining a device group retires this device's old identity B: every
+  /// own chat (account B) moves, with its messages, to the read-only
+  /// histories under [oldDeviceId] and is labelled [deviceName]; the account
+  /// B tables are left empty for the group identity. Unsent messages become
+  /// failed history (the caller cancelled them in the router first).
+  /// Returns the number of chats moved.
+  Future<int> retireOwnHistory(String oldDeviceId, String deviceName) async {
+    final b = await accountId('B');
+    var moved = 0;
+    await _db.transaction((txn) async {
+      await txn.insert('group_legacy_devices', {
+        'device_id': oldDeviceId,
+        'name': deviceName,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      final chats = await txn.query(
+        'chats',
+        where: "account_id = ? AND kind = 'lxmf' AND peer_hash IS NOT NULL",
+        whereArgs: [b],
+      );
+      for (final c in chats) {
+        final id = c['id']! as int;
+        final peer = c['peer_hash']! as String;
+        await txn.rawInsert(
+          'INSERT INTO vault_chats(device_id, peer_hash, peer_name, last_ts) '
+          'VALUES (?, ?, ?, ?) ON CONFLICT(device_id, peer_hash) DO UPDATE SET '
+          'peer_name = COALESCE(excluded.peer_name, peer_name), '
+          'last_ts = MAX(COALESCE(last_ts, 0), COALESCE(excluded.last_ts, 0))',
+          [oldDeviceId, peer, c['title'], c['last_ts']],
+        );
+        final vc = await txn.query(
+          'vault_chats',
+          columns: ['id'],
+          where: 'device_id = ? AND peer_hash = ?',
+          whereArgs: [oldDeviceId, peer],
+        );
+        final vcid = vc.first['id']! as int;
+        await txn.rawInsert(
+          'INSERT OR IGNORE INTO vault_messages(chat_id, device_id, lxmf_hash, '
+          'direction, title, text, ts, rts, status, route, transport, error) '
+          "SELECT ?, ?, COALESCE(lxmf_hash, 'local-' || id), direction, title, "
+          'text, ts, ts / 1000.0, '
+          "CASE WHEN status IN ('queued', 'sending') THEN 'failed' ELSE status END, "
+          'route, transport, error FROM messages WHERE chat_id = ?',
+          [vcid, oldDeviceId, id],
+        );
+        await _deleteChatRows(txn, id, b, null);
+        moved++;
+      }
+    });
+    adb.notify();
+    return moved;
+  }
+
+  /// True if [deviceId] is a retired identity B of this very device.
+  Future<bool> isLegacyDevice(String deviceId) async => (await _db.query(
+    'group_legacy_devices',
+    where: 'device_id = ?',
+    whereArgs: [deviceId],
+    limit: 1,
+  )).isNotEmpty;
 
   /// Deletion cut-off (ms) of account A's chat with [peerHash], or null.
   Future<int?> aTombstone(String peerHash) async {
@@ -807,10 +876,11 @@ FROM chats c JOIN accounts a ON a.id = c.account_id''';
   // ------------------------------------------------- remote (vault) histories
 
   static const _remoteChatSelect = '''
-SELECT c.*, d.name AS device_name,
+SELECT c.*, COALESCE(NULLIF(d.name, ''), l.name) AS device_name,
   (SELECT text FROM vault_messages m WHERE m.chat_id = c.id
      ORDER BY m.ts DESC, m.id DESC LIMIT 1) AS last_text
-FROM vault_chats c LEFT JOIN bridge_devices d ON d.device_id = c.device_id''';
+FROM vault_chats c LEFT JOIN bridge_devices d ON d.device_id = c.device_id
+LEFT JOIN group_legacy_devices l ON l.device_id = c.device_id''';
 
   ChatRow _remoteChatRow(Map<String, Object?> m) => ChatRow(
     id: -(m['id']! as int),
@@ -913,6 +983,124 @@ FROM vault_chats c LEFT JOIN bridge_devices d ON d.device_id = c.device_id''';
     );
     return r.isNotEmpty;
   }
+
+  // ------------------------------------------------------- device group sync
+
+  /// Tombstone device id of chats deleted through the group sync.
+  static const groupTombstoneId = 'group';
+
+  /// Cut-off (ms) of a group-wide chat deletion for [peerHash], or null.
+  Future<int?> groupTombstone(String peerHash) async {
+    final t = await _db.query(
+      'vault_tombstones',
+      columns: ['before_ts'],
+      where: 'device_id = ? AND peer_hash = ?',
+      whereArgs: [groupTombstoneId, peerHash],
+    );
+    return t.isEmpty ? null : t.first['before_ts']! as int;
+  }
+
+  /// Applies a `messages` sync record of another device of the group (an
+  /// inbound message it forwarded, a message it sent, or a later state of
+  /// one). Upserts by LXMF hash: a message that is already here is not
+  /// stored twice; a delivery state only moves forward. Returns true if a
+  /// row was inserted or changed.
+  Future<bool> applySyncedMessage(Map<Object?, Object?> d) async {
+    final hash = d['hash'];
+    final peer = d['peer'];
+    final text = d['text'];
+    final incoming = d['incoming'] == true;
+    if (hash is! String ||
+        hash.length != 32 ||
+        peer is! String ||
+        peer.length != 32 ||
+        text is! String) {
+      return false;
+    }
+    final tsMs = d['ts'] is num
+        ? (d['ts']! as num).toInt()
+        : DateTime.now().millisecondsSinceEpoch;
+    final cut = await groupTombstone(peer);
+    if (cut != null && tsMs <= cut) return false;
+    final state = d['state'] is String ? d['state']! as String : null;
+    const rank = {
+      MsgStatus.failed: 0,
+      MsgStatus.queued: 1,
+      MsgStatus.sending: 2,
+      MsgStatus.sent: 3,
+      MsgStatus.delivered: 4,
+    };
+    final existing = await _db.rawQuery(
+      'SELECT m.id, m.status FROM messages m JOIN accounts a ON a.id = '
+      "m.account_id WHERE a.identity = 'B' AND m.lxmf_hash = ? LIMIT 1",
+      [hash],
+    );
+    if (existing.isNotEmpty) {
+      final cur = existing.first['status']! as String;
+      if (!incoming &&
+          state != null &&
+          (rank[state] ?? -1) > (rank[cur] ?? -1)) {
+        await _db.update(
+          'messages',
+          {'status': state},
+          where: 'id = ?',
+          whereArgs: [existing.first['id']],
+        );
+        adb.notify();
+        return true;
+      }
+      return false;
+    }
+    final chatId = await findOrCreateChat(
+      'B',
+      peer,
+      title: d['peer_name'] is String ? d['peer_name']! as String : null,
+    );
+    final acc = await accountId('B');
+    const routes = {'direct', 'opportunistic', 'propagated'};
+    final route = routes.contains(d['route']) ? d['route']! as String : null;
+    final id = await _db.insert('messages', {
+      'account_id': acc,
+      'chat_id': chatId,
+      'direction': incoming ? 'in' : 'out',
+      'lxmf_hash': hash,
+      'text': text,
+      'title': d['title'] is String ? d['title'] : null,
+      'ts': tsMs,
+      'sender_identity': 'B',
+      'route': route,
+      'transport': 'none',
+      'status': incoming
+          ? MsgStatus.received
+          : (rank.containsKey(state) && state != MsgStatus.queued
+                ? state!
+                : MsgStatus.sent),
+      'signature_valid': incoming ? 1 : null,
+    });
+    await _db.rawUpdate(
+      'UPDATE chats SET last_ts = MAX(COALESCE(last_ts, 0), ?)'
+      '${incoming ? ', unread = unread + 1' : ''} WHERE id = ?',
+      [tsMs, chatId],
+    );
+    await addLog(id, incoming ? 'synced_in' : 'synced_out');
+    adb.notify();
+    if (incoming) {
+      await announceIncoming(
+        identity: 'B',
+        chatId: chatId,
+        hash: hash,
+        text: text,
+        ts: DateTime.fromMillisecondsSinceEpoch(tsMs),
+      );
+    }
+    return true;
+  }
+
+  /// A group-wide `delete_chat`: removes the messages of the chat with
+  /// [peerHash] up to [beforeTsMs] and remembers the cut-off so a late
+  /// `messages` record cannot bring them back.
+  Future<bool> applySyncedDelete(String peerHash, int beforeTsMs) =>
+      deleteOwnChatBefore(groupTombstoneId, peerHash, beforeTsMs);
 
   Future<int> insertIncoming({
     required String identity,

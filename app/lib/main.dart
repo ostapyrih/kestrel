@@ -61,13 +61,13 @@ Future<void> main() async {
   );
   final bridge = BridgeService(
     repo: repo,
-    ownDeviceId: () => toHex(node.identity.hash),
-    identity: () => node.identity,
+    ownDeviceId: () => toHex(node.bridgeIdentity.hash),
+    identity: () => node.bridgeIdentity,
     sendAsB: node.sendMessage,
     secrets: secrets,
     apiFactory: (key, allowFallback) => BridgeConnection(
       rns: node.rns,
-      identity: node.identity,
+      identity: node.bridgeIdentity,
       bridgePublicKey: key,
       router: node.router,
       allowFallback: allowFallback,
@@ -116,6 +116,7 @@ Future<void> main() async {
     markRead: (id) async {
       await bridge.markRead(id).catchError((Object _) {});
       await repo.markRead(id);
+      unawaited(node.publishRead(id));
     },
   )..start();
   background = BackgroundModeController(

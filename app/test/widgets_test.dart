@@ -101,8 +101,8 @@ void main() {
       expect(find.text('Alice'), findsOneWidget);
       expect(find.text('Marichka'), findsOneWidget);
       expect(find.text('TCP Online'), findsOneWidget);
-      // one badge per chat row: B for Alice, A for Marichka
-      expect(find.byKey(const ValueKey('badge-B')), findsOneWidget);
+      // own chats carry no badge; MeshChatX chats do
+      expect(find.byKey(const ValueKey('badge-B')), findsNothing);
       expect(find.byKey(const ValueKey('badge-A')), findsOneWidget);
       expect(find.text('Привіт!'), findsOneWidget);
     });
@@ -117,8 +117,8 @@ void main() {
       tester,
     ) async {
       await show(tester, const ChatsScreen(), bridgeEnabled: true);
-      expect(find.text('B · ${defaultDeviceName()}'), findsOneWidget);
-      expect(find.text('A (міст)'), findsWidgets);
+      expect(find.text('Моя адреса'), findsOneWidget);
+      expect(find.text('MeshChatX'), findsWidgets);
       expect(find.text('Усі'), findsOneWidget);
       final a = tester.widget<ChoiceChip>(find.byKey(const ValueKey('chip-A')));
       expect(a.onSelected, isNull); // disabled until the bridge exists
@@ -144,7 +144,7 @@ void main() {
         bridgeEnabled: true,
       );
       expect(find.text('New chat'), findsOneWidget);
-      expect(find.text('B · ${defaultDeviceName()}'), findsOneWidget);
+      expect(find.text('My address'), findsOneWidget);
       await show(tester, const ChatsScreen(), locale: const Locale('de'));
       expect(find.text('Новий чат'), findsOneWidget); // Ukrainian default
     });
@@ -161,12 +161,9 @@ void main() {
 
       Text meta(int id) =>
           tester.widget<Text>(find.byKey(ValueKey('meta-$id')));
-      expect(meta(1).data, 'B · ${defaultDeviceName()} · opportunistic · TCP');
-      expect(meta(2).data, 'B · ${defaultDeviceName()} · direct · TCP');
-      expect(
-        meta(3).data,
-        'B · ${defaultDeviceName()} · opportunistic · в черзі (офлайн)',
-      );
+      expect(meta(1).data, 'opportunistic · TCP');
+      expect(meta(2).data, 'direct · TCP');
+      expect(meta(3).data, 'opportunistic · в черзі (офлайн)');
 
       Icon icon(int id) =>
           tester.widget<Icon>(find.byKey(ValueKey('status-$id')));
@@ -174,17 +171,17 @@ void main() {
       expect(icon(2).icon, Icons.done_all); // delivered
       expect(icon(3).icon, Icons.error_outline); // failed
       expect(icon(4).icon, Icons.schedule); // queued
-      expect(find.byKey(const ValueKey('badge-B')), findsOneWidget);
+      expect(find.byKey(const ValueKey('badge-B')), findsNothing);
     });
 
     testWidgets('composer states who the message is sent from', (tester) async {
       await show(tester, const ChatScreen(chatId: 1), bridgeEnabled: true);
-      expect(find.text('Від: B (цей пристрій)'), findsOneWidget);
+      expect(find.text('Від: Моя адреса'), findsOneWidget);
     });
 
     testWidgets('composer for an A chat shows A', (tester) async {
       await show(tester, const ChatScreen(chatId: 2), bridgeEnabled: true);
-      expect(find.text('Від: A (через міст)'), findsOneWidget);
+      expect(find.text('Від: MeshChatX (через міст)'), findsOneWidget);
     });
 
     testWidgets('sending goes through the node', (tester) async {
@@ -255,7 +252,7 @@ void main() {
       );
       await tester.ensureVisible(seg);
       await tester.tap(
-        find.descendant(of: seg, matching: find.text('A (міст)')),
+        find.descendant(of: seg, matching: find.text('MeshChatX')),
       );
       await tester.pump();
       await tester.ensureVisible(find.byKey(const ValueKey('open-chat')));

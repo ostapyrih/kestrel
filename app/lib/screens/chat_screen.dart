@@ -66,6 +66,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               .catchError((Object _) {})
               .then((_) => repo.markRead(id)),
         );
+        unawaited(ref.read(nodeProvider).publishRead(id));
       } on Object {
         // no repo (widget tests)
       }
@@ -244,7 +245,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   key: const ValueKey('badge-remote'),
                   label: s.account('B', device: chat?.remoteDeviceName),
                 )
-              else
+              else if (identity == 'A')
                 IdentityBadge(identity),
             ],
           ],
@@ -397,7 +398,9 @@ class MessageBubble extends StatelessWidget {
     final out = m.outgoing;
     final failed = m.status == MsgStatus.failed;
     final meta = [
-      if (showAccount) s.account(m.senderIdentity, device: deviceName),
+      // own address: no label; MeshChatX and other devices' histories keep one
+      if (showAccount && (m.senderIdentity == 'A' || isRemoteId(m.id)))
+        s.account(m.senderIdentity, device: deviceName),
       if (showAccount) ?originLabel,
       if (m.route != null) routeLabel(context, m.route!),
       s.t('transport_${m.transport}'),

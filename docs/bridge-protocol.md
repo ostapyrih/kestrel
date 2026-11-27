@@ -454,6 +454,10 @@ Everything else (`read_state`, `chat_deleted`, `device_added`, `device_updated`,
 The bridge checks `GET /api/v1/status` (`version`, allowlist default prefix `4.12.`) and `GET /api/v1/app/info` (`api_version`) at start and every 5 minutes, and verifies
 required keys in MeshChatX responses (`upstream_incompatible` otherwise). `protocol_version` is independent of MeshChatX versions.
 
+### 5.5 Device keys (phase S, informative)
+
+Since the device group (docs/device-sync.md) the identity a device authenticates with is its hidden **device key**, not the identity used for chats. An app that was paired under its old identity B migrates by approving its own device key with the key the bridge already trusts (`/devices/approve` as in 5.2, vault key chain wrapped to the new key), reconnecting with the device key and revoking the old registration (`/devices/revoke`, key rotation as in 9.3). The bridge needs no change: it sees an ordinary approve, a new device id and a revoke. The vault device id changes with the key; a `seq_conflict` with `details.last_seq` resets the uploader (9.1). `protocol_version` and `kSyncSemanticsVersion` are unchanged.
+
 ## 9. Vault (Phase 4b) and group-key epochs
 
 Goal: devices sync their **Standalone** (`B-x`) history end-to-end encrypted through the bridge. The bridge stores **opaque ciphertext** and cannot read it; it never holds
