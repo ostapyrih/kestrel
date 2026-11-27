@@ -62,4 +62,3 @@ class FakeSaver implements FileSaver {
     return '/downloads/$fileName';
   }
 }
-

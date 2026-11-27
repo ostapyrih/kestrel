@@ -1,4 +1,7 @@
+import 'dart:async';
 import 'dart:typed_data';
+
+import 'package:kestrel_rns/kestrel_rns.dart';
 
 import 'package:flutter_riverpod/misc.dart';
 import 'package:kestrel/bridge/bridge_connection.dart';
@@ -39,9 +42,17 @@ class FakeNode extends Fake implements NodeService {
   Future<void> deleteChats(Iterable<int> chatIds) async =>
       deleted.add(chatIds.toList());
 
+  /// Messages sent with "send via node".
+  final viaNodeSent = <(int, String)>[];
+
   @override
-  Future<int> sendMessage(int chatId, String text) async {
+  Future<int> sendMessage(
+    int chatId,
+    String text, {
+    bool viaNode = false,
+  }) async {
     sent.add((chatId, text));
+    if (viaNode) viaNodeSent.add((chatId, text));
     return 1;
   }
 
@@ -68,11 +79,54 @@ class FakeNode extends Fake implements NodeService {
   @override
   Future<({int chatId, int messageId})> sendToPeer(
     ChatTarget t,
-    String text,
-  ) async {
+    String text, {
+    bool viaNode = false,
+  }) async {
     draftSends.add((t.peer, text));
     return (chatId: 1, messageId: 1);
   }
+
+  // ---- propagation ----
+  PropagationView view = const PropagationView(
+    nodes: [],
+    active: null,
+    pinned: null,
+    progress: LxmSyncProgress(phase: LxmSyncPhase.idle),
+    lastSync: null,
+    fallback: true,
+    intervalMinutes: 15,
+  );
+  final pinnedCalls = <String?>[];
+  final fallbackCalls = <bool>[];
+  final intervalCalls = <int>[];
+  int syncCalls = 0;
+  final viewChanges = StreamController<PropagationView>.broadcast();
+
+  @override
+  Future<void> get ready async {}
+
+  @override
+  PropagationView get propagation => view;
+
+  @override
+  Stream<PropagationView> get propagationChanges => viewChanges.stream;
+
+  @override
+  Future<LxmSyncResult> syncMail() async {
+    syncCalls++;
+    return LxmSyncResult(error: LxmSyncError.none, at: DateTime.now());
+  }
+
+  @override
+  Future<void> setPropagationNode(String? hashHex) async =>
+      pinnedCalls.add(hashHex);
+
+  @override
+  Future<void> setPropagationFallback(bool on) async => fallbackCalls.add(on);
+
+  @override
+  Future<void> setPropagationInterval(int minutes) async =>
+      intervalCalls.add(minutes);
 
   @override
   Future<void> setDisplayName(String name) async => names.add(name);
@@ -429,6 +483,9 @@ List<Override> fixtureOverrides({
   /// Adds the read-only history of another device to the chat list.
   bool withRemote = false,
   VaultStatus vaultStatus = const VaultStatus(state: VaultState.idle),
+
+  /// Replaces the messages of chat 1.
+  List<MessageRow>? chat1Messages,
 }) => [
   hasRemoteChatsProvider.overrideWith((ref) => Stream.value(withRemote)),
   vaultStatusProvider.overrideWith((ref) => Stream.value(vaultStatus)),
@@ -473,7 +530,7 @@ List<Override> fixtureOverrides({
   messagesProvider.overrideWith(
     (ref, id) => Stream.value(
       id == 1
-          ? fixtureMessages
+          ? (chat1Messages ?? fixtureMessages)
           : id == -1
           ? fixtureRemoteMessages
           : id == 2

@@ -70,8 +70,10 @@ void main() {
     test('nested formatting', () {
       final d = p('`!`*`_all`_ no-u`* no-i`! plain');
       final s = d.blocks.first.spans.cast<MicronText>();
-      expect(s[0].style.bold && s[0].style.italic && s[0].style.underline,
-          isTrue);
+      expect(
+        s[0].style.bold && s[0].style.italic && s[0].style.underline,
+        isTrue,
+      );
       expect(s[1].style.underline, isFalse);
       expect(s[1].style.italic, isTrue);
       expect(s[2].style.italic, isFalse);
@@ -97,7 +99,16 @@ void main() {
     });
 
     test('control and zero-width characters are stripped', () {
-      final dirty = String.fromCharCodes([0x61, 0, 0x62, 0x200b, 0x63, 0x202e, 0x64, 0x1b]);
+      final dirty = String.fromCharCodes([
+        0x61,
+        0,
+        0x62,
+        0x200b,
+        0x63,
+        0x202e,
+        0x64,
+        0x1b,
+      ]);
       expect(p(dirty).blocks.first.plainText, 'abcd');
     });
 
@@ -229,8 +240,10 @@ void main() {
   group('dividers, literals, comments', () {
     test('divider default, custom char, and the "-text" quirk', () {
       final d = p('-\n-=\n- item');
-      expect(d.blocks.map((b) => b.kind),
-          everyElement(MicronBlockKind.divider));
+      expect(
+        d.blocks.map((b) => b.kind),
+        everyElement(MicronBlockKind.divider),
+      );
       expect(d.blocks[0].dividerChar, '─');
       expect(d.blocks[1].dividerChar, '=');
       // NomadNet treats any line starting with '-' as a divider
@@ -258,7 +271,9 @@ void main() {
 
   group('links', () {
     test('label + url, url only, with fields', () {
-      final d = p('`[Home`abcd:/page/index.mu] and `[:/page/x.mu] `[Go`:/p`a|b=1]');
+      final d = p(
+        '`[Home`abcd:/page/index.mu] and `[:/page/x.mu] `[Go`:/p`a|b=1]',
+      );
       final l = d.blocks.first.spans.whereType<MicronLinkSpan>().toList();
       expect(l[0].label, 'Home');
       expect(l[0].target, 'abcd:/page/index.mu');
@@ -280,10 +295,7 @@ void main() {
     });
 
     test('links inherit the current style', () {
-      final l = p('`!`Ff00`[x`:/p]')
-          .blocks
-          .first
-          .spans
+      final l = p('`!`Ff00`[x`:/p]').blocks.first.spans
           .whereType<MicronLinkSpan>()
           .single;
       expect(l.style.bold, isTrue);
@@ -292,19 +304,16 @@ void main() {
 
     test('malformed: unclosed bracket, empty target, too many parts', () {
       expect(p('`[oops').blocks.first.plainText, 'oops');
-      expect(
-          p('`[label`]').blocks.where((b) => b.spans.isNotEmpty), isEmpty);
+      expect(p('`[label`]').blocks.where((b) => b.spans.isNotEmpty), isEmpty);
       final d = p('a`[x`y`z`w]b');
       expect(d.blocks.first.spans.whereType<MicronLinkSpan>(), isEmpty);
       expect(texts(d.blocks.first), ['a', 'b']);
     });
 
     test('link text with unicode and spaces', () {
-      final l = p('`[Мій вузол 🌍`ab:/x]')
-          .blocks
-          .first
-          .spans
-          .single as MicronLinkSpan;
+      final l =
+          p('`[Мій вузол 🌍`ab:/x]').blocks.first.spans.single
+              as MicronLinkSpan;
       expect(l.label, 'Мій вузол 🌍');
     });
   });
@@ -323,19 +332,21 @@ void main() {
       expect(g.width, 12);
       expect(g.name, 'pw');
 
-      final h = p('`<30x4|notes`text>').blocks.first.spans.single
-          as MicronFieldSpan;
+      final h =
+          p('`<30x4|notes`text>').blocks.first.spans.single as MicronFieldSpan;
       expect(h.width, 30);
       expect(h.rows, 4);
     });
 
     test('width is capped at 256 and bad widths are ignored', () {
       expect(
-          (p('`<999|a`>').blocks.first.spans.single as MicronFieldSpan).width,
-          256);
+        (p('`<999|a`>').blocks.first.spans.single as MicronFieldSpan).width,
+        256,
+      );
       expect(
-          (p('`<zz|a`>').blocks.first.spans.single as MicronFieldSpan).width,
-          24);
+        (p('`<zz|a`>').blocks.first.spans.single as MicronFieldSpan).width,
+        24,
+      );
     });
 
     test('checkbox and radio with value and prechecked', () {
@@ -352,16 +363,17 @@ void main() {
     });
 
     test('value defaults to the label', () {
-      final c = p('`<?|x`Label>').blocks.first.spans.single
-          as MicronChoiceSpan;
+      final c = p('`<?|x`Label>').blocks.first.spans.single as MicronChoiceSpan;
       expect(c.value, 'Label');
     });
 
     test('malformed fields: no backtick, no closing >', () {
       // the stray '<' is dropped, the rest stays text (as in NomadNet)
       expect(p('a`<name').blocks.first.plainText, 'aname');
-      expect(p('`<name`value').blocks.first.spans.whereType<MicronFieldSpan>(),
-          isEmpty);
+      expect(
+        p('`<name`value').blocks.first.spans.whereType<MicronFieldSpan>(),
+        isEmpty,
+      );
     });
 
     test('field + label + link on one line', () {
@@ -410,7 +422,10 @@ Query: `<q`> `[Go`:/page/search.mu`q]
       expect(d.cacheSeconds, 3600);
       final kinds = d.blocks.map((b) => b.kind).toList();
       expect(kinds.first, MicronBlockKind.heading);
-      expect(d.blocks.where((b) => b.kind == MicronBlockKind.divider), hasLength(1));
+      expect(
+        d.blocks.where((b) => b.kind == MicronBlockKind.divider),
+        hasLength(1),
+      );
       final links = [
         for (final b in d.blocks) ...b.spans.whereType<MicronLinkSpan>(),
       ];

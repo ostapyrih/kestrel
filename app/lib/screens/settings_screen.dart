@@ -13,6 +13,7 @@ import 'bridge_widgets.dart';
 import '../update/update_ui.dart';
 import '../desktop/desktop_settings.dart';
 import 'devices_screen.dart';
+import 'propagation_widgets.dart';
 import 'vault_widgets.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -299,6 +300,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ],
           if (configured && bridge) const VaultSettingsSection(),
+          const PropagationSettingsSection(),
           const SizedBox(height: 8),
           Text(s.t('bridge_note'), style: text.bodySmall),
           const UpdateSettingsSection(),

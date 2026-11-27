@@ -71,7 +71,11 @@ class PythonPeer {
       }
       peer._dispatch(m);
     });
-    unawaited(proc.stderr.drain<void>());
+    if (Platform.environment['KESTREL_PY_STDERR'] != null) {
+      proc.stderr.listen(stderr.add);
+    } else {
+      unawaited(proc.stderr.drain<void>());
+    }
     final ready = await readyC.future.timeout(const Duration(seconds: 40));
     peer = PythonPeer._(proc, ready);
     return peer;
@@ -91,6 +95,18 @@ class PythonPeer {
           if (stampCost != null) ...['--stamp-cost', '$stampCost'],
           if (enforceStamps) '--enforce-stamps',
         ],
+      );
+
+  /// Starts `lxmf_peer.py` with arbitrary extra arguments (propagation node,
+  /// `--connect`, ...).
+  static Future<PythonPeer> startLxmfRaw({
+    bool transport = false,
+    List<String> extraArgs = const [],
+  }) =>
+      start(
+        script: 'lxmf_peer.py',
+        transport: transport,
+        extraArgs: extraArgs,
       );
 
   void _dispatch(Map<String, Object?> m) {

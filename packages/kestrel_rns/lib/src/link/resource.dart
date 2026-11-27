@@ -204,6 +204,7 @@ class Resource {
   late Uint8List originalHash;
   Uint8List? requestId;
   bool isResponse = false;
+  bool appFlag = false;
   bool compressed = false;
   bool encrypted = true;
   bool hasMetadata = false;
@@ -295,6 +296,7 @@ class Resource {
     Uint8List? requestId,
     bool isResponse = false,
     bool autoCompress = true,
+    bool appFlag = false,
     double? timeout,
     void Function(Resource)? callback,
     void Function(Resource)? progressCallback,
@@ -307,6 +309,7 @@ class Resource {
       ..initiator = true
       ..requestId = requestId
       ..isResponse = isResponse
+      ..appFlag = appFlag
       ..callback = callback
       ..progressCallback = progressCallback;
     res.sdu = link.mtu - Packet.headerMaxSize - Packet.ifacMinSize;
@@ -375,7 +378,7 @@ class Resource {
   }
 
   ResourceAdvertisement _adv() {
-    final flags = (0 << 6) |
+    final flags = ((appFlag ? 1 : 0) << 6) |
         ((hasMetadata ? 1 : 0) << 5) |
         ((requestId != null && isResponse ? 1 : 0) << 4) |
         ((requestId != null && !isResponse ? 1 : 0) << 3) |

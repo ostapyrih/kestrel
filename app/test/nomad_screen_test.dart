@@ -74,11 +74,14 @@ void main() {
     await settle(tester);
   }
 
-  testWidgets('node list: sorted by last announce, search, favourites',
-      (tester) async {
+  testWidgets('node list: sorted by last announce, search, favourites', (
+    tester,
+  ) async {
     await show(tester);
     final tiles = find.byWidgetPredicate(
-      (w) => w.key is ValueKey && '${(w.key! as ValueKey).value}'.startsWith('nn-node-'),
+      (w) =>
+          w.key is ValueKey &&
+          '${(w.key! as ValueKey).value}'.startsWith('nn-node-'),
     );
     expect(tiles, findsNWidgets(2));
     // Beta announced later -> first
@@ -125,8 +128,9 @@ void main() {
     );
   });
 
-  testWidgets('narrow: tapping a node opens the browser and shows the page',
-      (tester) async {
+  testWidgets('narrow: tapping a node opens the browser and shows the page', (
+    tester,
+  ) async {
     await show(tester);
     await tester.tap(find.text('Beta Node'));
     await settle(tester);
@@ -159,10 +163,14 @@ void main() {
     expect(requests.length, 2);
   });
 
-  testWidgets('address bar: malformed address is reported, valid one loads',
-      (tester) async {
+  testWidgets('address bar: malformed address is reported, valid one loads', (
+    tester,
+  ) async {
     await show(tester);
-    await tester.enterText(find.byKey(const ValueKey('nn-address-list')), 'zzz');
+    await tester.enterText(
+      find.byKey(const ValueKey('nn-address-list')),
+      'zzz',
+    );
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await settle(tester);
     expect(find.textContaining('Некоректна адреса'), findsOneWidget);
@@ -182,13 +190,16 @@ void main() {
     expect(find.text('Bookmarks'), findsOneWidget);
   });
 
-  testWidgets('wide: list and browser side by side, no route push',
-      (tester) async {
+  testWidgets('wide: list and browser side by side, no route push', (
+    tester,
+  ) async {
     await show(tester, size: const Size(1200, 800));
     expect(find.byType(NodeListPane), findsOneWidget);
     expect(find.byType(BrowserPane), findsOneWidget);
-    expect(find.text('Оберіть вузол зі списку або введіть адресу'),
-        findsOneWidget);
+    expect(
+      find.text('Оберіть вузол зі списку або введіть адресу'),
+      findsOneWidget,
+    );
     await tester.tap(find.text('Beta Node'));
     await settle(tester);
     requests.single.respond('>Hello\nbody');
@@ -197,12 +208,15 @@ void main() {
     expect(find.byType(NodeListPane), findsOneWidget);
     expect(find.byType(MicronView), findsOneWidget);
     // back is disabled on the first page
-    final back = tester.widget<IconButton>(find.byKey(const ValueKey('nn-back')));
+    final back = tester.widget<IconButton>(
+      find.byKey(const ValueKey('nn-back')),
+    );
     expect(back.onPressed, isNull);
   });
 
-  testWidgets('entry point in the chat list opens the pages screen',
-      (tester) async {
+  testWidgets('entry point in the chat list opens the pages screen', (
+    tester,
+  ) async {
     await show(tester, home: const ChatsScreen());
     await tester.tap(find.byKey(const ValueKey('open-pages')));
     await settle(tester);
@@ -221,8 +235,10 @@ void main() {
       },
     );
     addTearDown(
-      () => tester.binding.defaultBinaryMessenger
-          .setMockMethodCallHandler(SystemChannels.platform, null),
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
     );
     await show(tester, size: const Size(1200, 800));
     await tester.tap(find.text('Beta Node'));
@@ -255,7 +271,10 @@ void main() {
     await pick('Переносити довгі рядки');
     expect(tester.widget<MicronView>(find.byType(MicronView)).wrapAll, isTrue);
     await pick('Збільшити текст');
-    expect(tester.widget<MicronView>(find.byType(MicronView)).zoom, greaterThan(1));
+    expect(
+      tester.widget<MicronView>(find.byType(MicronView)).zoom,
+      greaterThan(1),
+    );
     final row = await tester.runAsync(() => store.node(hB));
     expect(row!.wrapAll, isTrue);
     expect(row.fontScale, greaterThan(1));

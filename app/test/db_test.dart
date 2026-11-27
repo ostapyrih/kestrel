@@ -213,13 +213,17 @@ void main() {
         expect(sql, contains("DELETE FROM chats WHERE kind = 'lxmf'"));
         expect(
           sql,
-          contains('NOT EXISTS (SELECT 1 FROM messages WHERE '
-              'messages.chat_id = chats.id)'),
+          contains(
+            'NOT EXISTS (SELECT 1 FROM messages WHERE '
+            'messages.chat_id = chats.id)',
+          ),
         );
         expect(
           sql,
-          contains('NOT EXISTS (SELECT 1 FROM outbox WHERE '
-              'outbox.chat_id = chats.id)'),
+          contains(
+            'NOT EXISTS (SELECT 1 FROM outbox WHERE '
+            'outbox.chat_id = chats.id)',
+          ),
         );
         expect(RegExp('DELETE FROM').allMatches(src), hasLength(1));
         src = src.replaceRange(m.start, m.end, '');

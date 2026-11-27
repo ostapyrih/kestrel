@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:kestrel_rns/kestrel_rns.dart';
 
@@ -10,6 +11,53 @@ import 'identity_store.dart';
 import 'sqlite_lxm_store.dart';
 
 enum NodeConnection { offline, connecting, online }
+
+/// Default interval of the periodic mail check, minutes.
+const defaultPropagationIntervalMinutes = 15;
+
+/// Snapshot of the propagation ("mail via node") state for the UI.
+class PropagationView {
+  const PropagationView({
+    required this.nodes,
+    required this.active,
+    required this.pinned,
+    required this.progress,
+    required this.lastSync,
+    required this.fallback,
+    required this.intervalMinutes,
+  });
+
+  final List<LxmPropagationNode> nodes;
+
+  /// Node in use (pinned or auto-selected); null if none is known.
+  final Uint8List? active;
+
+  /// Hash pinned in Settings; null = automatic.
+  final Uint8List? pinned;
+  final LxmSyncProgress progress;
+  final LxmSyncResult? lastSync;
+
+  /// Fall back to the node when direct delivery fails.
+  final bool fallback;
+
+  /// Periodic sync interval in minutes; 0 = off.
+  final int intervalMinutes;
+
+  bool get syncing =>
+      progress.phase != LxmSyncPhase.idle &&
+      progress.phase != LxmSyncPhase.complete &&
+      progress.phase != LxmSyncPhase.failed;
+
+  LxmPropagationNode? get activeNode {
+    final a = active;
+    if (a == null) return null;
+    final h = toHex(a);
+    for (final n in nodes) {
+      if (n.hashHex == h) return n;
+    }
+    return null;
+  }
+}
 
 /// Creates the network interface for [host]:[port]. The default is a
 /// `TcpClientInterface`; tests inject in-memory interfaces.
@@ -94,6 +142,7 @@ class NodeService {
           int.tryParse(await repo.getSetting(SettingKeys.serverPort) ?? '') ??
           defaultServerPort;
       final name = await repo.getSetting(SettingKeys.displayName);
+      _intervalMinutes = await _intervalSetting();
 
       final iface = interfaceFactory(host, port);
       _iface = iface;
@@ -117,8 +166,11 @@ class NodeService {
         displayName: name,
       );
 
+      await _applyPropagationSettings();
+      // Persisted by the router before it counts a message as handled: a
+      // propagation node only deletes its copy after this has returned.
+      _router!.inboundPersister = _persistIncoming;
       _subs
-        ..add(_router!.incoming.listen((m) => _chain(() => _onIncoming(m))))
         ..add(
           _router!.outboundEvents.listen(
             (e) => _chain(() => _onOutboundEvent(e)),
@@ -182,6 +234,84 @@ class NodeService {
     await _eventTail;
   }
 
+  // ------------------------------------------------------------ propagation
+
+  Future<void> _applyPropagationSettings() async {
+    final r = _router!;
+    final pinned = await repo.getSetting(SettingKeys.propagationNode);
+    r.setPinnedNode(
+      (pinned == null || !isValidAddress(pinned)) ? null : fromHex(pinned),
+    );
+    r.fallbackToPropagation =
+        (await repo.getSetting(SettingKeys.propagationFallback)) != '0';
+    final iv = await _intervalSetting();
+    r.setSyncInterval(iv == 0 ? null : Duration(minutes: iv));
+  }
+
+  Future<int> _intervalSetting() async {
+    final v = int.tryParse(
+      await repo.getSetting(SettingKeys.propagationInterval) ?? '',
+    );
+    return v == null || v < 0 ? defaultPropagationIntervalMinutes : v;
+  }
+
+  int _intervalMinutes = defaultPropagationIntervalMinutes;
+  Stream<PropagationView>? _propView;
+
+  /// Current propagation state.
+  PropagationView get propagation {
+    final r = router;
+    return PropagationView(
+      nodes: r.propagationNodes,
+      active: r.activeNode,
+      pinned: r.pinnedNode,
+      progress: r.syncProgress,
+      lastSync: r.lastSync,
+      fallback: r.fallbackToPropagation,
+      intervalMinutes: _intervalMinutes,
+    );
+  }
+
+  /// Emits whenever nodes, selection, sync progress or settings change.
+  Stream<PropagationView> get propagationChanges =>
+      _propView ??= router.propagationUpdates.map((_) => propagation);
+
+  /// "Check mail" button: syncs now (also when the periodic sync is off).
+  Future<LxmSyncResult> syncMail() async {
+    await ready;
+    final r = await router.syncInbox();
+    await repo.setSetting(
+      SettingKeys.propagationLastSync,
+      '${r.at.millisecondsSinceEpoch}|${r.error.name}|${r.delivered}',
+    );
+    return r;
+  }
+
+  /// Pins [hashHex] as the propagation node; null = automatic.
+  Future<void> setPropagationNode(String? hashHex) async {
+    final h = hashHex?.trim().toLowerCase();
+    final valid = h != null && isValidAddress(h);
+    await repo.setSetting(SettingKeys.propagationNode, valid ? h : '');
+    await ready;
+    router.setPinnedNode(valid ? fromHex(h) : null);
+  }
+
+  Future<void> setPropagationFallback(bool on) async {
+    await repo.setSetting(SettingKeys.propagationFallback, on ? '1' : '0');
+    await ready;
+    router.fallbackToPropagation = on;
+    router.setPinnedNode(router.pinnedNode); // notifies listeners
+  }
+
+  /// Sets the periodic sync interval; 0 turns it off.
+  Future<void> setPropagationInterval(int minutes) async {
+    await repo.setSetting(SettingKeys.propagationInterval, '$minutes');
+    await ready;
+    _intervalMinutes = minutes;
+    router.setSyncInterval(minutes == 0 ? null : Duration(minutes: minutes));
+    router.setPinnedNode(router.pinnedNode); // notifies listeners
+  }
+
   // ------------------------------------------------------------------ settings
 
   /// Changes the display name and re-announces.
@@ -241,8 +371,9 @@ class NodeService {
   /// chat and message ids.
   Future<({int chatId, int messageId})> sendToPeer(
     ChatTarget t,
-    String text,
-  ) async {
+    String text, {
+    bool viaNode = false,
+  }) async {
     await ready;
     if (t.identity == 'A') {
       final b = bridge;
@@ -254,6 +385,7 @@ class NodeService {
       peer: t.peer,
       title: t.name,
       text: text,
+      viaNode: viaNode,
     );
     return ids;
   }
@@ -362,7 +494,14 @@ class NodeService {
   /// Sends [text] in [chatId] from identity B. The message and its outbox
   /// entry (frozen sender and route) are written before anything touches the
   /// network, so nothing is lost if the app dies or the network is down.
-  Future<int> sendMessage(int chatId, String text) async {
+  ///
+  /// With [viaNode] the message goes straight to the propagation node
+  /// ("send via node") instead of trying the recipient first.
+  Future<int> sendMessage(
+    int chatId,
+    String text, {
+    bool viaNode = false,
+  }) async {
     await ready;
     final chat = await repo.chat(chatId);
     if (chat == null || chat.peerHash == null) {
@@ -377,6 +516,7 @@ class NodeService {
       chatId: chatId,
       peer: chat.peerHash!,
       text: text,
+      viaNode: viaNode,
     )).messageId;
   }
 
@@ -385,20 +525,22 @@ class NodeService {
     required String peer,
     String? title,
     required String text,
+    bool viaNode = false,
   }) async {
+    final method = viaNode ? LxmfMethod.propagated : LxmfMethod.opportunistic;
     final ids = await repo.insertOutgoing(
       identity: 'B',
       chatId: chatId,
       newChatTitle: title,
       destinationHash: peer,
       text: text,
-      route: 'opportunistic',
+      route: _routeName(method),
       transport: _current == NodeConnection.online ? 'tcp' : 'none',
     );
     final o = await router.send(
       destinationHash: fromHex(peer),
       content: text,
-      method: LxmfMethod.opportunistic,
+      method: method,
       tag: '${ids.outboxId}',
     );
     await repo.updateMessage(
@@ -417,10 +559,15 @@ class NodeService {
 
   // ------------------------------------------------------------------ events
 
-  Future<void> _onIncoming(LxmReceived r) async {
+  /// Stores an inbound message. Throws on any real failure so the router
+  /// does not acknowledge it to a propagation node; an already stored message
+  /// (same LXMF hash) counts as persisted.
+  Future<void> _persistIncoming(LxmReceived r) async {
     final m = r.message;
     // Service messages from the bridge (LXMF fallback) are not chat messages.
     if (bridge?.handleLxmf(m) ?? false) return;
+    final hash = toHex(m.hash!);
+    if (await repo.hasMessageHash('B', hash)) return;
     final peerHex = toHex(m.sourceHash);
     final peer = router.peer(m.sourceHash);
     final chatId = await repo.findOrCreateChat(
@@ -428,24 +575,20 @@ class NodeService {
       peerHex,
       title: peer?.displayName,
     );
-    try {
-      await repo.insertIncoming(
-        identity: 'B',
-        chatId: chatId,
-        lxmfHash: toHex(m.hash!),
-        text: m.contentAsString,
-        title: m.title.isEmpty ? null : m.titleAsString,
-        ts: DateTime.fromMillisecondsSinceEpoch(
-          ((m.timestamp ?? DateTime.now().millisecondsSinceEpoch / 1000) * 1000)
-              .round(),
-        ),
-        route: _routeName(r.method),
-        transport: 'tcp',
-        signatureValid: m.signatureValidated,
-      );
-    } on Object {
-      // duplicate (unique index): already stored
-    }
+    await repo.insertIncoming(
+      identity: 'B',
+      chatId: chatId,
+      lxmfHash: hash,
+      text: m.contentAsString,
+      title: m.title.isEmpty ? null : m.titleAsString,
+      ts: DateTime.fromMillisecondsSinceEpoch(
+        ((m.timestamp ?? DateTime.now().millisecondsSinceEpoch / 1000) * 1000)
+            .round(),
+      ),
+      route: _routeName(r.method),
+      transport: 'tcp',
+      signatureValid: m.signatureValidated,
+    );
   }
 
   Future<void> _onPeer(LxmPeer p) => repo.upsertPeer(

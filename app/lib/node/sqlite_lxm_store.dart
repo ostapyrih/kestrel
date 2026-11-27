@@ -26,9 +26,11 @@ class SqliteLxmStore implements LxmStore {
             hash: fromHex(r['lxmf_hash']! as String),
             destinationHash: fromHex(r['destination_hash']! as String),
             packed: Uint8List.fromList(r['packed']! as List<int>),
-            desiredMethod: r['route'] == 'direct'
-                ? LxmfMethod.direct
-                : LxmfMethod.opportunistic,
+            desiredMethod: switch (r['route']) {
+              'direct' => LxmfMethod.direct,
+              'propagated' => LxmfMethod.propagated,
+              _ => LxmfMethod.opportunistic,
+            },
             createdAt: DateTime.fromMillisecondsSinceEpoch(
               r['created_ts']! as int,
             ),
@@ -61,5 +63,10 @@ class SqliteLxmStore implements LxmStore {
     if (!_claimed.add(h)) return false;
     if (await repo.hasMessageHash(identity, h)) return false;
     return true;
+  }
+
+  @override
+  Future<void> releaseInbound(Uint8List hash) async {
+    _claimed.remove(toHex(hash));
   }
 }
