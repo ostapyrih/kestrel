@@ -246,7 +246,10 @@ class BrowserController extends ChangeNotifier {
       lastTransferSize = r.transferSize;
       lastHops = r.hops;
       if (url.isFile || r.isFile) {
-        download = NomadDownload(r.fileName ?? url.path.split('/').last, r.data);
+        download = NomadDownload(
+          _safeFileName(r.fileName ?? url.path.split('/').last),
+          r.data,
+        );
         phase = document == null ? BrowserPhase.idle : BrowserPhase.loaded;
         progress = null;
         notifyListeners();
@@ -359,3 +362,11 @@ class BrowserController extends ChangeNotifier {
 }
 
 enum _HistoryOp { push, none }
+
+/// A file name suggested by a remote node: base name only, no path separators
+/// or control characters, never empty or a dot name.
+String _safeFileName(String name) {
+  final base = name.split(RegExp(r'[/\\]')).last;
+  final clean = base.replaceAll(RegExp(r'[\x00-\x1f:*?"<>|]'), '_').trim();
+  return (clean.isEmpty || clean == '.' || clean == '..') ? 'download' : clean;
+}
