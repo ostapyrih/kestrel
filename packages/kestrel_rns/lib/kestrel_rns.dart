@@ -28,3 +28,4 @@ export 'src/storage.dart';
 export 'src/transport/receipt.dart';
 export 'src/transport/transport.dart';
 export 'src/util.dart' show fromHex, toHex;
+export 'src/vault_crypto.dart';

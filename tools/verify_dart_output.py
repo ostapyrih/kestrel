@@ -11,6 +11,7 @@ checks that arbitrary Dart output is accepted by the reference implementation:
 * Ed25519 signatures verify with ``RNS.Identity.validate``
 * ``Identity.encrypt`` ciphertexts decrypt with ``RNS.Identity.decrypt``
 * Tokens decrypt with ``RNS.Cryptography.Token``
+* Vault envelope (key chain wraps, per-epoch blob encryption) decrypts and verifies per docs/bridge-protocol.md 9.4
 * Announces pass ``RNS.Identity.validate_announce``
 * LXMF messages unpack with ``LXMessage.unpack_from_bytes`` and the signature validates
 * Packets unpack with ``RNS.Packet.unpack`` and hash identically
@@ -76,6 +77,24 @@ def main(path):
             check(tok.decrypt(bytes.fromhex(t["token"])).hex() == t["plaintext"], "dart token decrypts in python")
         except Exception as ex:  # noqa: BLE001
             check(False, f"dart token decrypt raised {ex}")
+
+    v = data["vault"]
+    chain_packed = bytes.fromhex(v["chain_packed"])
+    expected_chain = {"v": 1, "keys": {k: bytes.fromhex(x) for k, x in v["group_keys"].items()}}
+    check(umsgpack.unpackb(chain_packed) == expected_chain, "dart vault chain unpacks in python")
+    check(umsgpack.unpackb(ids[v["recipient"]].decrypt(bytes.fromhex(v["wrapped_identity"]))) == expected_chain,
+          "dart vault identity wrap decrypts in python")
+    from RNS.Cryptography import hkdf
+    inv_key = hkdf(length=64, derive_from=bytes.fromhex(v["invite_secret"]), salt=b"kestrel-vault-v1", context=b"invite")
+    check(umsgpack.unpackb(Token(inv_key).decrypt(bytes.fromhex(v["wrapped_invite"]))) == expected_chain,
+          "dart vault invite wrap decrypts in python")
+    b = v["blob"]
+    epoch_key = hkdf(length=64, derive_from=bytes.fromhex(v["group_keys"][str(b["key_epoch"])]),
+                     salt=b"kestrel-vault-v1", context=b"epoch:%d" % b["key_epoch"])
+    inner = umsgpack.unpackb(Token(epoch_key).decrypt(bytes.fromhex(b["ciphertext"])))
+    check(all(inner[k] == b[k] for k in ("blob_id", "device_id", "seq", "key_epoch", "kind", "ts")) and inner["v"] == 1,
+          "dart vault blob metadata verifies in python")
+    check(umsgpack.packb(inner["data"]) == bytes.fromhex(b["data_packed"]), "dart vault blob data matches")
 
     for a in data["announces"]:
         IM = sys.modules["RNS.Identity"]

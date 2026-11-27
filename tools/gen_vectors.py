@@ -330,6 +330,87 @@ def gen_token():
 
 
 # ==========================================================================
+# vault.json: client-side crypto envelope of the bridge vault (docs/bridge-protocol.md section 9.4)
+# ==========================================================================
+VAULT_SALT = b"kestrel-vault-v1"
+
+
+def vault_chain_pack(keys):
+    return umsgpack.packb({"v": 1, "keys": {str(e): k for e, k in sorted(keys.items())}})
+
+
+def vault_epoch_key(gk, epoch):
+    from RNS.Cryptography import hkdf
+    return hkdf(length=64, derive_from=gk, salt=VAULT_SALT, context=b"epoch:%d" % epoch)
+
+
+def vault_invite_key(secret):
+    from RNS.Cryptography import hkdf
+    return hkdf(length=64, derive_from=secret, salt=VAULT_SALT, context=b"invite")
+
+
+def vault_blob_plain(blob_id, device_id, seq, epoch, kind, ts, data):
+    return umsgpack.packb({"v": 1, "blob_id": blob_id, "device_id": device_id, "seq": seq, "key_epoch": epoch,
+                           "kind": kind, "ts": ts, "data": data})
+
+
+def gen_vault():
+    from RNS.Cryptography import Token
+
+    bob = IDENTITIES["bob"]
+    gk1, gk2 = det("vault/gk1", 32), det("vault/gk2", 32)
+    chain = {1: gk1, 2: gk2}
+    packed = vault_chain_pack(chain)
+
+    eph, iv = det("vault/wrap/eph", 32), det("vault/wrap/iv", 16)
+    with deterministic(ephemeral=eph, iv=iv):
+        wrapped_identity = public_only(bob).encrypt(packed)
+    assert umsgpack.unpackb(bob.decrypt(wrapped_identity)) == {"v": 1, "keys": {"1": gk1, "2": gk2}}
+
+    secret = det("vault/invite_secret", 32)
+    inv_iv = det("vault/invite/iv", 16)
+    with deterministic(iv=inv_iv):
+        wrapped_invite = Token(vault_invite_key(secret)).encrypt(packed)
+    assert Token(vault_invite_key(secret)).decrypt(wrapped_invite) == packed
+
+    blob_id, device_id = det("vault/blob_id", 16).hex(), det("vault/device_id", 16).hex()
+    data = {"messages": [
+        {"hash": det("vault/msg0", 16).hex(), "dir": "out", "text": "Привіт vault", "ts": 1700000000.25,
+         "n": -3, "ok": True, "none": None, "att": [{"name": "a.bin", "size": 12}]},
+        {"hash": det("vault/msg1", 16).hex(), "dir": "in", "text": "", "ts": 1700000001.0, "n": 70000, "ok": False,
+         "none": None, "att": []},
+    ]}
+    blobs = []
+    for idx, (epoch, gk, seq, kind) in enumerate([(1, gk1, 1, "messages"), (2, gk2, 7, "messages")]):
+        biv = det(f"vault/blob/iv/{idx}", 16)
+        plain = vault_blob_plain(blob_id, device_id, seq, epoch, kind, 1700000002.5, data)
+        with deterministic(iv=biv):
+            ct = Token(vault_epoch_key(gk, epoch)).encrypt(plain)
+        blobs.append({"blob_id": blob_id, "device_id": device_id, "seq": seq, "key_epoch": epoch, "kind": kind,
+                      "ts": 1700000002.5, "iv": hx(biv), "plaintext": hx(plain), "data_packed": hx(umsgpack.packb(data)),
+                      "ciphertext": hx(ct)})
+
+    # a blob whose inner metadata (seq 5) differs from the outer one the bridge reports (seq 6): MUST be discarded
+    biv = det("vault/blob/iv/bad", 16)
+    with deterministic(iv=biv):
+        mism = Token(vault_epoch_key(gk1, 1)).encrypt(vault_blob_plain(blob_id, device_id, 5, 1, "messages", 1.0, {}))
+
+    write("vault.json", {
+        "_note": "Test-only keys derived from 'kestrel-test-only/...'. Never use for real traffic.",
+        "recipient": "bob",
+        "group_keys": {"1": hx(gk1), "2": hx(gk2)},
+        "chain_packed": hx(packed),
+        "wrap_identity": {"ephemeral_private": hx(eph), "iv": hx(iv), "wrapped": hx(wrapped_identity)},
+        "epoch_keys": {"1": hx(vault_epoch_key(gk1, 1)), "2": hx(vault_epoch_key(gk2, 2))},
+        "invite": {"secret": hx(secret), "key": hx(vault_invite_key(secret)), "iv": hx(inv_iv),
+                   "wrapped": hx(wrapped_invite)},
+        "blobs": blobs,
+        "mismatch": {"blob_id": blob_id, "device_id": device_id, "claimed_seq": 6, "key_epoch": 1,
+                     "ciphertext": hx(mism)},
+    })
+
+
+# ==========================================================================
 # destination.json
 # ==========================================================================
 def gen_destination():
@@ -1349,6 +1430,7 @@ def gen_network():
 def main():
     gen_identity()
     gen_token()
+    gen_vault()
     gen_destination()
     gen_packet()
     gen_announce()
