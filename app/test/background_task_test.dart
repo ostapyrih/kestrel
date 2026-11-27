@@ -50,12 +50,19 @@ void main() {
   setUp(() async {
     // a file per test: the in-memory database is shared between opens
     final dir = Directory.systemTemp.createTempSync('kestrel_bg_');
-    addTearDown(() => dir.deleteSync(recursive: true));
     final adb = await AppDatabase.open(
       '${dir.path}/t.db',
       factory: databaseFactoryFfi,
     );
     repo = Repo(adb);
+    addTearDown(() async {
+      try {
+        await adb.close();
+        dir.deleteSync(recursive: true);
+      } on Object {
+        // a temp dir may stay behind (Windows keeps files locked)
+      }
+    });
     sink = FakeSink();
   });
 
