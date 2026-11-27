@@ -24,13 +24,12 @@ class NomadDownload {
 }
 
 /// Starts a request. `NomadClient.fetch` in production, a fake in tests.
-typedef NomadFetchFn =
-    NomadFetch Function(
-      Uint8List hash,
-      String path, {
-      Map<String, String>? data,
-      bool identify,
-    });
+typedef NomadFetchFn = NomadFetch Function(
+  Uint8List hash,
+  String path, {
+  Map<String, String>? data,
+  bool identify,
+});
 
 /// What the browser is doing right now.
 enum BrowserPhase { idle, loading, loaded, failed }

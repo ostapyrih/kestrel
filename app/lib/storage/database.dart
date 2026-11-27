@@ -304,7 +304,32 @@ CREATE TABLE nomad_cache (
   // No empty chats: a chat exists only once it has a message. Removes the LXMF
   // chats (any account) that have no messages and no outbox entries.
   Migration(8, [removeEmptyChatsSql]),
+  // Durable tombstones of account A (bridge conversations): "the messages with
+  // this peer are gone up to `before_ts` (ms)". Written when a `deleted` entry
+  // or a `chat_deleted` push is applied, whether or not the chat exists
+  // locally, and checked on every later insert of a bridge message. Survives
+  // turning the bridge off (account A data is purged, tombstones are not).
+  Migration(9, [
+    '''
+CREATE TABLE a_tombstones (
+  peer_hash TEXT PRIMARY KEY,
+  before_ts INTEGER NOT NULL
+)''',
+  ]),
 ];
+
+/// Version of the SYNC SEMANTICS this app implements (what the bridge change
+/// stream and the vault blobs mean and how a client must apply them).
+///
+/// RULE: bump this constant whenever a future change makes an already stored
+/// bridge cursor / vault cursor unsafe, i.e. a new kind of event that an older
+/// app would have read past without applying (like chat deletions, version 1:
+/// `deleted` in `/sync_chats`, vault `delete_chat`). When the app starts with a
+/// higher value than the stored `sync_semantics_version`, the next bridge
+/// connection does a one-time full catch-up (bridge cursor to 0, vault replay
+/// from 0; known records are deduplicated, tombstones applied). Documented in
+/// docs/bridge-protocol.md, "Client guidance".
+const int kSyncSemanticsVersion = 1;
 
 /// The one statement that may delete chats outside the user's own delete
 /// flows: only LXMF chats with zero messages and zero outbox rows.
@@ -345,6 +370,9 @@ abstract final class SettingKeys {
   static const bridgeClockOffset = 'bridge_clock_offset';
   static const bridgeRevoked = 'bridge_revoked';
   static const bridgeOwnRoles = 'bridge_own_roles';
+
+  /// [kSyncSemanticsVersion] this database was last caught up to.
+  static const syncSemanticsVersion = 'sync_semantics_version';
 
   // Vault sync. Cursor and downloaded histories are reset when the bridge is
   // turned off; the upload sequence, `vault_gen` and the key chain (secure

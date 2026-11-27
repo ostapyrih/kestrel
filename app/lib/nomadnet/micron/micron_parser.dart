@@ -67,7 +67,8 @@ class MicronText extends MicronSpan {
   final String text;
 
   @override
-  String toString() => 'Text(${text.length > 30 ? '${text.substring(0, 30)}…' : text})';
+  String toString() =>
+      'Text(${text.length > 30 ? '${text.substring(0, 30)}…' : text})';
 }
 
 class MicronLinkSpan extends MicronSpan {
@@ -157,12 +158,14 @@ class MicronBlock {
 
   /// Plain text of the block (for tests and search).
   String get plainText => spans
-      .map((s) => switch (s) {
-            MicronText t => t.text,
-            MicronLinkSpan l => l.label,
-            MicronChoiceSpan c => c.label,
-            MicronFieldSpan f => f.initial,
-          })
+      .map(
+        (s) => switch (s) {
+          MicronText t => t.text,
+          MicronLinkSpan l => l.label,
+          MicronChoiceSpan c => c.label,
+          MicronFieldSpan f => f.initial,
+        },
+      )
       .join();
 }
 
@@ -218,7 +221,8 @@ int? parseMicronColor(String c) {
 String stripMicronControl(String s) {
   final out = StringBuffer();
   for (final c in s.runes) {
-    final strip = (c <= 0x08) ||
+    final strip =
+        (c <= 0x08) ||
         c == 0x0B ||
         c == 0x0C ||
         (c >= 0x0E && c <= 0x1F) ||
@@ -287,10 +291,10 @@ MicronDocument parseMicron(String markup, {bool dark = true}) {
 
 class _Parser {
   _Parser(this.headings, int? bg, int? fg)
-      : defaultBg = bg,
-        defaultFg = fg,
-        fgColor = fg,
-        bgColor = bg;
+    : defaultBg = bg,
+      defaultFg = fg,
+      fgColor = fg,
+      bgColor = bg;
 
   final List<MicronStyle> headings;
   final int? defaultFg;
@@ -312,12 +316,12 @@ class _Parser {
   MicronAlign align = MicronAlign.left;
 
   MicronStyle style() => MicronStyle(
-        fg: fgColor,
-        bg: bgColor,
-        bold: bold,
-        italic: italic,
-        underline: underline,
-      );
+    fg: fgColor,
+    bg: bgColor,
+    bold: bold,
+    italic: italic,
+    underline: underline,
+  );
 
   void emit(MicronBlock b) {
     final idx = blocks.length;
@@ -330,7 +334,9 @@ class _Parser {
 
   void line(String line) {
     if (line.isEmpty) {
-      emit(MicronBlock(kind: MicronBlockKind.blank, depth: depth, align: align));
+      emit(
+        MicronBlock(kind: MicronBlockKind.blank, depth: depth, align: align),
+      );
       return;
     }
     _parseLine(line);
@@ -422,16 +428,18 @@ class _Parser {
           final slug = _slug(line);
           if (slug.isNotEmpty) pendingAnchors.add(slug);
           if (spans.isEmpty) return null;
-          emit(MicronBlock(
-            kind: MicronBlockKind.heading,
-            spans: spans,
-            align: align,
-            depth: depth,
-            headingLevel: i.clamp(1, 3),
-            headingStyle: hs,
-            collapsible: collapsible,
-            collapsedInitially: collapsed,
-          ));
+          emit(
+            MicronBlock(
+              kind: MicronBlockKind.heading,
+              spans: spans,
+              align: align,
+              depth: depth,
+              headingLevel: i.clamp(1, 3),
+              headingStyle: hs,
+              collapsible: collapsible,
+              collapsedInitially: collapsed,
+            ),
+          );
           return null;
         }
         if (first == '-') {
@@ -440,11 +448,13 @@ class _Parser {
             final c = line.runes.toList()[1];
             if (c >= 32) ch = String.fromCharCode(c);
           }
-          emit(MicronBlock(
-            kind: MicronBlockKind.divider,
-            dividerChar: ch,
-            depth: depth,
-          ));
+          emit(
+            MicronBlock(
+              kind: MicronBlockKind.divider,
+              dividerChar: ch,
+              depth: depth,
+            ),
+          );
           return null;
         }
       }
@@ -452,24 +462,28 @@ class _Parser {
 
     final spans = _makeOutput(line, preEscape);
     if (spans.isEmpty) return null;
-    emit(MicronBlock(
-      kind: MicronBlockKind.text,
-      spans: spans,
-      align: align,
-      depth: depth,
-      literal: literal,
-    ));
+    emit(
+      MicronBlock(
+        kind: MicronBlockKind.text,
+        spans: spans,
+        align: align,
+        depth: depth,
+        literal: literal,
+      ),
+    );
     return null;
   }
 
   void _flushTable() {
     for (final l in tableBuffer) {
-      emit(MicronBlock(
-        kind: MicronBlockKind.text,
-        spans: [MicronText(l, style())],
-        depth: depth,
-        literal: true,
-      ));
+      emit(
+        MicronBlock(
+          kind: MicronBlockKind.text,
+          spans: [MicronText(l, style())],
+          depth: depth,
+          literal: true,
+        ),
+      );
     }
     tableBuffer.clear();
   }
@@ -481,17 +495,21 @@ class _Parser {
     if (fields.length < 2) return;
     final alt = fields.first.trim();
     final url = fields.last.trim();
-    emit(MicronBlock(
-      kind: MicronBlockKind.text,
-      spans: [MicronText('[image: ${alt.isEmpty ? url : alt}]', style())],
-      depth: depth,
-      align: align,
-    ));
+    emit(
+      MicronBlock(
+        kind: MicronBlockKind.text,
+        spans: [MicronText('[image: ${alt.isEmpty ? url : alt}]', style())],
+        depth: depth,
+        align: align,
+      ),
+    );
   }
 
   static String _slug(String text) {
     final stripped = text.replaceAll(
-      RegExp(r'`[FB]T[0-9a-fA-F]{6}|`[FB][0-9a-fA-F]{3}|`:[A-Za-z0-9_\-]*|`[!*_=fbacrl`<>{]'),
+      RegExp(
+        r'`[FB]T[0-9a-fA-F]{6}|`[FB][0-9a-fA-F]{3}|`:[A-Za-z0-9_\-]*|`[!*_=fbacrl`<>{]',
+      ),
       '',
     );
     return stripped
@@ -572,7 +590,8 @@ class _Parser {
             align = MicronAlign.left;
           case ':':
             var e = i + 1;
-            while (e < line.length && RegExp(r'[A-Za-z0-9_\-]').hasMatch(line[e])) {
+            while (e < line.length &&
+                RegExp(r'[A-Za-z0-9_\-]').hasMatch(line[e])) {
               e++;
             }
             final name = line.substring(i + 1, e);
@@ -605,12 +624,14 @@ class _Parser {
               if (url.isNotEmpty) {
                 if (label.isEmpty) label = url;
                 flush();
-                out.add(MicronLinkSpan(
-                  label,
-                  url,
-                  fields.isEmpty ? null : fields.split('|'),
-                  style(),
-                ));
+                out.add(
+                  MicronLinkSpan(
+                    label,
+                    url,
+                    fields.isEmpty ? null : fields.split('|'),
+                    style(),
+                  ),
+                );
               }
             }
         }
@@ -686,23 +707,27 @@ class _Parser {
     if (end == -1) return 0;
     final data = line.substring(bt + 1, end);
     if (type == 'checkbox' || type == 'radio') {
-      out.add(MicronChoiceSpan(
-        name: name,
-        value: value.isNotEmpty ? value : data,
-        label: data,
-        checked: pre,
-        radio: type == 'radio',
-        style: style(),
-      ));
+      out.add(
+        MicronChoiceSpan(
+          name: name,
+          value: value.isNotEmpty ? value : data,
+          label: data,
+          checked: pre,
+          radio: type == 'radio',
+          style: style(),
+        ),
+      );
     } else {
-      out.add(MicronFieldSpan(
-        name: name,
-        width: width < 1 ? 1 : width,
-        rows: rows,
-        masked: masked,
-        initial: data,
-        style: style(),
-      ));
+      out.add(
+        MicronFieldSpan(
+          name: name,
+          width: width < 1 ? 1 : width,
+          rows: rows,
+          masked: masked,
+          initial: data,
+          style: style(),
+        ),
+      );
     }
     return end - i;
   }

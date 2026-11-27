@@ -821,7 +821,9 @@ class VaultService {
           await store.setSeen(m.deviceId, m.seq);
         }
         cursor = chunk.last.vcursor;
-        await store.saveCursor(holdAt == null || cursor < holdAt ? cursor : holdAt);
+        await store.saveCursor(
+          holdAt == null || cursor < holdAt ? cursor : holdAt,
+        );
       }
       if (r['more'] != true) break;
     }

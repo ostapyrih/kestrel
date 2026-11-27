@@ -241,7 +241,12 @@ void main() {
 
     testWidgets('bridge mode: pick A or B for the new chat', (tester) async {
       final node = FakeNode();
-      await show(tester, const NewChatScreen(), node: node, bridgeEnabled: true);
+      await show(
+        tester,
+        const NewChatScreen(),
+        node: node,
+        bridgeEnabled: true,
+      );
       final seg = find.byKey(const ValueKey('new-chat-identity'));
       expect(seg, findsOneWidget);
       await tester.enterText(

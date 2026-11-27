@@ -173,7 +173,10 @@ class MicronViewState extends State<MicronView> {
     void ensure() {
       final ctx = _keys[idx]?.currentContext;
       if (ctx != null) {
-        Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 200));
+        Scrollable.ensureVisible(
+          ctx,
+          duration: const Duration(milliseconds: 200),
+        );
       }
     }
 
@@ -245,10 +248,7 @@ class MicronViewState extends State<MicronView> {
       scrollToAnchor(l.target.substring(1));
       return;
     }
-    widget.onLink(
-      l.target,
-      buildNomadRequestData(l.fields, collectFields()),
-    );
+    widget.onLink(l.target, buildNomadRequestData(l.fields, collectFields()));
   }
 
   double get _charW => _fs * micronCharEm;
@@ -309,7 +309,9 @@ class MicronViewState extends State<MicronView> {
   @override
   Widget build(BuildContext context) {
     final doc = widget.document;
-    final bg = doc.background != null ? Color(0xFF000000 | doc.background!) : null;
+    final bg = doc.background != null
+        ? Color(0xFF000000 | doc.background!)
+        : null;
     final visible = _visible();
     final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1;
     final child = LayoutBuilder(
@@ -434,10 +436,10 @@ class MicronViewState extends State<MicronView> {
   }
 
   TextAlign _align(MicronAlign a) => switch (a) {
-        MicronAlign.left => TextAlign.left,
-        MicronAlign.center => TextAlign.center,
-        MicronAlign.right => TextAlign.right,
-      };
+    MicronAlign.left => TextAlign.left,
+    MicronAlign.center => TextAlign.center,
+    MicronAlign.right => TextAlign.right,
+  };
 
   InlineSpan _span(
     BuildContext context,
@@ -453,10 +455,10 @@ class MicronViewState extends State<MicronView> {
           style: _textStyle(context, t.style, solid: solid),
         );
       case MicronLinkSpan l:
-        final rec = _recognizers.putIfAbsent(
-          (bi, si),
-          () => TapGestureRecognizer(),
-        )..onTap = () => _tapLink(l);
+        final rec = _recognizers.putIfAbsent((
+          bi,
+          si,
+        ), () => TapGestureRecognizer())..onTap = () => _tapLink(l);
         return TextSpan(
           text: l.label,
           style: _textStyle(context, l.style, link: true, solid: solid),
@@ -502,17 +504,22 @@ class MicronViewState extends State<MicronView> {
     );
   }
 
-  Widget _choiceWidget(BuildContext context, int bi, int si, MicronChoiceSpan c) {
+  Widget _choiceWidget(
+    BuildContext context,
+    int bi,
+    int si,
+    MicronChoiceSpan c,
+  ) {
     final style = _textStyle(context, c.style);
     final key = (bi, si);
     final selected = c.radio ? _radios[c.name] == key : (_checks[key] ?? false);
     void toggle() => setState(() {
-          if (c.radio) {
-            _radios[c.name] = key;
-          } else {
-            _checks[key] = !(_checks[key] ?? false);
-          }
-        });
+      if (c.radio) {
+        _radios[c.name] = key;
+      } else {
+        _checks[key] = !(_checks[key] ?? false);
+      }
+    });
     return InkWell(
       key: ValueKey('micron-${c.radio ? 'radio' : 'check'}-${c.name}-$bi-$si'),
       onTap: toggle,
@@ -522,8 +529,8 @@ class MicronViewState extends State<MicronView> {
           Icon(
             c.radio
                 ? (selected
-                    ? Icons.radio_button_checked
-                    : Icons.radio_button_unchecked)
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked)
                 : (selected ? Icons.check_box : Icons.check_box_outline_blank),
             size: _fs + 6,
             color: style.color,
@@ -585,10 +592,12 @@ class MicronViewState extends State<MicronView> {
       return SizedBox(
         width: double.infinity,
         child: Text.rich(
-          TextSpan(children: [
-            for (var j = 0; j < b.spans.length; j++)
-              _span(context, i, j, b.spans[j], solid: solid),
-          ]),
+          TextSpan(
+            children: [
+              for (var j = 0; j < b.spans.length; j++)
+                _span(context, i, j, b.spans[j], solid: solid),
+            ],
+          ),
           textAlign: _align(b.align),
           softWrap: !_nowrap(i),
           style: _textStyle(context, const MicronStyle(), solid: solid),
@@ -621,9 +630,7 @@ class MicronViewState extends State<MicronView> {
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           for (var j = 0; j < b.spans.length; j++)
-            Text.rich(
-              TextSpan(children: [_span(context, i, j, b.spans[j])]),
-            ),
+            Text.rich(TextSpan(children: [_span(context, i, j, b.spans[j])])),
         ],
       ),
     );
@@ -636,19 +643,25 @@ class MicronViewState extends State<MicronView> {
     final fg = Color(0xFF000000 | (first.fg ?? hs.fg ?? 0x000000));
     final folded = _collapsed.contains(i);
     final text = Text.rich(
-      TextSpan(children: [
-        if (b.collapsible)
-          TextSpan(text: folded ? '▸ ' : '▾ '),
-        for (var j = 0; j < b.spans.length; j++) _span(context, i, j, b.spans[j]),
-      ]),
+      TextSpan(
+        children: [
+          if (b.collapsible) TextSpan(text: folded ? '▸ ' : '▾ '),
+          for (var j = 0; j < b.spans.length; j++)
+            _span(context, i, j, b.spans[j]),
+        ],
+      ),
       textAlign: _align(b.align),
-      style: _textStyle(context, MicronStyle(fg: first.fg ?? hs.fg, bg: null))
-          .copyWith(color: fg),
+      style: _textStyle(
+        context,
+        MicronStyle(fg: first.fg ?? hs.fg, bg: null),
+      ).copyWith(color: fg),
     );
     Widget bar = Container(
       width: double.infinity,
       color: bg,
-      padding: EdgeInsets.symmetric(horizontal: 4 + ((b.depth - 1) * 2 * _charW)),
+      padding: EdgeInsets.symmetric(
+        horizontal: 4 + ((b.depth - 1) * 2 * _charW),
+      ),
       child: text,
     );
     if (b.collapsible) {

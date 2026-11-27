@@ -86,7 +86,8 @@ UpdateOutcome evaluateUpdateOutcome({
 }) {
   if (pending == null) return const UpdateOutcome(UpdateOutcomeKind.none);
   final target = AppVersion.tryParse(pending.target);
-  if (target == null || now.difference(pending.startedAt) > pendingUpdateMaxAge) {
+  if (target == null ||
+      now.difference(pending.startedAt) > pendingUpdateMaxAge) {
     return const UpdateOutcome(UpdateOutcomeKind.none);
   }
   if (!(target > running)) {

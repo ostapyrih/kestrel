@@ -10,14 +10,15 @@ import 'package:kestrel/update/version.dart';
 
 AppVersion _v(String s) => AppVersion.tryParse(s)!;
 
-PendingUpdate _pending({String target = '0.8.1', DateTime? at}) => PendingUpdate(
-  from: '0.8.0',
-  target: target,
-  installerPath: 'C:/t/kestrel-setup.exe',
-  logPath: 'C:/t/kestrel-update.log',
-  resultPath: 'C:/t/kestrel-update-result.txt',
-  startedAt: at ?? DateTime(2026, 1, 1),
-);
+PendingUpdate _pending({String target = '0.8.1', DateTime? at}) =>
+    PendingUpdate(
+      from: '0.8.0',
+      target: target,
+      installerPath: 'C:/t/kestrel-setup.exe',
+      logPath: 'C:/t/kestrel-update.log',
+      resultPath: 'C:/t/kestrel-update-result.txt',
+      startedAt: at ?? DateTime(2026, 1, 1),
+    );
 
 void main() {
   final now = DateTime(2026, 1, 1, 0, 5);
@@ -90,37 +91,43 @@ void main() {
       tempDir: dir,
     );
 
-    test('a failed install shows up once, with the installer exit code',
-        () async {
-      final result = File('${dir.path}/res.txt')..writeAsStringSync('1603\n');
-      await writePendingUpdate(
-        dir,
-        PendingUpdate(
-          from: '0.8.0',
-          target: '0.8.1',
-          installerPath: 'x',
-          logPath: '${dir.path}/kestrel-update.log',
-          resultPath: result.path,
-          startedAt: DateTime.now(),
-        ),
-      );
-      final s = service('0.8.0');
-      final o = await s.checkPreviousInstall();
-      expect(o.failed, isTrue);
-      expect(o.exitCode, 1603);
-      expect(s.state.failure, isNotNull);
-      // the marker is consumed: the next start reports nothing
-      expect((await service('0.8.0').checkPreviousInstall()).kind,
-          UpdateOutcomeKind.none);
-      s.dismissFailure();
-      expect(s.state.failure, isNull);
-    });
+    test(
+      'a failed install shows up once, with the installer exit code',
+      () async {
+        final result = File('${dir.path}/res.txt')..writeAsStringSync('1603\n');
+        await writePendingUpdate(
+          dir,
+          PendingUpdate(
+            from: '0.8.0',
+            target: '0.8.1',
+            installerPath: 'x',
+            logPath: '${dir.path}/kestrel-update.log',
+            resultPath: result.path,
+            startedAt: DateTime.now(),
+          ),
+        );
+        final s = service('0.8.0');
+        final o = await s.checkPreviousInstall();
+        expect(o.failed, isTrue);
+        expect(o.exitCode, 1603);
+        expect(s.state.failure, isNotNull);
+        // the marker is consumed: the next start reports nothing
+        expect(
+          (await service('0.8.0').checkPreviousInstall()).kind,
+          UpdateOutcomeKind.none,
+        );
+        s.dismissFailure();
+        expect(s.state.failure, isNull);
+      },
+    );
 
     test('a successful install only clears the marker', () async {
       await writePendingUpdate(dir, _pending(at: DateTime.now()));
       final s = service('0.8.1');
-      expect((await s.checkPreviousInstall()).kind,
-          UpdateOutcomeKind.succeeded);
+      expect(
+        (await s.checkPreviousInstall()).kind,
+        UpdateOutcomeKind.succeeded,
+      );
       expect(s.state.failure, isNull);
       expect(pendingUpdateFile(dir).existsSync(), isFalse);
     });

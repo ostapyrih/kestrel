@@ -255,6 +255,8 @@ class Repo {
   /// state live in the chat rows) in ONE transaction. Account B rows and the
   /// pairing (bridge address, identity) are never touched, so turning the
   /// bridge on again needs no re-pairing and simply syncs from scratch.
+  /// Tombstones (`a_tombstones`, `vault_tombstones`) are KEPT: a deleted chat
+  /// must not come back from a later sync.
   Future<void> purgeBridgeAccountData() async {
     final a = await accountId('A');
     await _db.transaction((txn) async {
@@ -361,10 +363,20 @@ class Repo {
   /// of the chat with [peerHash] that were synced from MeshChatX and are not
   /// newer than [beforeTs] (Unix seconds), and the chat if nothing is left.
   /// Unsent local messages stay. Returns true if anything was removed.
+  ///
+  /// The tombstone (`a_tombstones`) is stored even when the chat is not here
+  /// (yet), and bridge messages with `ts <= beforeTs` are refused from then on
+  /// ([aTombstone]); it survives [purgeBridgeAccountData].
   Future<bool> applyChatDeleted(String peerHash, double beforeTs) async {
     final a = await accountId('A');
     var removed = false;
     await _db.transaction((txn) async {
+      await txn.rawInsert(
+        'INSERT INTO a_tombstones(peer_hash, before_ts) VALUES (?, ?) '
+        'ON CONFLICT(peer_hash) DO UPDATE SET '
+        'before_ts = MAX(before_ts, excluded.before_ts)',
+        [peerHash, (beforeTs * 1000).ceil()],
+      );
       final r = await txn.query(
         'chats',
         columns: ['id'],
@@ -383,6 +395,17 @@ class Repo {
     });
     if (removed) adb.notify();
     return removed;
+  }
+
+  /// Deletion cut-off (ms) of account A's chat with [peerHash], or null.
+  Future<int?> aTombstone(String peerHash) async {
+    final t = await _db.query(
+      'a_tombstones',
+      columns: ['before_ts'],
+      where: 'peer_hash = ?',
+      whereArgs: [peerHash],
+    );
+    return t.isEmpty ? null : t.first['before_ts']! as int;
   }
 
   /// LXMF hashes of this device's B messages with [peerHash] up to
