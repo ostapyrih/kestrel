@@ -99,6 +99,9 @@ String bridgeErrorText(Strings s, Object e) {
   if (e is VaultKeyMissing) return s.t('vault_key_missing');
   if (e is RrcCommandBlocked) return s.t('room_send_blocked');
   if (e is InviteExpired) return s.t('invite_expired_local');
+  if (e is BridgeTransportError && e.message.contains('timed out')) {
+    return s.t('bridge_timeout');
+  }
   if (e is BridgeNotConfigured || e is BridgeTransportError) {
     return s.t('bridge_not_connected');
   }
@@ -110,6 +113,8 @@ String bridgeErrorText(Strings s, Object e) {
       'device_exists' => s.t('pair_exists'),
       'vault_in_use' => s.t('pair_invite_unavailable'),
       'key_epoch_stale' => s.t('pair_stale'),
+      'upstream_unavailable' ||
+      'upstream_incompatible' => s.t('error_upstream'),
       _ => s.t('error_code', {'code': e.code}),
     };
   }
