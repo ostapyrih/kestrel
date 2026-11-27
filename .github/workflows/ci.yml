@@ -34,7 +34,7 @@ jobs:
           tools/.venv/bin/pip install -r tools/requirements.txt
           # the bridge itself, for the Dart <-> kestrel-bridge integration test
           tools/.venv/bin/pip install -e bridge
-      - name: Install Linux desktop build dependencies (also needed by flutter test: native assets)
+      - name: Install Linux desktop build dependencies (flutter test builds native assets too)
         run: |
           sudo apt-get update
           sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libx11-dev libxi-dev libsecret-1-dev liblzma-dev
