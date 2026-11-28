@@ -25,6 +25,7 @@ const int syncFieldData = 0xFC;
 const String syncTypeRecord = 'kestrel.sync.v1';
 const String syncTypeGap = 'kestrel.sync.gap.v1';
 const String syncTypeHead = 'kestrel.sync.head.v1';
+const String syncTypeAck = 'kestrel.sync.ack.v1';
 
 /// Record kinds with built-in handling; the app adds its own (`messages`,
 /// `delete_chat`, `browser`, `read`, ...).
@@ -78,6 +79,8 @@ abstract class SyncStore {
   Future<void> saveOwnSeq(int seq);
   Future<int> seen(String device);
   Future<void> setSeen(String device, int seq);
+  Future<int> acked(String device) async => 0;
+  Future<void> setAcked(String device, int seq) async {}
   Future<void> saveRecord(int seq, Uint8List packed);
   Future<Uint8List?> record(int seq);
   Future<void> pruneRecords(int belowSeq);
@@ -103,6 +106,14 @@ class KestrelSyncStore implements SyncStore {
   @override
   Future<void> setSeen(String device, int seq) =>
       _s.write('sync/seen/$device', {'seq': seq});
+
+  @override
+  Future<int> acked(String device) async =>
+      ((await _s.read('sync/acked/$device'))?['seq'] as int?) ?? 0;
+
+  @override
+  Future<void> setAcked(String device, int seq) =>
+      _s.write('sync/acked/$device', {'seq': seq});
 
   @override
   Future<void> saveRecord(int seq, Uint8List packed) =>
@@ -271,10 +282,24 @@ class DeviceSync {
       'data': data,
     });
     await store.saveRecord(seq, packed);
-    if (seq % 100 == 0) await store.pruneRecords(seq - 900);
+    if (seq % 100 == 0) await _pruneSafe(seq);
     await _fanOut(seq, packed, state.epoch, to: to);
     return seq;
   }
+
+  Future<void> _pruneSafe(int ownSeq) async {
+    var minAck = ownSeq;
+    for (final d in state.devices.active) {
+      if (d.id == ownId) continue;
+      final a = await store.acked(d.id);
+      if (a < minAck) minAck = a;
+    }
+    final safeBelow = (minAck < ownSeq - 200) ? minAck : ownSeq - 200;
+    if (safeBelow > 1) await store.pruneRecords(safeBelow);
+  }
+
+  /// Highest `seq` confirmed (ACKed) by sibling [deviceId].
+  Future<int> ackedSeq(String deviceId) => store.acked(deviceId);
 
   /// Sends a record that is not part of the sequence (`seq` 0) to specific
   /// devices, encrypted with [epoch] (used to hand out a rotated key).
@@ -377,6 +402,8 @@ class DeviceSync {
       await _onGap(from, data);
     } else if (type == syncTypeHead) {
       await _onHead(from, data);
+    } else if (type == syncTypeAck) {
+      await _onAck(from, data);
     }
   }
 
@@ -442,9 +469,11 @@ class DeviceSync {
 
   Future<void> _applySequenced(SyncRecord first) async {
     var rec = first;
+    var lastSeq = first.seq;
     while (true) {
       await _apply(rec);
       await store.setSeen(rec.origin, rec.seq);
+      lastSeq = rec.seq;
       _gapAttempts.remove(rec.origin);
       final next = _pending[rec.origin]?.remove(rec.seq + 1);
       if (next == null) break;
@@ -452,6 +481,32 @@ class DeviceSync {
     }
     if (_pending[rec.origin]?.isEmpty ?? false) {
       _gapTimers.remove(rec.origin)?.cancel();
+    }
+    await _sendAck(first.origin, lastSeq);
+  }
+
+  Future<void> _sendAck(String deviceId, int seq) async {
+    final d = state.devices[deviceId];
+    if (d == null || d.removed) return;
+    try {
+      await router.send(
+        destinationHash: d.lxmfAddress,
+        content: '',
+        fields: {syncFieldType: syncTypeAck, syncFieldData: packb({'seq': seq})},
+        method: LxmfMethod.opportunistic,
+      );
+    } on Object {
+      // best effort; head check also reconciles
+    }
+  }
+
+  Future<void> _onAck(GroupDevice from, Uint8List data) async {
+    final o = unpackb(data);
+    if (o is! Map || o['seq'] is! int) return;
+    final ack = o['seq']! as int;
+    final prev = await store.acked(from.id);
+    if (ack > prev) {
+      await store.setAcked(from.id, ack);
     }
   }
 
