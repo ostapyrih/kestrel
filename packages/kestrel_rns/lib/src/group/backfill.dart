@@ -176,6 +176,18 @@ class DeviceBackfill {
     _enqueue(_request);
   }
 
+  /// Restarts history backfill from scratch (even if a previous run finished).
+  Future<void> restart({String? from}) async {
+    if (sink == null) return;
+    _timer?.cancel();
+    _done = false;
+    _phase = null;
+    _cursor = 0;
+    _applied = 0;
+    _total = 0;
+    await start(from: from);
+  }
+
   String? _nextSibling(String? after) {
     final ids = [
       for (final d in sync.state.devices.active)

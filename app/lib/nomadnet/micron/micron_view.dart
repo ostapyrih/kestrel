@@ -616,9 +616,9 @@ class MicronViewState extends State<MicronView> {
                   forceStrutHeight: true,
                 )
               : null,
-          textHeightBehavior: const TextHeightBehavior(
-            applyHeightToFirstAscent: true,
-            applyHeightToLastDescent: true,
+          textHeightBehavior: TextHeightBehavior(
+            applyHeightToFirstAscent: !solid,
+            applyHeightToLastDescent: !solid,
             leadingDistribution: TextLeadingDistribution.even,
           ),
         ),

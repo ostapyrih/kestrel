@@ -24,6 +24,8 @@ const int syncFieldType = 0xFB;
 const int syncFieldData = 0xFC;
 const String syncTypeRecord = 'kestrel.sync.v1';
 const String syncTypeGap = 'kestrel.sync.gap.v1';
+const String syncTypeHead = 'kestrel.sync.head.v1';
+const String syncTypeAck = 'kestrel.sync.ack.v1';
 
 /// Record kinds with built-in handling; the app adds its own (`messages`,
 /// `delete_chat`, `browser`, `read`, ...).
@@ -77,6 +79,8 @@ abstract class SyncStore {
   Future<void> saveOwnSeq(int seq);
   Future<int> seen(String device);
   Future<void> setSeen(String device, int seq);
+  Future<int> acked(String device) async => 0;
+  Future<void> setAcked(String device, int seq) async {}
   Future<void> saveRecord(int seq, Uint8List packed);
   Future<Uint8List?> record(int seq);
   Future<void> pruneRecords(int belowSeq);
@@ -102,6 +106,14 @@ class KestrelSyncStore implements SyncStore {
   @override
   Future<void> setSeen(String device, int seq) =>
       _s.write('sync/seen/$device', {'seq': seq});
+
+  @override
+  Future<int> acked(String device) async =>
+      ((await _s.read('sync/acked/$device'))?['seq'] as int?) ?? 0;
+
+  @override
+  Future<void> setAcked(String device, int seq) =>
+      _s.write('sync/acked/$device', {'seq': seq});
 
   @override
   Future<void> saveRecord(int seq, Uint8List packed) =>
@@ -146,7 +158,9 @@ class DeviceSync {
     this.group,
     this.onStateChanged,
     this.onIdentity,
+    this.onRecord,
     this.gapDelay = const Duration(seconds: 3),
+    this.headInterval = const Duration(minutes: 2),
     RandomBytes? random,
   }) : _random = random ?? secureRandomBytes;
 
@@ -169,9 +183,15 @@ class DeviceSync {
   /// published the change.
   final Future<void> Function(IdentityChange change)? onIdentity;
 
+  /// Called synchronously (awaited before advancing `seen`) for every
+  /// in-order record, ensuring SQLite persistence completes before `seen`
+  /// advances.
+  final Future<void> Function(SyncRecord record)? onRecord;
+
   /// Called after built-in records changed [state] (persist it).
   final void Function()? onStateChanged;
   final Duration gapDelay;
+  final Duration headInterval;
   final RandomBytes _random;
 
   /// Carriers besides LXMF between the device keys.
@@ -183,6 +203,9 @@ class DeviceSync {
   StreamSubscription<LxmReceived>? _sub;
   final Map<String, Map<int, SyncRecord>> _pending = {};
   final Map<String, Timer> _gapTimers = {};
+  final Map<String, int> _gapAttempts = {};
+  final Map<String, int> _lastGapAskMs = {};
+  Timer? _headTimer;
   Future<void> _tail = Future.value();
   int _ownSeq = 0;
   bool _started = false;
@@ -195,10 +218,19 @@ class DeviceSync {
     _started = true;
     _ownSeq = await store.ownSeq();
     _sub = router.incoming.listen((m) => _enqueue(() => _onMessage(m)));
+    if (headInterval > Duration.zero) {
+      _headTimer = Timer.periodic(
+        headInterval,
+        (_) => _enqueue(() => announceHead(ask: true)),
+      );
+    }
+    unawaited(_enqueueFuture(() => announceHead(ask: true)));
   }
 
   Future<void> stop() async {
     _started = false;
+    _headTimer?.cancel();
+    _headTimer = null;
     await _sub?.cancel();
     for (final t in _gapTimers.values) {
       t.cancel();
@@ -209,6 +241,12 @@ class DeviceSync {
 
   void _enqueue(Future<void> Function() f) {
     _tail = _tail.then((_) => f()).catchError((Object _) {});
+  }
+
+  Future<void> _enqueueFuture(Future<void> Function() f) {
+    final next = _tail.then((_) => f()).catchError((Object _) {});
+    _tail = next;
+    return next;
   }
 
   /// Waits for queued inbound handling (tests).
@@ -244,10 +282,24 @@ class DeviceSync {
       'data': data,
     });
     await store.saveRecord(seq, packed);
-    if (seq % 100 == 0) await store.pruneRecords(seq - 900);
+    if (seq % 100 == 0) await _pruneSafe(seq);
     await _fanOut(seq, packed, state.epoch, to: to);
     return seq;
   }
+
+  Future<void> _pruneSafe(int ownSeq) async {
+    var minAck = ownSeq;
+    for (final d in state.devices.active) {
+      if (d.id == ownId) continue;
+      final a = await store.acked(d.id);
+      if (a < minAck) minAck = a;
+    }
+    final safeBelow = (minAck < ownSeq - 200) ? minAck : ownSeq - 200;
+    if (safeBelow > 1) await store.pruneRecords(safeBelow);
+  }
+
+  /// Highest `seq` confirmed (ACKed) by sibling [deviceId].
+  Future<int> ackedSeq(String deviceId) => store.acked(deviceId);
 
   /// Sends a record that is not part of the sequence (`seq` 0) to specific
   /// devices, encrypted with [epoch] (used to hand out a rotated key).
@@ -348,6 +400,10 @@ class DeviceSync {
       await ingest(data, from: from.id);
     } else if (type == syncTypeGap) {
       await _onGap(from, data);
+    } else if (type == syncTypeHead) {
+      await _onHead(from, data);
+    } else if (type == syncTypeAck) {
+      await _onAck(from, data);
     }
   }
 
@@ -413,9 +469,12 @@ class DeviceSync {
 
   Future<void> _applySequenced(SyncRecord first) async {
     var rec = first;
+    var lastSeq = first.seq;
     while (true) {
-      await store.setSeen(rec.origin, rec.seq);
       await _apply(rec);
+      await store.setSeen(rec.origin, rec.seq);
+      lastSeq = rec.seq;
+      _gapAttempts.remove(rec.origin);
       final next = _pending[rec.origin]?.remove(rec.seq + 1);
       if (next == null) break;
       rec = next;
@@ -423,11 +482,62 @@ class DeviceSync {
     if (_pending[rec.origin]?.isEmpty ?? false) {
       _gapTimers.remove(rec.origin)?.cancel();
     }
+    await _sendAck(first.origin, lastSeq);
+  }
+
+  Future<void> _sendAck(String deviceId, int seq) async {
+    final d = state.devices[deviceId];
+    if (d == null || d.removed) return;
+    try {
+      await router.send(
+        destinationHash: d.lxmfAddress,
+        content: '',
+        fields: {syncFieldType: syncTypeAck, syncFieldData: packb({'seq': seq})},
+        method: LxmfMethod.opportunistic,
+      );
+    } on Object {
+      // best effort; head check also reconciles
+    }
+  }
+
+  Future<void> _onAck(GroupDevice from, Uint8List data) async {
+    final o = unpackb(data);
+    if (o is! Map || o['seq'] is! int) return;
+    final ack = o['seq']! as int;
+    final prev = await store.acked(from.id);
+    if (ack > prev) {
+      await store.setAcked(from.id, ack);
+    }
   }
 
   void _scheduleGap(String dev) {
     _gapTimers[dev]?.cancel();
-    _gapTimers[dev] = Timer(gapDelay, () => _enqueue(() => _requestGap(dev)));
+    final attempt = _gapAttempts[dev] ?? 0;
+    final mult = 1 << attempt.clamp(0, 6);
+    var wait = Duration(milliseconds: gapDelay.inMilliseconds * mult);
+    const maxWait = Duration(minutes: 5);
+    if (wait > maxWait) wait = maxWait;
+    _gapTimers[dev] = Timer(wait, () => _enqueue(() => _requestGap(dev)));
+  }
+
+  Future<void> _sendGapRequest(GroupDevice d, int fromSeq, int toSeq) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final last = _lastGapAskMs[d.id] ?? 0;
+    if (now - last < gapDelay.inMilliseconds) return;
+    _lastGapAskMs[d.id] = now;
+    try {
+      await router.send(
+        destinationHash: d.lxmfAddress,
+        content: '',
+        fields: {
+          syncFieldType: syncTypeGap,
+          syncFieldData: packb({'from': fromSeq, 'to': toSeq}),
+        },
+        method: LxmfMethod.opportunistic,
+      );
+    } on Object {
+      // retried on next head or out-of-order record
+    }
   }
 
   Future<void> _requestGap(String dev) async {
@@ -438,20 +548,47 @@ class DeviceSync {
     if (lowest <= seen + 1) return;
     final d = state.devices[dev];
     if (d == null || d.removed) return;
-    try {
-      await router.send(
-        destinationHash: d.lxmfAddress,
-        content: '',
-        fields: {
-          syncFieldType: syncTypeGap,
-          syncFieldData: packb({'from': seen + 1, 'to': lowest - 1}),
-        },
-        method: LxmfMethod.opportunistic,
-      );
-    } on Object {
-      // retried by the next out-of-order record
-    }
+    _gapAttempts[dev] = (_gapAttempts[dev] ?? 0) + 1;
+    await _sendGapRequest(d, seen + 1, lowest - 1);
     _scheduleGap(dev);
+  }
+
+  /// Shares our current sequence head with active siblings so any device that
+  /// missed trailing records (or restarted with lost in-memory pending state)
+  /// immediately detects the gap and pulls missing records.
+  Future<void> announceHead({bool ask = false, Iterable<String>? to}) async {
+    if (!_started) return;
+    final targets = to?.toSet();
+    final payload = packb({'seq': _ownSeq, 'ask': ask});
+    for (final d in state.devices.active) {
+      if (d.id == ownId) continue;
+      if (targets != null && !targets.contains(d.id)) continue;
+      rns.rememberDestination(d.publicKey, 'lxmf', const ['delivery']);
+      try {
+        await router.send(
+          destinationHash: d.lxmfAddress,
+          content: '',
+          fields: {syncFieldType: syncTypeHead, syncFieldData: payload},
+          method: LxmfMethod.opportunistic,
+        );
+      } on Object {
+        // best effort
+      }
+    }
+  }
+
+  Future<void> _onHead(GroupDevice from, Uint8List data) async {
+    final o = unpackb(data);
+    if (o is! Map || o['seq'] is! int) return;
+    final remoteSeq = o['seq']! as int;
+    final ask = o['ask'] == true;
+    final seen = await store.seen(from.id);
+    if (remoteSeq > seen) {
+      await _sendGapRequest(from, seen + 1, remoteSeq);
+    }
+    if (ask) {
+      await announceHead(ask: false, to: [from.id]);
+    }
   }
 
   Future<void> _onGap(GroupDevice from, Uint8List data) async {
@@ -527,6 +664,9 @@ class DeviceSync {
       }
     } on Object {
       // a malformed built-in record never stops the stream
+    }
+    if (onRecord != null) {
+      await onRecord!(r);
     }
     if (!_records.isClosed) _records.add(r);
   }

@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:kestrel_rns/kestrel_rns.dart';
@@ -7,6 +9,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../l10n/strings.dart';
+import '../node/node_service.dart';
 import '../providers.dart';
 import '../storage/repo.dart' show shortHash;
 import 'bridge_setup_screen.dart';
@@ -24,16 +27,6 @@ final historyBackfillProvider = StreamProvider<double?>((ref) async* {
       yield v;
     }
     await Future<void>.delayed(const Duration(seconds: 1));
-  }
-});
-
-/// Rebuilds when the group (device list, name, keys) changes.
-final groupChangesProvider = StreamProvider<int>((ref) async* {
-  final g = ref.watch(nodeProvider).group;
-  var n = 0;
-  yield n;
-  await for (final _ in g.changes) {
-    yield ++n;
   }
 });
 
@@ -121,6 +114,21 @@ class MyDevicesScreen extends ConsumerWidget {
               MaterialPageRoute<void>(builder: (_) => const MyAddressScreen()),
             ),
           ),
+          if (g.isGroup)
+            ListTile(
+              key: const ValueKey('group-pull-history'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.sync),
+              title: Text(s.t('sync_group_history')),
+              onTap: () async {
+                await node.pullGroupHistory();
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(s.t('sync_group_history_started'))),
+                  );
+                }
+              },
+            ),
         ],
       ),
     );
@@ -493,6 +501,73 @@ class _AddressState extends ConsumerState<MyAddressScreen> {
     }
   }
 
+  Future<void> _exportKey() async {
+    final s = Strings.of(context);
+    final node = ref.read(nodeProvider);
+    final bytes = node.exportGroupKeyBytes();
+    final saved = await FilePicker.saveFile(
+      fileName: 'kestrel-${shortHash(node.addressHex)}.rns',
+      bytes: bytes,
+    );
+    if (saved != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(s.t('export_identity_done'))),
+      );
+    }
+  }
+
+  Future<void> _importKey() async {
+    final s = Strings.of(context);
+    final picked = await FilePicker.pickFiles();
+    if (picked.isEmpty) return;
+    final f = picked.first;
+    final raw = f.path != null ? await File(f.path!).readAsBytes() : null;
+    if (raw == null) return;
+    final Identity imported;
+    try {
+      imported = await NodeService.parseImportedKey(raw);
+    } on Object {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(s.t('import_identity_invalid'))),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+    final newAddr = toHex(LXMessage.deliveryHash(imported));
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(s.t('import_identity_title')),
+        content: Text(s.t('import_identity_body', {'address': newAddr})),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(s.t('cancel')),
+          ),
+          FilledButton(
+            key: const ValueKey('import-identity-confirm'),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(s.t('import_identity')),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _busy = true);
+    try {
+      await ref.read(nodeProvider).importGroupIdentity(imported);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(s.t('import_identity_done', {'address': shortHash(newAddr)}))),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = Strings.of(context);
@@ -533,6 +608,20 @@ class _AddressState extends ConsumerState<MyAddressScreen> {
             ),
           ),
           const Divider(height: 32),
+          OutlinedButton.icon(
+            key: const ValueKey('export-identity'),
+            onPressed: _busy ? null : _exportKey,
+            icon: const Icon(Icons.upload_file),
+            label: Text(s.t('export_identity')),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            key: const ValueKey('import-identity'),
+            onPressed: _busy ? null : _importKey,
+            icon: const Icon(Icons.download),
+            label: Text(s.t('import_identity')),
+          ),
+          const SizedBox(height: 12),
           FilledButton.tonal(
             key: const ValueKey('change-address'),
             onPressed: _busy ? null : _change,

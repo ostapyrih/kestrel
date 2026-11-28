@@ -13,7 +13,8 @@ import 'widgets.dart';
 
 /// Start a chat by pasting an LXMF address (or picking an announced peer).
 class NewChatScreen extends ConsumerStatefulWidget {
-  const NewChatScreen({super.key});
+  const NewChatScreen({super.key, this.returnTarget = false});
+  final bool returnTarget;
 
   @override
   ConsumerState<NewChatScreen> createState() => _NewChatScreenState();
@@ -85,6 +86,10 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
           name: _name.text.trim().isEmpty ? null : _name.text.trim(),
           identity: identity,
         );
+    if (widget.returnTarget) {
+      nav.pop(target);
+      return;
+    }
     nav.pushReplacement(
       MaterialPageRoute<void>(
         builder: (_) => target.isDraft

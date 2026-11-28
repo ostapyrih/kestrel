@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:kestrel_rns/kestrel_rns.dart';
@@ -742,6 +743,30 @@ class NodeService {
     return group.removeDevice(id);
   }
 
+  /// Re-requests the group's existing history from a sibling device.
+  Future<void> pullGroupHistory() async {
+    await ready;
+    await _runtime?.backfill.restart();
+  }
+
+  /// Raw 64-byte RNS private key of the main identity G (compatible with
+  /// MeshChatX, rettui and Python RNS).
+  Uint8List exportGroupKeyBytes() =>
+      Uint8List.fromList(group.groupIdentity.privateKey!);
+
+  /// Parses an RNS identity key from either a 64-byte raw key file or a
+  /// 128-char hex string. Throws [FormatException] when invalid.
+  static Future<Identity> parseImportedKey(List<int> raw) async {
+    if (raw.length == 64) {
+      return Identity.fromPrivateKey(Uint8List.fromList(raw));
+    }
+    final text = utf8.decode(raw, allowMalformed: true).trim();
+    if (RegExp(r'^[0-9a-fA-F]{128}$').hasMatch(text)) {
+      return Identity.fromPrivateKey(fromHex(text));
+    }
+    throw const FormatException('Expected a 64-byte RNS identity key');
+  }
+
   /// "Change address": a new group identity G, announced, with an LXMF notice
   /// ("my new address is ...") from the old G to recent contacts. Old chats
   /// stay. Returns how many contacts were notified (delivery or hand-over to
@@ -751,37 +776,69 @@ class NodeService {
     Duration noticeTimeout = const Duration(seconds: 30),
   }) async {
     await ready;
-    final fresh = await Identity.generate();
+    return _switchGroupIdentity(
+      await Identity.generate(),
+      notifyContacts: true,
+      maxContacts: maxContacts,
+      noticeTimeout: noticeTimeout,
+    );
+  }
+
+  /// Imports [fresh] as the group identity G and propagates it to all paired
+  /// devices instead of the current main identity.
+  Future<int> importGroupIdentity(
+    Identity fresh, {
+    bool notifyContacts = false,
+    int maxContacts = 50,
+    Duration noticeTimeout = const Duration(seconds: 30),
+  }) async {
+    await ready;
+    return _switchGroupIdentity(
+      fresh,
+      notifyContacts: notifyContacts,
+      maxContacts: maxContacts,
+      noticeTimeout: noticeTimeout,
+    );
+  }
+
+  Future<int> _switchGroupIdentity(
+    Identity fresh, {
+    required bool notifyContacts,
+    int maxContacts = 50,
+    Duration noticeTimeout = const Duration(seconds: 30),
+  }) async {
     final oldHash = toHex(identity.hash);
     final newHex = toHex(LXMessage.deliveryHash(fresh));
-    final chats = [...await repo.chats(accountIdentity: 'B')]
-      ..sort((a, b) => (b.lastTs ?? 0).compareTo(a.lastTs ?? 0));
-    final text = addressChangeNotice(newHex, name: group.displayName);
-    final sent = <LxmOutbound>[];
-    for (final c in chats) {
-      final p = c.peerHash;
-      if (p == null || c.kind != 'lxmf') continue;
-      if (sent.length >= maxContacts) break;
-      sent.add(
-        await router.send(
-          destinationHash: fromHex(p),
-          content: text,
-          method: LxmfMethod.opportunistic,
-        ),
-      );
-    }
     var ok = 0;
-    await Future.wait([
-      for (final o in sent)
-        o.done
-            .timeout(noticeTimeout)
-            .then((h) {
-              if (h.state == LxmState.delivered || h.state == LxmState.sent) {
-                ok++;
-              }
-            })
-            .catchError((Object _) {}),
-    ]);
+    if (notifyContacts) {
+      final chats = [...await repo.chats(accountIdentity: 'B')]
+        ..sort((a, b) => (b.lastTs ?? 0).compareTo(a.lastTs ?? 0));
+      final text = addressChangeNotice(newHex, name: group.displayName);
+      final sent = <LxmOutbound>[];
+      for (final c in chats) {
+        final p = c.peerHash;
+        if (p == null || c.kind != 'lxmf') continue;
+        if (sent.length >= maxContacts) break;
+        sent.add(
+          await router.send(
+            destinationHash: fromHex(p),
+            content: text,
+            method: LxmfMethod.opportunistic,
+          ),
+        );
+      }
+      await Future.wait([
+        for (final o in sent)
+          o.done
+              .timeout(noticeTimeout)
+              .then((h) {
+                if (h.state == LxmState.delivered || h.state == LxmState.sent) {
+                  ok++;
+                }
+              })
+              .catchError((Object _) {}),
+      ]);
+    }
     await group.replaceGroupIdentity(fresh);
     final ratchets = <RatchetEntry>[];
     await _swapIdentity(fresh);

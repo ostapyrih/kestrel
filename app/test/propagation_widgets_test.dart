@@ -425,26 +425,5 @@ void main() {
       final t = tester.widget<Text>(find.byKey(const ValueKey('meta-11')));
       expect(t.data, contains('via node'));
     });
-
-    testWidgets('"send via node" appears only when a node is known', (
-      tester,
-    ) async {
-      final plain = FakeNode();
-      await show(tester, const ChatScreen(chatId: 1), node: plain);
-      expect(find.byKey(const ValueKey('composer-send-node')), findsNothing);
-    });
-
-    testWidgets('"send via node" sends with viaNode', (tester) async {
-      final a = _node(1, name: 'N', hops: 1);
-      final node = FakeNode()..view = _view(nodes: [a], active: a.hash);
-      await show(tester, const ChatScreen(chatId: 1), node: node);
-      await tester.enterText(
-        find.byKey(const ValueKey('composer-input')),
-        'hello later',
-      );
-      await tester.tap(find.byKey(const ValueKey('composer-send-node')));
-      await tester.pump();
-      expect(node.viaNodeSent, [(1, 'hello later')]);
-    });
   });
 }

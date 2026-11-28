@@ -7,6 +7,7 @@ import '../nomadnet/nomad_strings.dart';
 import '../node/node_service.dart';
 import '../platform.dart';
 import '../providers.dart';
+import '../storage/chat_target.dart';
 import '../storage/repo.dart';
 import 'chat_screen.dart';
 import 'bridge_widgets.dart';
@@ -27,6 +28,7 @@ class ChatsScreen extends ConsumerStatefulWidget {
 class _ChatsScreenState extends ConsumerState<ChatsScreen> {
   /// Multi-select mode: ids of the selected chats (null = not selecting).
   Set<int>? _sel;
+  ChatTarget? _draft;
 
   void _toggle(int id) {
     final sel = {...?_sel};
@@ -191,9 +193,12 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
                                   ? _toggle(list[i].id)
                                   : null
                             : wide
-                            ? () => ref
-                                  .read(selectedChatProvider.notifier)
-                                  .select(list[i].id)
+                            ? () {
+                                setState(() => _draft = null);
+                                ref
+                                    .read(selectedChatProvider.notifier)
+                                    .select(list[i].id);
+                              }
                             : null,
                       ),
                     ),
@@ -208,9 +213,29 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
           : FloatingActionButton.extended(
               icon: const Icon(Icons.edit_outlined),
               label: Text(s.t('new_chat')),
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(builder: (_) => const NewChatScreen()),
-              ),
+              onPressed: () async {
+                if (!wide) {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const NewChatScreen(),
+                    ),
+                  );
+                  return;
+                }
+                final target = await Navigator.of(context).push<ChatTarget>(
+                  MaterialPageRoute<ChatTarget>(
+                    builder: (_) => const NewChatScreen(returnTarget: true),
+                  ),
+                );
+                if (!mounted || target == null) return;
+                if (target.chatId != null) {
+                  setState(() => _draft = null);
+                  ref.read(selectedChatProvider.notifier).select(target.chatId);
+                } else {
+                  ref.read(selectedChatProvider.notifier).select(null);
+                  setState(() => _draft = target);
+                }
+              },
             ),
     );
     if (!wide) return list;
@@ -219,9 +244,18 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
         SizedBox(width: 360, child: list),
         const VerticalDivider(width: 1),
         Expanded(
-          child: selected == null
-              ? Scaffold(body: Center(child: Text(s.t('chat_select'))))
-              : ChatScreen(key: ValueKey('chat-$selected'), chatId: selected),
+          child: selected != null
+              ? ChatScreen(key: ValueKey('chat-$selected'), chatId: selected)
+              : _draft != null
+              ? ChatScreen(
+                  key: ValueKey('draft-${_draft!.draftKey}'),
+                  draft: _draft,
+                  onCreated: (id) {
+                    if (mounted) setState(() => _draft = null);
+                    ref.read(selectedChatProvider.notifier).select(id);
+                  },
+                )
+              : Scaffold(body: Center(child: Text(s.t('chat_select')))),
         ),
       ],
     );
