@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.2](https://github.com/ostapyrih/kestrel/compare/app-v0.11.1...app-v0.11.2) (2026-11-28)
+
+
+### Bug Fixes
+
+* **app:** sync deviceRouter inbox and head using configured interval ([#60](https://github.com/ostapyrih/kestrel/issues/60)) ([b663009](https://github.com/ostapyrih/kestrel/commit/b663009d40612506bcd829b18da6092d2b67953c))
+* **rns,app:** raise link receipt timeout on slow LoRa links and add close button to MessageDetails ([#62](https://github.com/ostapyrih/kestrel/issues/62)) ([10ba0f0](https://github.com/ostapyrih/kestrel/commit/10ba0f0817f099c4d15a1a3417f0652102632081))
+
 ## [0.11.1](https://github.com/ostapyrih/kestrel/compare/app-v0.11.0...app-v0.11.1) (2026-11-28)
 
 
