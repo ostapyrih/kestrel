@@ -405,6 +405,19 @@ class Transport {
       double timeout;
       if (link != null) {
         timeout = ((link.rtt ?? 1.0) * link.trafficTimeoutFactor);
+        final dest = link.destination?.hash;
+        if (dest != null) {
+          final i = link.attachedInterface ?? nextHopInterface(dest);
+          final slowAir = i != null && i.bitrate > 0 && i.bitrate < 50000
+              ? Packet.mtu * 8 / i.bitrate
+              : 0.0;
+          final minHopTimeout = firstHopTimeout(dest) +
+              slowAir +
+              config.perHopTimeout.inMilliseconds /
+                  1000 *
+                  hopsTo(dest).clamp(0, 128);
+          if (timeout < minHopTimeout) timeout = minHopTimeout;
+        }
         if (timeout < 0.005) timeout = 0.005;
       } else {
         timeout = firstHopTimeout(p.destinationHash) +
@@ -554,8 +567,8 @@ class Transport {
   /// every device holding the same identity and can be copied instead of
   /// regenerated (device group, docs/spikes/device-group.md section 8).
   Future<Uint8List?> exportStamp(Destination d) async {
-    final wb = Stamps.destinationMaterial(
-        d.hash, d.identity!.publicKey, d.nameHash);
+    final wb =
+        Stamps.destinationMaterial(d.hash, d.identity!.publicKey, d.nameHash);
     final target = config.announceStampValue;
     final cached = d.stamp;
     if (cached != null && Stamps.isValid(cached, target, wb)) return cached;
@@ -573,8 +586,8 @@ class Transport {
   /// nothing) if it is not a valid stamp for [d] at the configured target.
   Future<bool> importStamp(Destination d, List<int> stamp) async {
     if (stamp.length != Stamps.stampLength) return false;
-    final wb = Stamps.destinationMaterial(
-        d.hash, d.identity!.publicKey, d.nameHash);
+    final wb =
+        Stamps.destinationMaterial(d.hash, d.identity!.publicKey, d.nameHash);
     final s = Uint8List.fromList(stamp);
     if (!Stamps.isValid(s, config.announceStampValue, wb)) return false;
     d.stamp = s;
