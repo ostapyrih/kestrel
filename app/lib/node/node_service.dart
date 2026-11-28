@@ -307,6 +307,8 @@ class NodeService {
     // silent until the election says otherwise
     setAnnouncer(false);
     await rt.start();
+    final iv = await _intervalSetting();
+    rt.deviceRouter.setSyncInterval(iv == 0 ? null : Duration(minutes: iv));
   }
 
   Future<void> _stopRuntime() async {
@@ -426,6 +428,8 @@ class NodeService {
       if (rt != null) {
         if (rt.isAnnouncer) await rt.sync.announceGroup(router);
         unawaited(rt.announceDevice());
+        unawaited(rt.deviceRouter.syncInbox());
+        unawaited(rt.sync.announceHead(ask: true));
       } else {
         await router.announce();
       }
@@ -530,6 +534,9 @@ class NodeService {
     await ready;
     router.setDefaultNode(null);
     router.setPinnedNode(valid ? fromHex(h) : null);
+    _runtime?.deviceRouter
+      ?..setDefaultNode(null)
+      ..setPinnedNode(valid ? fromHex(h) : null);
   }
 
   /// Back to the default node ([kDefaultPropagationNode]).
@@ -538,6 +545,9 @@ class NodeService {
     await ready;
     router.setPinnedNode(null);
     router.setDefaultNode(fromHex(kDefaultPropagationNode));
+    _runtime?.deviceRouter
+      ?..setPinnedNode(null)
+      ..setDefaultNode(fromHex(kDefaultPropagationNode));
   }
 
   Future<void> setPropagationFallback(bool on) async {
@@ -552,7 +562,9 @@ class NodeService {
     await repo.setSetting(SettingKeys.propagationInterval, '$minutes');
     await ready;
     _intervalMinutes = minutes;
-    router.setSyncInterval(minutes == 0 ? null : Duration(minutes: minutes));
+    final iv = minutes == 0 ? null : Duration(minutes: minutes);
+    router.setSyncInterval(iv);
+    _runtime?.deviceRouter.setSyncInterval(iv);
     router.setPinnedNode(router.pinnedNode); // notifies listeners
   }
 
@@ -746,7 +758,12 @@ class NodeService {
   /// Re-requests the group's existing history from a sibling device.
   Future<void> pullGroupHistory() async {
     await ready;
-    await _runtime?.backfill.restart();
+    final rt = _runtime;
+    if (rt == null) return;
+    unawaited(rt.announceDevice());
+    unawaited(rt.deviceRouter.syncInbox());
+    unawaited(rt.sync.announceHead(ask: true));
+    await rt.backfill.restart();
   }
 
   /// Raw 64-byte RNS private key of the main identity G (compatible with
