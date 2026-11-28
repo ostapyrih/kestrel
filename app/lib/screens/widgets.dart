@@ -38,8 +38,13 @@ class IdentityBadge extends StatelessWidget {
 
 /// `TCP Online` / `Offline` indicator.
 class ConnectionIndicator extends StatelessWidget {
-  const ConnectionIndicator(this.state, {super.key});
+  const ConnectionIndicator(
+    this.state, {
+    super.key,
+    this.loraConnected = false,
+  });
   final NodeConnection state;
+  final bool loraConnected;
 
   @override
   Widget build(BuildContext context) {
@@ -47,6 +52,10 @@ class ConnectionIndicator extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final (text, color) = switch (state) {
       NodeConnection.online => (s.t('tcp_online'), Colors.green),
+      NodeConnection.connecting || NodeConnection.offline when loraConnected => (
+        s.t('lora_online'),
+        Colors.green,
+      ),
       NodeConnection.connecting => (s.t('tcp_connecting'), Colors.orange),
       NodeConnection.offline => (s.t('tcp_offline'), cs.error),
     };
