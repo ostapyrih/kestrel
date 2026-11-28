@@ -30,16 +30,6 @@ final historyBackfillProvider = StreamProvider<double?>((ref) async* {
   }
 });
 
-/// Rebuilds when the group (device list, name, keys) changes.
-final groupChangesProvider = StreamProvider<int>((ref) async* {
-  final g = ref.watch(nodeProvider).group;
-  var n = 0;
-  yield n;
-  await for (final _ in g.changes) {
-    yield ++n;
-  }
-});
-
 /// "My devices": the devices of the group (all share one address), add,
 /// join, rename, remove.
 class MyDevicesScreen extends ConsumerWidget {

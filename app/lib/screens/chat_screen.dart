@@ -20,10 +20,11 @@ import 'widgets.dart';
 class ChatScreen extends ConsumerStatefulWidget {
   /// Opens an existing chat ([chatId]) or a draft conversation ([draft],
   /// no database row until the first message is sent).
-  const ChatScreen({super.key, this.chatId, this.draft})
+  const ChatScreen({super.key, this.chatId, this.draft, this.onCreated})
     : assert(chatId != null || draft != null);
   final int? chatId;
   final ChatTarget? draft;
+  final ValueChanged<int>? onCreated;
 
   @override
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
@@ -126,6 +127,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (mounted) {
       setState(() => _chatId = sent.chatId);
       _track(sent.chatId);
+      widget.onCreated?.call(sent.chatId);
     }
   }
 
