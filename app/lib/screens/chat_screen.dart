@@ -460,6 +460,7 @@ Future<void> showMessageDetails(BuildContext context, MessageRow m) =>
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
+      useSafeArea: true,
       showDragHandle: true,
       builder: (_) => MessageDetails(message: m),
     );
@@ -487,94 +488,129 @@ class MessageDetails extends ConsumerWidget {
       ),
     );
     return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              s.t('details'),
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            row(
-              s.t('hash'),
-              m.lxmfHash ?? '-',
-              key: const ValueKey('detail-hash'),
-            ),
-            if (ref.watch(bridgeModeProvider))
-              row(
-                s.t('sender'),
-                isRemoteId(m.id)
-                    ? s.account(
-                        'B',
-                        device:
-                            ref
-                                .watch(bridgeDevicesProvider)
-                                .value
-                                ?.where((d) => d.deviceId == m.originDevice)
-                                .firstOrNull
-                                ?.name ??
-                            (m.originDevice == null
-                                ? null
-                                : shortHash(m.originDevice!)),
-                      )
-                    : s.account(m.senderIdentity),
-              ),
-            if (ref.watch(bridgeModeProvider) &&
-                m.senderIdentity == 'A' &&
-                m.outgoing)
-              row(
-                s.t('origin_device'),
-                m.originDevice == null
-                    ? s.t('from_meshchatx')
-                    : (ref
-                              .watch(bridgeDevicesProvider)
-                              .value
-                              ?.where((d) => d.deviceId == m.originDevice)
-                              .firstOrNull
-                              ?.name ??
-                          shortHash(m.originDevice!)),
-                key: const ValueKey('detail-origin'),
-              ),
-            row(
-              s.t('route'),
-              m.route == null ? '-' : routeLabel(context, m.route!),
-            ),
-            row(s.t('transport'), s.t('transport_${m.transport}')),
-            row(s.t('status'), s.t('status_${m.status}')),
-            if (m.error != null) row(s.t('error'), m.error!),
-            if (m.signatureValid == false) row('', s.t('signature_unverified')),
-            const Divider(height: 24),
-            Text(
-              s.t('timeline'),
-              style: Theme.of(context).textTheme.titleSmall,
-            ),
-            const SizedBox(height: 4),
-            for (final l in log)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 110,
-                      child: Text(
-                        formatTimeSeconds(l.ts),
-                        style: Theme.of(context).textTheme.labelMedium,
-                      ),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * 0.85,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      s.t('details'),
+                      style: Theme.of(context).textTheme.titleMedium,
                     ),
-                    Expanded(child: Text(stageLabel(s, l))),
-                  ],
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    tooltip: MaterialLocalizations.of(context)
+                        .closeButtonTooltip,
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      row(
+                        s.t('hash'),
+                        m.lxmfHash ?? '-',
+                        key: const ValueKey('detail-hash'),
+                      ),
+                      if (ref.watch(bridgeModeProvider))
+                        row(
+                          s.t('sender'),
+                          isRemoteId(m.id)
+                              ? s.account(
+                                  'B',
+                                  device:
+                                      ref
+                                          .watch(bridgeDevicesProvider)
+                                          .value
+                                          ?.where(
+                                            (d) => d.deviceId == m.originDevice,
+                                          )
+                                          .firstOrNull
+                                          ?.name ??
+                                      (m.originDevice == null
+                                          ? null
+                                          : shortHash(m.originDevice!)),
+                                )
+                              : s.account(m.senderIdentity),
+                        ),
+                      if (ref.watch(bridgeModeProvider) &&
+                          m.senderIdentity == 'A' &&
+                          m.outgoing)
+                        row(
+                          s.t('origin_device'),
+                          m.originDevice == null
+                              ? s.t('from_meshchatx')
+                              : (ref
+                                        .watch(bridgeDevicesProvider)
+                                        .value
+                                        ?.where(
+                                          (d) => d.deviceId == m.originDevice,
+                                        )
+                                        .firstOrNull
+                                        ?.name ??
+                                    shortHash(m.originDevice!)),
+                          key: const ValueKey('detail-origin'),
+                        ),
+                      row(
+                        s.t('route'),
+                        m.route == null ? '-' : routeLabel(context, m.route!),
+                      ),
+                      row(s.t('transport'), s.t('transport_${m.transport}')),
+                      row(s.t('status'), s.t('status_${m.status}')),
+                      if (m.error != null) row(s.t('error'), m.error!),
+                      if (m.signatureValid == false)
+                        row('', s.t('signature_unverified')),
+                      const Divider(height: 24),
+                      Text(
+                        s.t('timeline'),
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 4),
+                      for (final l in log)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 2),
+                          child: Row(
+                            children: [
+                              SizedBox(
+                                width: 110,
+                                child: Text(
+                                  formatTimeSeconds(l.ts),
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .labelMedium,
+                                ),
+                              ),
+                              Expanded(child: Text(stageLabel(s, l))),
+                            ],
+                          ),
+                        ),
+                      if (m.lxmfHash != null)
+                        TextButton.icon(
+                          icon: const Icon(Icons.copy, size: 16),
+                          label: Text(s.t('copy')),
+                          onPressed: () => Clipboard.setData(
+                            ClipboardData(text: m.lxmfHash!),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
               ),
-            if (m.lxmfHash != null)
-              TextButton.icon(
-                icon: const Icon(Icons.copy, size: 16),
-                label: Text(s.t('copy')),
-                onPressed: () =>
-                    Clipboard.setData(ClipboardData(text: m.lxmfHash!)),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
