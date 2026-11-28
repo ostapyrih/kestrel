@@ -169,7 +169,10 @@ void main() {
       expect(first.senderIdentity, 'A');
       expect(first.originDevice, isNull); // typed in MeshChatX
       expect((await d1.repo.chat(chat1))!.unread, 1);
-      expect((await d1.bridge.store.cursor()), greaterThan(0));
+      await waitFor(
+        () async => (await d1.bridge.store.cursor()) > 0,
+        what: 'cursor persisted',
+      );
 
       // opening the chat marks it read on the bridge
       await d1.bridge.markRead(chat1);
