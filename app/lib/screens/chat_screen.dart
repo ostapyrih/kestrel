@@ -109,22 +109,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     super.dispose();
   }
 
-  Future<void> _send({bool viaNode = false}) async {
+  Future<void> _send() async {
     final t = _text.text.trim();
     if (t.isEmpty) return;
     final id = _chatId;
     if (id != null) {
       _text.clear();
-      await ref.read(nodeProvider).sendMessage(id, t, viaNode: viaNode);
+      await ref.read(nodeProvider).sendMessage(id, t);
       return;
     }
     final d = widget.draft!;
     _text.clear();
     _drafts.set(d.draftKey, '');
     // first message: creates the chat row, message and outbox row at once
-    final sent = await ref
-        .read(nodeProvider)
-        .sendToPeer(d, t, viaNode: viaNode);
+    final sent = await ref.read(nodeProvider).sendToPeer(d, t);
     if (mounted) {
       setState(() => _chatId = sent.chatId);
       _track(sent.chatId);
@@ -325,15 +323,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             ),
                           ),
                         ),
-                        if (!isA &&
-                            ref.watch(propagationProvider).value?.active !=
-                                null)
-                          IconButton(
-                            key: const ValueKey('composer-send-node'),
-                            tooltip: pt(context, 'send_via_node'),
-                            icon: const Icon(Icons.cloud_upload_outlined),
-                            onPressed: () => _send(viaNode: true),
-                          ),
                         IconButton.filled(
                           key: const ValueKey('composer-send'),
                           tooltip: s.t('send'),
