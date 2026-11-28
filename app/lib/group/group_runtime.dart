@@ -73,7 +73,8 @@ class GroupRuntime {
     deviceRouter
       ..setDefaultNode(groupRouter.defaultNode)
       ..setPinnedNode(groupRouter.pinnedNode)
-      ..fallbackToPropagation = true;
+      ..fallbackToPropagation = true
+      ..setSyncInterval(const Duration(minutes: 2));
     sync = DeviceSync(
       rns: rns,
       router: deviceRouter,
