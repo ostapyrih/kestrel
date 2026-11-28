@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/ostapyrih/kestrel/compare/app-v0.11.0...app-v0.11.1) (2026-11-28)
+
+
+### Bug Fixes
+
+* **app:** fix Windows RNode COM port native crash ([#58](https://github.com/ostapyrih/kestrel/issues/58)) ([654bbb3](https://github.com/ostapyrih/kestrel/commit/654bbb33b181949096532626a4f4d8255d9aa4c5))
+
 ## [0.11.0](https://github.com/ostapyrih/kestrel/compare/app-v0.10.1...app-v0.11.0) (2026-11-28)
 
 
