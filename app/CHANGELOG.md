@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/ostapyrih/kestrel/compare/app-v0.10.1...app-v0.11.0) (2026-11-28)
+
+
+### Features
+
+* **app:** add RNS key import/export across group and manual history pull ([#56](https://github.com/ostapyrih/kestrel/issues/56)) ([f0b79b8](https://github.com/ostapyrih/kestrel/commit/f0b79b8a09cbcc4a7c7811857f28e22b9e17115d))
+
 ## [0.10.1](https://github.com/ostapyrih/kestrel/compare/app-v0.10.0...app-v0.10.1) (2026-11-27)
 
 
