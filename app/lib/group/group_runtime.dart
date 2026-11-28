@@ -57,7 +57,6 @@ class GroupRuntime {
 
   /// History backfill: serves siblings, requests it on a freshly paired device.
   late DeviceBackfill backfill;
-  StreamSubscription<SyncRecord>? _sub;
   Timer? _pump;
   bool _started = false;
 
@@ -83,6 +82,7 @@ class GroupRuntime {
       store: KestrelSyncStore(storage),
       group: groupRouter.destination,
       onIdentity: onIdentity,
+      onRecord: _apply,
       onStateChanged: () {
         unawaited(group.persist());
         final n = group.state.displayName;
@@ -98,7 +98,6 @@ class GroupRuntime {
     );
     await backfill.init();
     sync.rememberSiblings();
-    _sub = sync.records.listen((r) => unawaited(_apply(r)));
     announcer = GroupAnnouncer(
       rns: rns,
       deviceKey: group.deviceIdentity,
@@ -132,7 +131,6 @@ class GroupRuntime {
     if (!_started) return;
     _started = false;
     _pump?.cancel();
-    await _sub?.cancel();
     await backfill.stop();
     await announcer.stop();
     await sync.stop();
