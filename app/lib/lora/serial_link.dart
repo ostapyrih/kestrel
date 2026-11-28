@@ -12,11 +12,16 @@ List<LoraDevice> listSerialRNodePorts() {
   for (final name in SerialPort.availablePorts) {
     final p = SerialPort(name);
     try {
-      final desc = [
-        p.productName,
-        p.manufacturer,
-        p.description,
-      ].whereType<String>().where((s) => s.isNotEmpty).toSet().join(' · ');
+      String desc = '';
+      try {
+        desc = [
+          p.productName,
+          p.manufacturer,
+          p.description,
+        ].whereType<String>().where((s) => s.isNotEmpty).toSet().join(' · ');
+      } on Object {
+        // some virtual/busy Windows COM ports fail metadata queries
+      }
       out.add(LoraDevice(LoraKind.usb, name, name, detail: desc));
     } finally {
       p.dispose();
@@ -27,43 +32,78 @@ List<LoraDevice> listSerialRNodePorts() {
 
 /// RNode over a USB serial port: 115200 baud, 8N1, no flow control, as in
 /// RNodeInterface.open_port.
+///
+/// Uses non-blocking single-isolate polling (`bytesAvailable` + `read`) instead
+/// of `SerialPortReader`, because `SerialPortReader` spawns an Isolate holding
+/// the raw `sp_port*` pointer and causes a native use-after-free crash on
+/// Windows when the port is closed/disposed while `sp_wait` is blocked.
 class SerialRNodeLink implements RNodeLink {
-  SerialRNodeLink._(this._port, this._reader, this.portName);
+  SerialRNodeLink._(this._port, this.portName);
 
   final SerialPort _port;
-  final SerialPortReader _reader;
   final String portName;
   final _data = StreamController<Uint8List>();
   final _closed = Completer<void>();
-  StreamSubscription<Uint8List>? _sub;
+  Timer? _pollTimer;
   Timer? _watch;
 
   static Future<RNodeLink> open(String name) async {
     final port = SerialPort(name);
-    if (!port.openReadWrite()) {
-      final err = SerialPort.lastError;
+    try {
+      if (!port.openReadWrite()) {
+        final err = SerialPort.lastError;
+        throw StateError('could not open $name: ${err ?? 'unknown error'}');
+      }
+      final cfg = port.config;
+      try {
+        cfg
+          ..baudRate = 115200
+          ..bits = 8
+          ..parity = SerialPortParity.none
+          ..stopBits = 1
+          ..setFlowControl(SerialPortFlowControl.none);
+        port.config = cfg;
+      } finally {
+        cfg.dispose();
+      }
+    } catch (e) {
+      try {
+        if (port.isOpen) port.close();
+      } on Object {
+        // ignore
+      }
       port.dispose();
-      throw StateError('could not open $name: ${err ?? 'unknown error'}');
+      rethrow;
     }
-    final cfg = SerialPortConfig()
-      ..baudRate = 115200
-      ..bits = 8
-      ..parity = SerialPortParity.none
-      ..stopBits = 1
-      ..setFlowControl(SerialPortFlowControl.none);
-    port.config = cfg;
-    cfg.dispose();
-    final link = SerialRNodeLink._(port, SerialPortReader(port), name);
-    link._sub = link._reader.stream.listen(
-      link._data.add,
-      onError: (Object _) => link._finish(),
-      onDone: link._finish,
+
+    final link = SerialRNodeLink._(port, name);
+    link._pollTimer = Timer.periodic(
+      const Duration(milliseconds: 10),
+      (_) => link._poll(),
     );
-    // an unplugged adapter does not always end the reader: poll the port list
+    // an unplugged adapter does not always error immediately: poll the port list
     link._watch = Timer.periodic(const Duration(seconds: 2), (_) {
       if (!SerialPort.availablePorts.contains(name)) link._finish();
     });
     return link;
+  }
+
+  void _poll() {
+    if (_done) return;
+    try {
+      final avail = _port.bytesAvailable;
+      if (avail < 0) {
+        _finish();
+        return;
+      }
+      if (avail == 0) return;
+      final chunk = _port.read(avail, timeout: 0);
+      if (chunk.isNotEmpty && !_data.isClosed) {
+        _data.add(chunk);
+      }
+    } on Object {
+      _finish();
+    }
   }
 
   @override
@@ -77,11 +117,16 @@ class SerialRNodeLink implements RNodeLink {
 
   @override
   Future<void> write(Uint8List bytes) async {
-    if (_closed.isCompleted) throw StateError('port closed');
-    final n = _port.write(bytes);
-    if (n != bytes.length) {
+    if (_done || _closed.isCompleted) throw StateError('port closed');
+    try {
+      final n = _port.write(bytes);
+      if (n != bytes.length) {
+        _finish();
+        throw StateError('short write to $portName');
+      }
+    } on Object {
       _finish();
-      throw StateError('short write to $portName');
+      rethrow;
     }
   }
 
@@ -89,11 +134,10 @@ class SerialRNodeLink implements RNodeLink {
   void _finish() {
     if (_done) return;
     _done = true;
+    _pollTimer?.cancel();
     _watch?.cancel();
-    unawaited(_sub?.cancel());
-    _reader.close();
     try {
-      _port.close();
+      if (_port.isOpen) _port.close();
     } on Object {
       // already closed
     }
